@@ -16,17 +16,38 @@ type NoteDoc struct {
 
 // NotePageRef is one entry in note.json's page placement.
 type NotePageRef struct {
-	ID      string `json:"id"`
-	Number  int    `json:"number"`
-	Starred bool   `json:"starred"`
+	ID     string `json:"id"`
+	Number int    `json:"number"`
 }
 
-// PageDoc is <PAGEID>.json — the per-page deterministic metadata.
+// PageDoc is <PAGEID>.json — the per-page deterministic metadata, optionally
+// enriched with a derived AI Analysis (written by the analyze command, not ingest).
 type PageDoc struct {
-	PageID   string       `json:"page_id"`
-	Titles   []TitleDoc   `json:"titles"`
-	Keywords []KeywordDoc `json:"keywords"`
-	Links    []LinkDoc    `json:"links"`
+	PageID   string        `json:"page_id"`
+	Starred  bool          `json:"starred"`
+	Titles   []TitleDoc    `json:"titles"`
+	Keywords []KeywordDoc  `json:"keywords"`
+	Links    []LinkDoc     `json:"links"`
+	Analysis *PageAnalysis `json:"analysis,omitempty"`
+}
+
+// PageAnalysis is the vision-LLM analysis of a page. Content is the page's text
+// as plaintext; Titles/Links carry per-region transcriptions aligned by index
+// with PageDoc.Titles/PageDoc.Links. Fields holds configurable custom outputs
+// (e.g. "summary") derived from Content by name.
+type PageAnalysis struct {
+	Content string            `json:"content"`
+	Titles  []TitleAnalysis   `json:"titles,omitempty"`
+	Links   []LinkAnalysis    `json:"links,omitempty"`
+	Fields  map[string]string `json:"fields,omitempty"`
+}
+
+type TitleAnalysis struct {
+	Name string `json:"name"`
+}
+
+type LinkAnalysis struct {
+	Name string `json:"name"`
 }
 
 type TitleDoc struct {
@@ -48,7 +69,7 @@ type LinkDoc struct {
 func noteDoc(n *snote.Note) NoteDoc {
 	pages := make([]NotePageRef, 0, len(n.Pages))
 	for _, p := range n.Pages {
-		pages = append(pages, NotePageRef{ID: p.ID, Number: p.Number, Starred: p.Starred})
+		pages = append(pages, NotePageRef{ID: p.ID, Number: p.Number})
 	}
 	return NoteDoc{
 		FileID:    n.FileID,
@@ -77,5 +98,5 @@ func pageDoc(p snote.Page) PageDoc {
 			Name:         l.Name,
 		})
 	}
-	return PageDoc{PageID: p.ID, Titles: titles, Keywords: keywords, Links: links}
+	return PageDoc{PageID: p.ID, Starred: p.Starred, Titles: titles, Keywords: keywords, Links: links}
 }

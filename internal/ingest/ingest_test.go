@@ -2,11 +2,15 @@ package ingest_test
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/jdlugosz963/snorg/internal/archive"
 	"github.com/jdlugosz963/snorg/internal/ingest"
@@ -44,11 +48,13 @@ func TestIngestSampleNote(t *testing.T) {
 	if len(nd.Pages) != 6 {
 		t.Fatalf("note.json pages = %d want 6", len(nd.Pages))
 	}
-	if !nd.Pages[2].Starred {
-		t.Error("page 3 should be starred")
-	}
 	for i, pr := range nd.Pages {
-		if i != 2 && pr.Starred {
+		var pd archive.PageDoc
+		readJSON(t, filepath.Join(dir, pr.ID+".json"), &pd)
+		if i == 2 && !pd.Starred {
+			t.Error("page 3 should be starred")
+		}
+		if i != 2 && pd.Starred {
 			t.Errorf("page %d unexpectedly starred", pr.Number)
 		}
 	}
@@ -213,5 +219,116 @@ func readJSON(t *testing.T, path string, v any) {
 	}
 	if err := json.Unmarshal(b, v); err != nil {
 		t.Fatalf("unmarshal %s: %v", path, err)
+	}
+}
+
+// fakeSource is an in-memory snote.Source for the concurrency tests, so they need
+// no supernote-tool. Each path becomes a one-page note keyed by its basename;
+// paths in failOn error from Read. It records peak concurrent RenderSVGs calls.
+type fakeSource struct {
+	failOn    map[string]bool
+	active    int32
+	maxActive int32
+}
+
+func (f *fakeSource) Read(path string) (*snote.Note, error) {
+	if f.failOn[path] {
+		return nil, fmt.Errorf("boom: %s", path)
+	}
+	id := "F_" + strings.TrimSuffix(filepath.Base(path), ".note")
+	return &snote.Note{FileID: id, Pages: []snote.Page{{ID: "P1", Number: 1}}}, nil
+}
+
+func (f *fakeSource) RenderSVGs(path string) ([][]byte, error) {
+	n := atomic.AddInt32(&f.active, 1)
+	for {
+		m := atomic.LoadInt32(&f.maxActive)
+		if n <= m || atomic.CompareAndSwapInt32(&f.maxActive, m, n) {
+			break
+		}
+	}
+	time.Sleep(5 * time.Millisecond)
+	atomic.AddInt32(&f.active, -1)
+	return [][]byte{[]byte("<svg/>")}, nil
+}
+
+func TestRunManyArchivesAllInOrder(t *testing.T) {
+	root := t.TempDir()
+	a := archive.New(root)
+	paths := []string{"a.note", "b.note", "c.note", "d.note"}
+
+	results := ingest.RunMany(&fakeSource{}, a, paths, 2)
+	if len(results) != len(paths) {
+		t.Fatalf("results = %d want %d", len(results), len(paths))
+	}
+	for i, r := range results {
+		if r.Path != paths[i] {
+			t.Errorf("result %d path = %q want %q (order not preserved)", i, r.Path, paths[i])
+		}
+		if r.Err != nil || r.Note == nil {
+			t.Errorf("result %d: note=%v err=%v", i, r.Note, r.Err)
+		}
+	}
+	ids, err := a.List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"F_a", "F_b", "F_c", "F_d"}; !reflect.DeepEqual(ids, want) {
+		t.Errorf("archived ids = %v want %v", ids, want)
+	}
+}
+
+func TestRunManyContinuesOnError(t *testing.T) {
+	root := t.TempDir()
+	src := &fakeSource{failOn: map[string]bool{"b.note": true}}
+	paths := []string{"a.note", "b.note", "c.note"}
+
+	results := ingest.RunMany(src, archive.New(root), paths, 0) // 0 -> NumCPU
+	if results[0].Err != nil || results[2].Err != nil {
+		t.Errorf("ok notes errored: %v, %v", results[0].Err, results[2].Err)
+	}
+	if results[1].Err == nil {
+		t.Error("b.note should have failed")
+	}
+	if results[1].Note != nil {
+		t.Error("failed result should carry no note")
+	}
+}
+
+func TestRunManyRespectsJobLimit(t *testing.T) {
+	src := &fakeSource{}
+	paths := make([]string, 8)
+	for i := range paths {
+		paths[i] = fmt.Sprintf("n%d.note", i)
+	}
+	ingest.RunMany(src, archive.New(t.TempDir()), paths, 2)
+	if src.maxActive > 2 {
+		t.Errorf("peak concurrency = %d want <= 2", src.maxActive)
+	}
+}
+
+func TestNoteFiles(t *testing.T) {
+	root := t.TempDir()
+	for _, rel := range []string{"a.note", "sub/b.note", "sub/deep/c.note", "sub/notes.txt", "d.NOTE"} {
+		p := filepath.Join(root, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := ingest.NoteFiles(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		filepath.Join(root, "a.note"),
+		filepath.Join(root, "d.NOTE"),
+		filepath.Join(root, "sub/b.note"),
+		filepath.Join(root, "sub/deep/c.note"),
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("NoteFiles = %v want %v", got, want)
 	}
 }

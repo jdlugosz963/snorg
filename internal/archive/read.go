@@ -57,6 +57,45 @@ func (a *Archive) SVGRel(fileID, pageID string) string {
 	return filepath.ToSlash(filepath.Join(fileID, pageID+".svg"))
 }
 
+// ReadSVG returns the raw bytes of <fileID>/<pageID>.svg.
+func (a *Archive) ReadSVG(fileID, pageID string) ([]byte, error) {
+	b, err := os.ReadFile(filepath.Join(a.Root, fileID, pageID+".svg"))
+	if err != nil {
+		return nil, fmt.Errorf("read svg %s: %w", pageID, err)
+	}
+	return b, nil
+}
+
+// FindPage returns the FILE_ID of the note that owns pageID, scanning every note
+// directory. PAGEIDs are stable per-note ids; in practice unique across a single
+// archive. It errors when no note (or more than one) holds the page.
+func (a *Archive) FindPage(pageID string) (string, error) {
+	ids, err := a.List()
+	if err != nil {
+		return "", err
+	}
+	var found []string
+	for _, fileID := range ids {
+		if _, err := os.Stat(filepath.Join(a.Root, fileID, pageID+".json")); err == nil {
+			found = append(found, fileID)
+		}
+	}
+	switch len(found) {
+	case 0:
+		return "", fmt.Errorf("page %s not found in archive", pageID)
+	case 1:
+		return found[0], nil
+	default:
+		return "", fmt.Errorf("page %s is ambiguous, found in notes: %v", pageID, found)
+	}
+}
+
+// WritePage writes pd to <fileID>/<pageID>.json in the canonical format, leaving
+// every sibling artifact (svg, other pages, backgrounds) untouched.
+func (a *Archive) WritePage(fileID string, pd PageDoc) error {
+	return writeJSONIfChanged(filepath.Join(a.Root, fileID, pd.PageID+".json"), pd)
+}
+
 func readJSON(path string, v any) error {
 	b, err := os.ReadFile(path)
 	if err != nil {

@@ -25,13 +25,14 @@ type NoteView struct {
 // PageView is one page in placement order, with its SVG path relative to the
 // archive root (join it with the archive location to resolve the file).
 type PageView struct {
-	Number   int           `json:"number"`
-	PageID   string        `json:"page_id"`
-	Starred  bool          `json:"starred"`
-	SVG      string        `json:"svg"`
-	Titles   []TitleView   `json:"titles"`
-	Keywords []KeywordView `json:"keywords"`
-	Links    []LinkView    `json:"links"`
+	Number   int                   `json:"number"`
+	PageID   string                `json:"page_id"`
+	Starred  bool                  `json:"starred"`
+	SVG      string                `json:"svg"`
+	Titles   []TitleView           `json:"titles"`
+	Keywords []KeywordView         `json:"keywords"`
+	Links    []LinkView            `json:"links"`
+	Analysis *archive.PageAnalysis `json:"analysis,omitempty"`
 }
 
 // TitleView is a title region. Text is empty until the future vision-LLM phase
@@ -107,10 +108,11 @@ func pageView(fileID string, ref archive.NotePageRef, pd archive.PageDoc, svg st
 	return PageView{
 		Number:   ref.Number,
 		PageID:   ref.ID,
-		Starred:  ref.Starred,
+		Starred:  pd.Starred,
 		SVG:      svg,
 		Titles:   titles,
 		Keywords: keywords,
 		Links:    links,
+		Analysis: pd.Analysis,
 	}
 }

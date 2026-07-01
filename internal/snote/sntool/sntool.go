@@ -12,6 +12,7 @@ import (
 	"path"
 	"path/filepath"
 	"strconv"
+	"strings"
 
 	"github.com/jdlugosz963/snorg/internal/snote"
 )
@@ -129,19 +130,40 @@ func (s *Source) Read(path string) (*snote.Note, error) {
 	return note, nil
 }
 
-// RenderSVG renders a single 0-based page to SVG via `supernote-tool convert`.
-func (s *Source) RenderSVG(path string, pageIndex int) ([]byte, error) {
+// RenderSVGs renders every page of the note to SVG in one `supernote-tool convert
+// -a` pass (a single parse of the .note), returning the pages in order (index 0 =
+// first page). `-a` writes one file per page, suffixing the output basename with
+// the 0-based page index (page.svg -> page_0.svg, page_1.svg, …); we read them back
+// ordered by that suffix.
+func (s *Source) RenderSVGs(notePath string) ([][]byte, error) {
 	dir, err := os.MkdirTemp("", "snorg-svg")
 	if err != nil {
 		return nil, err
 	}
 	defer os.RemoveAll(dir)
-	outPath := filepath.Join(dir, "page.svg")
-	cmd := exec.Command(Binary, "convert", "-n", strconv.Itoa(pageIndex), "-t", "svg", path, outPath)
+	cmd := exec.Command(Binary, "convert", "-a", "-t", "svg", notePath, filepath.Join(dir, "page.svg"))
 	if out, err := cmd.CombinedOutput(); err != nil {
-		return nil, fmt.Errorf("%s convert page %d: %w: %s", Binary, pageIndex, err, out)
+		return nil, fmt.Errorf("%s convert -a: %w: %s", Binary, err, out)
 	}
-	return os.ReadFile(outPath)
+
+	files, err := filepath.Glob(filepath.Join(dir, "page_*.svg"))
+	if err != nil {
+		return nil, err
+	}
+	svgs := make([][]byte, len(files))
+	for _, f := range files {
+		// page_<i>.svg — index between the "page_" prefix and the ".svg" suffix.
+		idx, err := strconv.Atoi(strings.TrimSuffix(strings.TrimPrefix(filepath.Base(f), "page_"), ".svg"))
+		if err != nil || idx < 0 || idx >= len(files) {
+			return nil, fmt.Errorf("%s convert -a: unexpected output file %q", Binary, filepath.Base(f))
+		}
+		data, err := os.ReadFile(f)
+		if err != nil {
+			return nil, err
+		}
+		svgs[idx] = data
+	}
+	return svgs, nil
 }
 
 func rawString(r json.RawMessage) string {

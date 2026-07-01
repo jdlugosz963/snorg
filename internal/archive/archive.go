@@ -75,7 +75,13 @@ func (a *Archive) Write(n *snote.Note, svgs map[string][]byte) error {
 		return err
 	}
 	for _, p := range n.Pages {
-		if err := writeJSONIfChanged(filepath.Join(dir, p.ID+".json"), pageDoc(p)); err != nil {
+		pd := pageDoc(p)
+		// Re-ingest must not discard a page's derived AI analysis: carry it over
+		// from the existing page JSON (ingest itself never produces one).
+		if old, err := a.ReadPage(n.FileID, p.ID); err == nil {
+			pd.Analysis = old.Analysis
+		}
+		if err := writeJSONIfChanged(filepath.Join(dir, p.ID+".json"), pd); err != nil {
 			return err
 		}
 		if svg, ok := svgs[p.ID]; ok {
@@ -85,6 +91,7 @@ func (a *Archive) Write(n *snote.Note, svgs map[string][]byte) error {
 					return fmt.Errorf("write background for page %s: %w", p.ID, err)
 				}
 			}
+			svg = a.injectLinks(svg, n.FileID, current, p.Links)
 			if err := writeFileIfChanged(filepath.Join(dir, p.ID+".svg"), formatSVG(svg)); err != nil {
 				return fmt.Errorf("write svg for page %s: %w", p.ID, err)
 			}

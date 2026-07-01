@@ -30,6 +30,40 @@ func svgMap(m map[string]string) map[string][]byte {
 	return out
 }
 
+// TestWritePreservesAnalysisOnReingest checks that re-ingesting a note keeps a
+// page's derived AI analysis (ingest itself never produces one, so a naive
+// rewrite would wipe it).
+func TestWritePreservesAnalysisOnReingest(t *testing.T) {
+	a := New(t.TempDir())
+	n := note("Pa")
+	if err := a.Write(n, svgMap(map[string]string{"Pa": "<svg/>"})); err != nil {
+		t.Fatal(err)
+	}
+
+	// Simulate the analyze command writing an analysis into the page.
+	pd, err := a.ReadPage("F_TEST", "Pa")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pd.Analysis = &PageAnalysis{Content: "hello"}
+	if err := a.WritePage("F_TEST", pd); err != nil {
+		t.Fatal(err)
+	}
+
+	// Re-ingest the same note.
+	if err := a.Write(n, svgMap(map[string]string{"Pa": "<svg/>"})); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := a.ReadPage("F_TEST", "Pa")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Analysis == nil || got.Analysis.Content != "hello" {
+		t.Errorf("analysis not preserved across re-ingest: %+v", got.Analysis)
+	}
+}
+
 func mustExist(t *testing.T, path string) {
 	t.Helper()
 	if _, err := os.Stat(path); err != nil {

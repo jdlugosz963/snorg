@@ -1,0 +1,65 @@
+# Example snorg config (docs/config.md).
+# Pass with: snorg <cmd> -c config.example.yaml ...   (repeatable; later files win)
+#
+# `provider` + `analysis` are only used by `analyze`; `export` is only used by
+# `export`. Each section can stand alone in its own file (e.g. keep secrets separate).
+
+provider:
+  endpoint: https://openrouter.ai/api/v1   # OpenAI-compatible base URL
+  api_key: ""                              # leave empty to use $OPENAI_API_KEY
+  model: anthropic/claude-sonnet-4.6 # openai/gpt-4o
+
+analysis:
+  # content/titles/links prompts are optional (built-in defaults apply).
+  fields:                                  # optional custom text outputs
+    summary:
+      prompt: "Summarize the following note page in 2 sentences:"
+
+# Single pongo2 (Jinja2-style) template rendered over the `snorg retrieve` JSON.
+# Context keys are the json field names: iterate `pages`, then each page's
+# titles / keywords / links / analysis. Use Django-style filters (e.g. |cut:".note").
+# Rendered with trim_blocks + lstrip_blocks (like Jinja2): block tags may sit on their
+# own indented lines without adding blank lines. One rule: never END an output line with
+# a block tag (e.g. {% endif %}) — its newline is trimmed; keep trailing conditionals
+# mid-line. Two export-specific helpers (see docs/config.md):
+#   - `denote` filter: FILE_ID -> Emacs denote id, e.g. {{ link.target_file_id|denote }}.
+#   - each page link/title gains a nested `analysis` (.name) when the page was analyzed.
+export:
+  template: |
+    * Generated
+
+    ** Transcribtion
+    {% for page in pages %}
+    {% if page.analysis.content %}
+    *** {{ page.number }}
+    #+begin_quote
+    {{ page.analysis.content }}
+    #+end_quote
+    **** Summary
+    {{ page.analysis.fields.summary }}
+    {% endif %}
+    {% endfor %}
+
+    ** Images
+    {% for page in pages %}
+    - [[{{ page.svg }}][Page {{ page.number }}]]
+      {% for link in page.links %}
+      - {% if link.analysis %}*{{ link.analysis.name }}*{% endif %} ={{ link.name|cut:".note" }} note=
+        - [[denote:{{ link.target_file_id|denote }}][denote]]
+        - [[snorg:{{ link.target_page_id }}][svg]]
+      {% endfor %}
+    {% endfor %}
+
+    ** Keywords
+    {% for page in pages %}
+      {% for kw in page.keywords %}
+    - Page {{ page.number }}: {{ kw.text }}
+      {% endfor %}
+    {% endfor %}
+
+    ** Titles
+    {% for page in pages %}
+      {% for t in page.titles %}
+    - Page {{ page.number }}: Level {{ t.level }}{% if t.analysis %} — {{ t.analysis.name }}{% endif %} "{{ t.text }}"
+      {% endfor %}
+    {% endfor %}

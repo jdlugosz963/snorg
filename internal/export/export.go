@@ -1,0 +1,87 @@
+package export
+
+import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+
+	"github.com/flosch/pongo2/v6"
+
+	"github.com/jdlugosz963/snorg/internal/retrieve"
+)
+
+// templateSet renders with trim_blocks + lstrip_blocks enabled (Jinja2 parity), so
+// templates can put block tags (`{% for %}`, `{% endif %}`) on their own indented lines
+// without leaking a blank line or indentation into the output. Note: trim_blocks drops
+// the newline after *any* `%}`, so an output line must not end with a block tag.
+var templateSet = newTemplateSet()
+
+func newTemplateSet() *pongo2.TemplateSet {
+	s := pongo2.NewSet("snorg-export", pongo2.DefaultLoader)
+	s.Options.TrimBlocks = true
+	s.Options.LStripBlocks = true
+	return s
+}
+
+// Render executes template (pongo2 syntax) over view and returns the rendered text.
+// The context is view marshalled to JSON and back into a map[string]any, so templates
+// address fields by their json tags. Numbers are decoded as json.Number so integers
+// (page number, title level) render as "1" rather than "1.000000". pongo2 resolves
+// missing keys to empty, so pages without analysis render blank rather than erroring.
+func Render(view *retrieve.NoteView, template string) (string, error) {
+	b, err := json.Marshal(view)
+	if err != nil {
+		return "", fmt.Errorf("marshal note: %w", err)
+	}
+	dec := json.NewDecoder(bytes.NewReader(b))
+	dec.UseNumber()
+	var ctx map[string]any
+	if err := dec.Decode(&ctx); err != nil {
+		return "", fmt.Errorf("build context: %w", err)
+	}
+	enrichAnalysis(ctx)
+	tpl, err := templateSet.FromString(template)
+	if err != nil {
+		return "", fmt.Errorf("parse template: %w", err)
+	}
+	out, err := tpl.Execute(pongo2.Context(ctx))
+	if err != nil {
+		return "", fmt.Errorf("render template: %w", err)
+	}
+	return out, nil
+}
+
+// enrichAnalysis zips each page's index-aligned analysis arrays into the page's own
+// links/titles, so templates can reach the transcribed name per item as
+// link.analysis.name / title.analysis.name (instead of the unreachable parallel
+// page.analysis.links[i]). Pages without analysis, or items past the analysis array,
+// are left untouched (render blank).
+func enrichAnalysis(ctx map[string]any) {
+	pages, _ := ctx["pages"].([]any)
+	for _, p := range pages {
+		page, ok := p.(map[string]any)
+		if !ok {
+			continue
+		}
+		analysis, ok := page["analysis"].(map[string]any)
+		if !ok {
+			continue
+		}
+		zipAnalysis(page["links"], analysis["links"])
+		zipAnalysis(page["titles"], analysis["titles"])
+	}
+}
+
+// zipAnalysis sets items[i]["analysis"] = src[i] for each index in range.
+func zipAnalysis(itemsAny, srcAny any) {
+	items, _ := itemsAny.([]any)
+	src, _ := srcAny.([]any)
+	for i, it := range items {
+		if i >= len(src) {
+			break
+		}
+		if item, ok := it.(map[string]any); ok {
+			item["analysis"] = src[i]
+		}
+	}
+}

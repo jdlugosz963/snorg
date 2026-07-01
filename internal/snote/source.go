@@ -7,6 +7,7 @@ package snote
 type Source interface {
 	// Read parses metadata for the note at path into the domain model.
 	Read(path string) (*Note, error)
-	// RenderSVG renders a single page (0-based index) to SVG bytes.
-	RenderSVG(path string, pageIndex int) ([]byte, error)
+	// RenderSVGs renders every page of the note at path to SVG, in page order
+	// (index 0 = first page), in a single pass.
+	RenderSVGs(path string) ([][]byte, error)
 }
