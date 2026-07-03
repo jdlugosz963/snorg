@@ -60,6 +60,48 @@ func TestExtractBackgroundNoImageUnchanged(t *testing.T) {
 	}
 }
 
+func TestApplyBackgroundBlank(t *testing.T) {
+	in := bgSVG(base64.StdEncoding.EncodeToString([]byte("bg")))
+	out := string(applyBackground(in, BackgroundBlank))
+	if strings.Contains(out, "data:image") {
+		t.Errorf("blank kept the image:\n%s", out)
+	}
+	if !strings.Contains(out, `<rect x="0" y="0" width="1920" height="2560" fill="#ffffff" />`) {
+		t.Errorf("blank did not insert the white rect:\n%s", out)
+	}
+	if !strings.Contains(out, `<path d="M 1 2 L 3 4"`) {
+		t.Errorf("blank disturbed handwriting:\n%s", out)
+	}
+}
+
+func TestApplyBackgroundRemove(t *testing.T) {
+	in := bgSVG(base64.StdEncoding.EncodeToString([]byte("bg")))
+	out := string(applyBackground(in, BackgroundRemove))
+	if strings.Contains(out, "data:image") || strings.Contains(out, "<image") {
+		t.Errorf("remove kept the image:\n%s", out)
+	}
+	if strings.Contains(out, "<rect") {
+		t.Errorf("remove inserted a rect:\n%s", out)
+	}
+	if !strings.Contains(out, `<path d="M 1 2 L 3 4"`) {
+		t.Errorf("remove disturbed handwriting:\n%s", out)
+	}
+}
+
+func TestApplyBackgroundInlineNoop(t *testing.T) {
+	in := bgSVG(base64.StdEncoding.EncodeToString([]byte("bg")))
+	if out := applyBackground(in, BackgroundInline); !bytes.Equal(out, in) {
+		t.Errorf("inline changed svg:\n%s", out)
+	}
+}
+
+func TestApplyBackgroundNoImage(t *testing.T) {
+	in := []byte(`<svg><path d="M 1 2" fill="#000000" /></svg>`)
+	if out := applyBackground(in, BackgroundBlank); !bytes.Equal(out, in) {
+		t.Errorf("blank on image-less svg changed it:\n%s", out)
+	}
+}
+
 func TestExtractBackgroundDeterministic(t *testing.T) {
 	in := bgSVG(base64.StdEncoding.EncodeToString([]byte("same bytes")))
 	out1, _, name1, _ := extractBackground(in)

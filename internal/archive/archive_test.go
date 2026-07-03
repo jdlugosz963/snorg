@@ -45,8 +45,11 @@ func TestWritePreservesAnalysisOnReingest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	pd.Analysis = &PageAnalysis{Content: "hello"}
+	pd.Analysis = &PageAnalysis{SourceHash: "abc", Fields: map[string]string{"summary": "hello"}}
 	if err := a.WritePage("F_TEST", pd); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.WriteAnalysisMD("F_TEST", "Pa", "# hello"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -59,8 +62,79 @@ func TestWritePreservesAnalysisOnReingest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Analysis == nil || got.Analysis.Content != "hello" {
+	if got.Analysis == nil || got.Analysis.SourceHash != "abc" || got.Analysis.Fields["summary"] != "hello" {
 		t.Errorf("analysis not preserved across re-ingest: %+v", got.Analysis)
+	}
+	if md, err := a.ReadAnalysisMD("F_TEST", "Pa"); err != nil || md != "# hello\n" {
+		t.Errorf("sidecar not preserved across re-ingest: %q, %v", md, err)
+	}
+}
+
+// TestWriteCarriesRegionAnalysesByRect checks the reconcile carry-over of
+// per-title/per-link transcriptions: same rect keeps its analysis, a moved rect
+// drops it, and duplicate rects each consume one old analysis.
+func TestWriteCarriesRegionAnalysesByRect(t *testing.T) {
+	a := New(t.TempDir())
+	r1 := snote.Rect{X: 10, Y: 20, W: 300, H: 100}
+	r2 := snote.Rect{X: 10, Y: 400, W: 300, H: 100}
+	page := snote.Page{
+		ID: "Pa", Number: 1,
+		Titles: []snote.Title{{Rect: r1, Level: 1}},
+		Links:  []snote.Link{{Rect: r2, TargetPageID: "Pz", TargetFileID: "F_TEST"}},
+	}
+	n := &snote.Note{FileID: "F_TEST", Pages: []snote.Page{page}}
+	if err := a.Write(n, svgMap(map[string]string{"Pa": "<svg/>"})); err != nil {
+		t.Fatal(err)
+	}
+
+	pd, err := a.ReadPage("F_TEST", "Pa")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pd.Titles[0].Analysis = &TitleAnalysis{Name: "Essay"}
+	pd.Links[0].Analysis = &LinkAnalysis{Name: "see also"}
+	if err := a.WritePage("F_TEST", pd); err != nil {
+		t.Fatal(err)
+	}
+
+	// Re-ingest: same title rect, moved link rect.
+	moved := page
+	moved.Links = []snote.Link{{Rect: snote.Rect{X: 500, Y: 400, W: 300, H: 100}, TargetPageID: "Pz", TargetFileID: "F_TEST"}}
+	n2 := &snote.Note{FileID: "F_TEST", Pages: []snote.Page{moved}}
+	if err := a.Write(n2, svgMap(map[string]string{"Pa": "<svg/>"})); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := a.ReadPage("F_TEST", "Pa")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Titles[0].Analysis == nil || got.Titles[0].Analysis.Name != "Essay" {
+		t.Errorf("unmoved title lost its analysis: %+v", got.Titles[0])
+	}
+	if got.Links[0].Analysis != nil {
+		t.Errorf("moved link kept a stale analysis: %+v", got.Links[0].Analysis)
+	}
+}
+
+// TestCarryRegionAnalysesDuplicateRects: two titles on the same rect each keep
+// their own analysis (consumed in order, at most once).
+func TestCarryRegionAnalysesDuplicateRects(t *testing.T) {
+	r := snote.Rect{X: 1, Y: 2, W: 3, H: 4}
+	old := PageDoc{Titles: []TitleDoc{
+		{Rect: r, Analysis: &TitleAnalysis{Name: "first"}},
+		{Rect: r, Analysis: &TitleAnalysis{Name: "second"}},
+	}}
+	pd := PageDoc{Titles: []TitleDoc{{Rect: r}, {Rect: r}, {Rect: r}}}
+	carryRegionAnalyses(&pd, old)
+	if pd.Titles[0].Analysis == nil || pd.Titles[0].Analysis.Name != "first" {
+		t.Errorf("titles[0] = %+v, want first", pd.Titles[0].Analysis)
+	}
+	if pd.Titles[1].Analysis == nil || pd.Titles[1].Analysis.Name != "second" {
+		t.Errorf("titles[1] = %+v, want second", pd.Titles[1].Analysis)
+	}
+	if pd.Titles[2].Analysis != nil {
+		t.Errorf("titles[2] = %+v, want nil (old analyses exhausted)", pd.Titles[2].Analysis)
 	}
 }
 
@@ -169,6 +243,35 @@ func TestWriteRemovedPagePruned(t *testing.T) {
 	}
 }
 
+// TestWriteDisabledPipelineKeepsSVGVerbatim: with every SVG stage off the
+// renderer's bytes land on disk untouched — no anchors, no background
+// extraction, no reflow.
+func TestWriteDisabledPipelineKeepsSVGVerbatim(t *testing.T) {
+	root := t.TempDir()
+	a := New(root)
+	a.SVG = SVGPipeline{}
+
+	b64 := base64.StdEncoding.EncodeToString([]byte("bg"))
+	raw := string(bgSVG(b64))
+	n := note("Pa", "Pb")
+	n.Pages[0].Links = []snote.Link{{
+		Rect:         snote.Rect{X: 1, Y: 2, W: 3, H: 4},
+		TargetPageID: "Pb", TargetFileID: "F_TEST",
+	}}
+	if err := a.Write(n, svgMap(map[string]string{"Pa": raw, "Pb": "<svg>b</svg>"})); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := os.ReadFile(filepath.Join(root, "F_TEST", "Pa.svg"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != raw {
+		t.Errorf("disabled pipeline modified the SVG:\nwant: %s\ngot:  %s", raw, got)
+	}
+	mustNotExist(t, filepath.Join(root, "F_TEST", "backgrounds"))
+}
+
 func TestWriteExtractsAndDedupesBackground(t *testing.T) {
 	root := t.TempDir()
 	dir := filepath.Join(root, "F_TEST")
@@ -228,7 +331,10 @@ func TestWriteExtractsAndDedupesBackground(t *testing.T) {
 	}
 }
 
-func TestWriteReorderOnlyTouchesNoteJSON(t *testing.T) {
+// TestWriteReorderUpdatesNavAndNoteJSON: reordering pages renumbers note.json,
+// keeps foreign per-page artifacts, and legitimately rewrites the SVGs whose
+// prev/next neighbors changed (the baked nav zones must follow the new order).
+func TestWriteReorderUpdatesNavAndNoteJSON(t *testing.T) {
 	root := t.TempDir()
 	dir := filepath.Join(root, "F_TEST")
 	a := New(root)
@@ -240,17 +346,15 @@ func TestWriteReorderOnlyTouchesNoteJSON(t *testing.T) {
 	if err := os.WriteFile(analysis, []byte("{}"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	paBefore, _ := os.Stat(filepath.Join(dir, "Pa.svg"))
 
 	// Swap order.
 	if err := a.Write(note("Pb", "Pa"), svgs); err != nil {
 		t.Fatal(err)
 	}
-	paAfter, _ := os.Stat(filepath.Join(dir, "Pa.svg"))
-	if !paAfter.ModTime().Equal(paBefore.ModTime()) {
-		t.Error("reorder rewrote Pa.svg")
-	}
 	mustExist(t, analysis)
+	if pa := readSVG(t, root, "Pa"); !strings.Contains(pa, `xlink:href="Pb.svg"><rect x="0"`) {
+		t.Errorf("Pa.svg nav not updated to prev=Pb after reorder:\n%s", pa)
+	}
 
 	var nd NoteDoc
 	b, _ := os.ReadFile(filepath.Join(dir, "note.json"))

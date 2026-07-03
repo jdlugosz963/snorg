@@ -68,6 +68,34 @@ func TestReadNoteAndPageRoundTrip(t *testing.T) {
 	}
 }
 
+func TestAnalysisMDRoundTrip(t *testing.T) {
+	a := New(t.TempDir())
+	n := &snote.Note{FileID: "F_TEST", Pages: []snote.Page{{ID: "Pa", Number: 1}}}
+	if err := a.Write(n, svgMap(map[string]string{"Pa": "<svg/>"})); err != nil {
+		t.Fatal(err)
+	}
+
+	// Missing sidecar reads as empty, not as an error.
+	if md, err := a.ReadAnalysisMD("F_TEST", "Pa"); err != nil || md != "" {
+		t.Errorf("missing sidecar = %q, %v; want \"\", nil", md, err)
+	}
+
+	// Content is normalized to exactly one trailing newline.
+	if err := a.WriteAnalysisMD("F_TEST", "Pa", "# Title\n\nbody\n\n\n"); err != nil {
+		t.Fatal(err)
+	}
+	if md, err := a.ReadAnalysisMD("F_TEST", "Pa"); err != nil || md != "# Title\n\nbody\n" {
+		t.Errorf("sidecar = %q, %v", md, err)
+	}
+
+	// Pruning the page removes the sidecar with the rest of <PAGEID>.*.
+	empty := &snote.Note{FileID: "F_TEST", Pages: []snote.Page{{ID: "Pb", Number: 1}}}
+	if err := a.Write(empty, svgMap(map[string]string{"Pb": "<svg/>"})); err != nil {
+		t.Fatal(err)
+	}
+	mustNotExist(t, filepath.Join(a.Root, "F_TEST", "Pa.md"))
+}
+
 func TestSVGRelIsArchiveRelativeSlash(t *testing.T) {
 	a := New("/anywhere")
 	if got, want := a.SVGRel("F_TEST", "Pa"), "F_TEST/Pa.svg"; got != want {

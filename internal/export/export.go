@@ -39,7 +39,6 @@ func Render(view *retrieve.NoteView, template string) (string, error) {
 	if err := dec.Decode(&ctx); err != nil {
 		return "", fmt.Errorf("build context: %w", err)
 	}
-	enrichAnalysis(ctx)
 	tpl, err := templateSet.FromString(template)
 	if err != nil {
 		return "", fmt.Errorf("parse template: %w", err)
@@ -49,39 +48,4 @@ func Render(view *retrieve.NoteView, template string) (string, error) {
 		return "", fmt.Errorf("render template: %w", err)
 	}
 	return out, nil
-}
-
-// enrichAnalysis zips each page's index-aligned analysis arrays into the page's own
-// links/titles, so templates can reach the transcribed name per item as
-// link.analysis.name / title.analysis.name (instead of the unreachable parallel
-// page.analysis.links[i]). Pages without analysis, or items past the analysis array,
-// are left untouched (render blank).
-func enrichAnalysis(ctx map[string]any) {
-	pages, _ := ctx["pages"].([]any)
-	for _, p := range pages {
-		page, ok := p.(map[string]any)
-		if !ok {
-			continue
-		}
-		analysis, ok := page["analysis"].(map[string]any)
-		if !ok {
-			continue
-		}
-		zipAnalysis(page["links"], analysis["links"])
-		zipAnalysis(page["titles"], analysis["titles"])
-	}
-}
-
-// zipAnalysis sets items[i]["analysis"] = src[i] for each index in range.
-func zipAnalysis(itemsAny, srcAny any) {
-	items, _ := itemsAny.([]any)
-	src, _ := srcAny.([]any)
-	for i, it := range items {
-		if i >= len(src) {
-			break
-		}
-		if item, ok := it.(map[string]any); ok {
-			item["analysis"] = src[i]
-		}
-	}
 }

@@ -1,6 +1,12 @@
 // Package analyze runs vision-LLM analysis on a single archived page: it
 // rasterizes the page SVG, crops each title/link region, transcribes them and the
-// whole page, and writes the result into the page's <PAGEID>.json under "analysis".
+// whole page, and writes the result into the page's <PAGEID>.json (per-region
+// names, custom fields) and <PAGEID>.md sidecar (the transcribed content).
+//
+// Analysis is incremental: a hash of the rasterized page is stored alongside the
+// analysis, unchanged pages are skipped without any LLM call, and re-analysis of
+// a changed page feeds the previous transcription back through an update prompt
+// so the new content diffs minimally against the old.
 //
 // It is the only module with external dependencies (an LLM client and an SVG
 // rasterizer); the Transcriber seam keeps the orchestration testable without a
@@ -10,6 +16,8 @@ package analyze
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"image"
 	"strings"
@@ -40,65 +48,97 @@ type Field struct {
 }
 
 // Spec carries the fully-resolved prompts for one analysis run. Content/Title/Link
-// are vision prompts; Fields are text prompts over the content.
+// are vision prompts; Update is the content prompt used when a previous
+// transcription exists (it is sent with the previous content appended, so the
+// model minimizes the diff); Fields are text prompts over the content.
 type Spec struct {
 	Content string
+	Update  string
 	Title   string
 	Link    string
 	Fields  []Field
 }
 
-// Page locates the page owning pageID, analyzes it through t and g per spec, and
-// writes the result into its <PAGEID>.json. Existing analysis is overwritten.
-func Page(ctx context.Context, a *archive.Archive, t Transcriber, g Generator, spec Spec, pageID string) error {
+// Outcome says what Page did: skipped an unchanged page, analyzed a fresh one,
+// or updated an existing analysis against the previous transcription.
+type Outcome string
+
+const (
+	Skipped  Outcome = "skipped"
+	Analyzed Outcome = "analyzed"
+	Updated  Outcome = "updated"
+)
+
+// Page locates the page owning pageID and analyzes it through t and g per spec:
+// the transcribed content goes to the <PAGEID>.md sidecar, per-region names and
+// custom fields into <PAGEID>.json. A page whose rasterized pixels match the
+// stored analysis source hash is skipped without any LLM call unless force is
+// set; a changed page with a previous transcription is re-analyzed through the
+// update prompt so the new content diffs minimally against the old.
+func Page(ctx context.Context, a *archive.Archive, t Transcriber, g Generator, spec Spec, pageID string, force bool) (Outcome, error) {
 	fileID, err := a.FindPage(pageID)
 	if err != nil {
-		return err
+		return "", err
 	}
 	pd, err := a.ReadPage(fileID, pageID)
 	if err != nil {
-		return err
+		return "", err
 	}
 	svg, err := a.ReadSVG(fileID, pageID)
 	if err != nil {
-		return err
+		return "", err
 	}
+	hash := pathHash(svg)
+	if !force && pd.Analysis != nil && pd.Analysis.SourceHash == hash {
+		return Skipped, nil
+	}
+
+	// Only rasterize once the page is known to need analysis (the skip check above
+	// works off the SVG bytes alone).
 	img, err := rasterize(svg)
 	if err != nil {
-		return err
+		return "", err
 	}
-
 	page, err := toPNG(img)
 	if err != nil {
-		return err
+		return "", err
 	}
-	content, err := t.Transcribe(ctx, spec.Content, page)
+	outcome := Analyzed
+	prompt := spec.Content
+	if pd.Analysis != nil {
+		if prev, err := a.ReadAnalysisMD(fileID, pageID); err != nil {
+			return "", err
+		} else if prev != "" {
+			outcome = Updated
+			prompt = spec.Update + "\n\n" + prev
+		}
+	}
+	content, err := t.Transcribe(ctx, prompt, page)
 	if err != nil {
-		return fmt.Errorf("transcribe page: %w", err)
+		return "", fmt.Errorf("transcribe page: %w", err)
 	}
 	content = strings.TrimSpace(content)
-
-	analysis := &archive.PageAnalysis{Content: content}
 
 	for i, title := range pd.Titles {
 		name, err := transcribeRegion(ctx, t, img, title.Rect, spec.Title)
 		if err != nil {
-			return fmt.Errorf("title %d: %w", i, err)
+			return "", fmt.Errorf("title %d: %w", i, err)
 		}
-		analysis.Titles = append(analysis.Titles, archive.TitleAnalysis{Name: name})
+		pd.Titles[i].Analysis = &archive.TitleAnalysis{Name: name}
 	}
 	for i, link := range pd.Links {
 		name, err := transcribeRegion(ctx, t, img, link.Rect, spec.Link)
 		if err != nil {
-			return fmt.Errorf("link %d: %w", i, err)
+			return "", fmt.Errorf("link %d: %w", i, err)
 		}
-		analysis.Links = append(analysis.Links, archive.LinkAnalysis{Name: name})
+		pd.Links[i].Analysis = &archive.LinkAnalysis{Name: name}
 	}
 
+	analysis := &archive.PageAnalysis{SourceHash: hash}
 	for _, f := range spec.Fields {
 		out, err := g.Generate(ctx, f.Prompt, content)
 		if err != nil {
-			return fmt.Errorf("field %s: %w", f.Name, err)
+			return "", fmt.Errorf("field %s: %w", f.Name, err)
 		}
 		if analysis.Fields == nil {
 			analysis.Fields = map[string]string{}
@@ -106,8 +146,58 @@ func Page(ctx context.Context, a *archive.Archive, t Transcriber, g Generator, s
 		analysis.Fields[f.Name] = strings.TrimSpace(out)
 	}
 
+	if err := a.WriteAnalysisMD(fileID, pageID, content); err != nil {
+		return "", err
+	}
 	pd.Analysis = analysis
-	return a.WritePage(fileID, pd)
+	if err := a.WritePage(fileID, pd); err != nil {
+		return "", err
+	}
+	return outcome, nil
+}
+
+// pathHash fingerprints a page by the geometry of its handwriting: the d
+// attribute of every <path>, whitespace-normalized and concatenated in document
+// order. It is invariant under everything the SVG pipeline does that does not
+// change the drawing itself — recolor (rewrites fill=), background mode (touches
+// the <image>), the link/nav overlays (<a><rect>, no d) and the formatSVG reflow
+// (only whitespace within d) — so none of those force a re-analysis, while an
+// actual stroke edit (a different potrace d) does. It reads the SVG bytes alone,
+// so the skip decision needs no rasterization.
+func pathHash(svg []byte) string {
+	h := sha256.New()
+	s := string(svg)
+	for {
+		i := strings.Index(s, "<path")
+		if i < 0 {
+			break
+		}
+		s = s[i:]
+		end := strings.IndexByte(s, '>')
+		if end < 0 {
+			break
+		}
+		if d, ok := pathData(s[:end+1]); ok {
+			h.Write([]byte(strings.Join(strings.Fields(d), " ")))
+			h.Write([]byte{'\n'})
+		}
+		s = s[end+1:]
+	}
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+// pathData returns the d attribute value of a single <path .../> element.
+func pathData(elem string) (string, bool) {
+	di := strings.Index(elem, ` d="`)
+	if di < 0 {
+		return "", false
+	}
+	start := di + len(` d="`)
+	q := strings.IndexByte(elem[start:], '"')
+	if q < 0 {
+		return "", false
+	}
+	return elem[start : start+q], true
 }
 
 func transcribeRegion(ctx context.Context, t Transcriber, img *image.RGBA, r snote.Rect, prompt string) (string, error) {

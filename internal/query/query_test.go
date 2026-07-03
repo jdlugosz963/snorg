@@ -85,6 +85,49 @@ func TestPagesKeywordRegexp(t *testing.T) {
 	}
 }
 
+func TestPagesAll(t *testing.T) {
+	a := seedArchive(t)
+	ms, err := query.Pages(a, query.All)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"Pa", "Pb", "Pc", "Pd"}; !reflect.DeepEqual(pageIDs(ms), want) {
+		t.Errorf("all = %v, want %v", pageIDs(ms), want)
+	}
+}
+
+func TestPagesInNote(t *testing.T) {
+	a := seedArchive(t)
+	ms, err := query.Pages(a, query.InNote("F_B"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"Pc", "Pd"}; !reflect.DeepEqual(pageIDs(ms), want) {
+		t.Errorf("note F_B = %v, want %v", pageIDs(ms), want)
+	}
+}
+
+func TestPagesUnanalyzed(t *testing.T) {
+	a := seedArchive(t)
+	// Analyze Pa: it must drop out of the unanalyzed set.
+	pd, err := a.ReadPage("F_A", "Pa")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pd.Analysis = &archive.PageAnalysis{SourceHash: "abc"}
+	if err := a.WritePage("F_A", pd); err != nil {
+		t.Fatal(err)
+	}
+
+	ms, err := query.Pages(a, query.Unanalyzed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"Pb", "Pc", "Pd"}; !reflect.DeepEqual(pageIDs(ms), want) {
+		t.Errorf("unanalyzed = %v, want %v", pageIDs(ms), want)
+	}
+}
+
 func TestPagesNoMatch(t *testing.T) {
 	a := seedArchive(t)
 	ms, err := query.Pages(a, query.Keyword(regexp.MustCompile("nope")))

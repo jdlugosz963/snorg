@@ -77,6 +77,55 @@ func TestGetAssemblesOrderedView(t *testing.T) {
 	}
 }
 
+// TestGetAssemblesAnalysis: an analyzed page surfaces its sidecar content and
+// fields under analysis, with per-region transcriptions nested on titles/links —
+// the same structure the archive stores on disk.
+func TestGetAssemblesAnalysis(t *testing.T) {
+	root := t.TempDir()
+	a := archive.New(root)
+	n := &snote.Note{
+		FileID: "F_TEST",
+		Pages: []snote.Page{{
+			ID: "Pa", Number: 1,
+			Titles: []snote.Title{{Rect: snote.Rect{X: 1}, Level: 1}},
+			Links:  []snote.Link{{Rect: snote.Rect{X: 2}, TargetPageID: "Pb", TargetFileID: "F_TEST"}},
+		}},
+	}
+	writeNote(t, a, n, map[string]string{"Pa": "<svg/>"})
+
+	pd, err := a.ReadPage("F_TEST", "Pa")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pd.Titles[0].Analysis = &archive.TitleAnalysis{Name: "Chapter"}
+	pd.Links[0].Analysis = &archive.LinkAnalysis{Name: "see also"}
+	pd.Analysis = &archive.PageAnalysis{SourceHash: "abc", Fields: map[string]string{"description": "short"}}
+	if err := a.WritePage("F_TEST", pd); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.WriteAnalysisMD("F_TEST", "Pa", "# Chapter\n\nbody"); err != nil {
+		t.Fatal(err)
+	}
+
+	view, err := retrieve.Get(a, "F_TEST")
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := view.Pages[0]
+	if p.Analysis == nil || p.Analysis.Content != "# Chapter\n\nbody" {
+		t.Errorf("analysis = %+v, want content from sidecar without trailing newline", p.Analysis)
+	}
+	if p.Analysis.Fields["description"] != "short" {
+		t.Errorf("fields = %+v", p.Analysis.Fields)
+	}
+	if p.Titles[0].Analysis == nil || p.Titles[0].Analysis.Name != "Chapter" {
+		t.Errorf("title analysis = %+v", p.Titles[0].Analysis)
+	}
+	if p.Links[0].Analysis == nil || p.Links[0].Analysis.Name != "see also" {
+		t.Errorf("link analysis = %+v", p.Links[0].Analysis)
+	}
+}
+
 func TestListEnumeratesNotes(t *testing.T) {
 	root := t.TempDir()
 	a := archive.New(root)

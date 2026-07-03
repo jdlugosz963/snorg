@@ -2,8 +2,6 @@ package archive
 
 import (
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/jdlugosz963/snorg/internal/snote"
@@ -59,8 +57,9 @@ func (a *Archive) linkHref(fromFileID string, inNote map[string]bool, l snote.Li
 
 // noteSVGHref resolves a link to another page's SVG, as a path relative to the
 // page SVG at <fromFileID>/. A same-note jump resolves iff the target page is part
-// of this note (its SVG is written in the same Write); a cross-note jump resolves
-// only once the target note's SVG already exists on disk ("o ile da rade").
+// of this note (its SVG is written in the same Write). A cross-note jump always
+// resolves to the deterministic archive-relative path — the target note need not be
+// ingested yet; the href simply dangles until it is (no ingest-order dependency).
 func (a *Archive) noteSVGHref(fromFileID string, inNote map[string]bool, l snote.Link) (string, bool) {
 	if l.TargetFileID == "" || l.TargetPageID == "" {
 		return "", false
@@ -70,9 +69,6 @@ func (a *Archive) noteSVGHref(fromFileID string, inNote map[string]bool, l snote
 			return "", false
 		}
 		return l.TargetPageID + ".svg", true
-	}
-	if _, err := os.Stat(filepath.Join(a.Root, a.SVGRel(l.TargetFileID, l.TargetPageID))); err != nil {
-		return "", false
 	}
 	return "../" + l.TargetFileID + "/" + l.TargetPageID + ".svg", true
 }

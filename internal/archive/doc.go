@@ -31,15 +31,15 @@ type PageDoc struct {
 	Analysis *PageAnalysis `json:"analysis,omitempty"`
 }
 
-// PageAnalysis is the vision-LLM analysis of a page. Content is the page's text
-// as plaintext; Titles/Links carry per-region transcriptions aligned by index
-// with PageDoc.Titles/PageDoc.Links. Fields holds configurable custom outputs
-// (e.g. "summary") derived from Content by name.
+// PageAnalysis is the page-level derived AI output. The transcribed content
+// itself lives in the <PAGEID>.md sidecar (multiline markdown, diff-friendly);
+// per-region transcriptions live on TitleDoc/LinkDoc. SourceHash fingerprints
+// the rasterized page the analysis was derived from, so analyze can skip
+// unchanged pages. Fields holds configurable custom outputs (e.g. "summary")
+// derived from the content by name.
 type PageAnalysis struct {
-	Content string            `json:"content"`
-	Titles  []TitleAnalysis   `json:"titles,omitempty"`
-	Links   []LinkAnalysis    `json:"links,omitempty"`
-	Fields  map[string]string `json:"fields,omitempty"`
+	SourceHash string            `json:"source_hash"`
+	Fields     map[string]string `json:"fields,omitempty"`
 }
 
 type TitleAnalysis struct {
@@ -51,8 +51,9 @@ type LinkAnalysis struct {
 }
 
 type TitleDoc struct {
-	Rect  snote.Rect `json:"rect"`
-	Level int        `json:"level"`
+	Rect     snote.Rect     `json:"rect"`
+	Level    int            `json:"level"`
+	Analysis *TitleAnalysis `json:"analysis,omitempty"`
 }
 
 type KeywordDoc struct {
@@ -60,10 +61,11 @@ type KeywordDoc struct {
 }
 
 type LinkDoc struct {
-	Rect         snote.Rect `json:"rect"`
-	TargetPageID string     `json:"target_page_id"`
-	TargetFileID string     `json:"target_file_id"`
-	Name         string     `json:"name"`
+	Rect         snote.Rect    `json:"rect"`
+	TargetPageID string        `json:"target_page_id"`
+	TargetFileID string        `json:"target_file_id"`
+	Name         string        `json:"name"`
+	Analysis     *LinkAnalysis `json:"analysis,omitempty"`
 }
 
 func noteDoc(n *snote.Note) NoteDoc {

@@ -42,10 +42,7 @@ func TestInjectLinksSameNote(t *testing.T) {
 
 func TestInjectLinksCrossNote(t *testing.T) {
 	a := New(t.TempDir())
-	// Target note must exist on disk first.
-	if err := a.Write(note("Pb"), svgMap(map[string]string{"Pb": "<svg>b</svg>"})); err != nil {
-		t.Fatal(err)
-	}
+	// Cross-note links resolve unconditionally — the target note need not exist yet.
 	n := linkedNote("F_SRC", "Pa", "F_TEST", "Pb")
 	if err := a.Write(n, svgMap(map[string]string{"Pa": "<svg>a</svg>"})); err != nil {
 		t.Fatal(err)
@@ -59,8 +56,9 @@ func TestInjectLinksCrossNote(t *testing.T) {
 	}
 }
 
-func TestInjectLinksMissingTargetSkipped(t *testing.T) {
+func TestInjectLinksMissingTargetStillBaked(t *testing.T) {
 	a := New(t.TempDir())
+	// A cross-note link to a not-yet-ingested note is baked anyway (dangling href).
 	n := linkedNote("F_SRC", "Pa", "F_GONE", "Pb")
 	if err := a.Write(n, svgMap(map[string]string{"Pa": "<svg>a</svg>"})); err != nil {
 		t.Fatal(err)
@@ -69,8 +67,8 @@ func TestInjectLinksMissingTargetSkipped(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(svg), "<a ") {
-		t.Fatalf("dangling cross-note link should be skipped, got:\n%s", svg)
+	if want := `xlink:href="../F_GONE/Pb.svg"`; !strings.Contains(string(svg), want) {
+		t.Fatalf("dangling cross-note link should still be baked %q in:\n%s", want, svg)
 	}
 }
 
@@ -111,7 +109,11 @@ func TestInjectLinksIdempotent(t *testing.T) {
 	if string(first) != string(second) {
 		t.Fatalf("re-ingest changed the SVG:\nfirst:  %s\nsecond: %s", first, second)
 	}
-	if n := strings.Count(string(second), "<a "); n != 1 {
+	// One link overlay (by its rect) plus one nav zone (next=Pb), nothing doubled.
+	if n := strings.Count(string(second), `<rect x="10"`); n != 1 {
 		t.Fatalf("expected exactly one link overlay, got %d:\n%s", n, second)
+	}
+	if n := strings.Count(string(second), "<a "); n != 2 {
+		t.Fatalf("expected link + nav anchors (2), got %d:\n%s", n, second)
 	}
 }

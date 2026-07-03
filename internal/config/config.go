@@ -1,15 +1,17 @@
-// Package config loads snorg's runtime configuration: provider credentials and
-// analysis prompts. Configuration is split across one or more YAML files that are
-// deep-merged (later files win), so secrets (api_key) can live in a separate,
-// gitignored file from the committed analysis configuration.
+// Package config loads snorg's runtime configuration: provider credentials,
+// analysis prompts, ingest SVG toggles and the export template. Configuration is
+// split across one or more YAML files that are deep-merged (later files win), so
+// secrets (api_key) can live in a separate, gitignored file from the committed
+// configuration.
 //
-// This is the only non-analyze package allowed an external dependency (YAML); the
-// rest of snorg stays stdlib-only.
+// Its allowed external dependency is yaml.v3.
 package config
 
 import (
 	"fmt"
 	"os"
+	"os/exec"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -18,10 +20,27 @@ import (
 // in every config file, so a secret need not be written to disk.
 const apiKeyEnv = "OPENAI_API_KEY"
 
+// defaultBackgroundMode is the ingest.svg.background value applied when unset: keep
+// the page background, extracted into the note's backgrounds/ subfolder.
+const defaultBackgroundMode = "extract"
+
+// backgroundModes is the set of accepted ingest.svg.background values.
+var backgroundModes = map[string]bool{"extract": true, "inline": true, "blank": true, "remove": true}
+
 // Built-in default prompts, used for any analysis task a config file leaves unset.
 const (
-	defaultContentPrompt = "Transcribe all text on this handwritten note page as plaintext, " +
-		"preserving reading order. Output only the transcription, no commentary."
+	defaultContentPrompt = "Transcribe this handwritten note page as clean Markdown. " +
+		"Mirror the visual hierarchy: render headings as #..###### matching their visual " +
+		"prominence, use - for bullet lists and 1. for numbered lists, and *emphasis*/**strong** " +
+		"where the writing is clearly emphasized. Preserve reading order and transcribe only " +
+		"what is written. Output only the Markdown transcription — no commentary, no code fences."
+	defaultUpdatePrompt = "This handwritten note page was transcribed to Markdown before, " +
+		"and the page has changed since. Produce the complete updated Markdown transcription " +
+		"of the page as it is now, following the same rules: #..###### headings mirroring the " +
+		"visual hierarchy, lists, emphasis; no commentary, no code fences. Wherever the page is " +
+		"unchanged, reuse the previous transcription's wording, punctuation and line breaks " +
+		"verbatim, so your output differs from it only where the page actually changed. " +
+		"The previous transcription follows."
 	defaultTitlePrompt = "This is a cropped title region from a handwritten note page. " +
 		"Reply with a short one-line name: the transcribed title text, or, if it depicts " +
 		"something, what it represents. Output only the name."
@@ -37,6 +56,29 @@ type Config struct {
 	Provider Provider `yaml:"provider"`
 	Analysis Analysis `yaml:"analysis"`
 	Export   Export   `yaml:"export"`
+	Ingest   Ingest   `yaml:"ingest"`
+}
+
+// Ingest configures the ingest command.
+type Ingest struct {
+	SVG SVGToggles `yaml:"svg"`
+}
+
+// SVGToggles switches the per-page SVG rewrites applied on ingest. The bool
+// pointers distinguish "unset" (defaults to true) from an explicit false, which
+// survives the config merge; all three off (with background: inline) writes the
+// renderer's SVG byte-verbatim. Background is a mode enum (defaults to "extract"),
+// and Colors optionally remaps the renderer's four pen shades.
+type SVGToggles struct {
+	Links      *bool  `yaml:"links"`      // bake note links as clickable overlays
+	Navigation *bool  `yaml:"navigation"` // bake prev/next half-page zones
+	Format     *bool  `yaml:"format"`     // reflow into diff-friendly multiline layout
+	Background string `yaml:"background"` // extract | inline | blank | remove (default extract)
+
+	// Colors remaps the renderer's four default pen shades to configured colors
+	// (CSS name or hex, substituted verbatim into fill=). Keys: black, darkgray,
+	// gray, white; any unset key keeps the default shade. Empty = no recolor.
+	Colors map[string]string `yaml:"colors"`
 }
 
 // Export configures the generic template exporter (export command): a single pongo2
@@ -50,7 +92,10 @@ type Export struct {
 type Provider struct {
 	Endpoint string `yaml:"endpoint"`
 	APIKey   string `yaml:"api_key"`
-	Model    string `yaml:"model"`
+	// APIKeyCommand is a shell command (run via `sh -c`) whose stdout is the API
+	// key; consulted by ResolveAPIKey only when APIKey is empty.
+	APIKeyCommand string `yaml:"api_key_command"`
+	Model         string `yaml:"model"`
 }
 
 // Analysis configures the per-task prompts. Content/Titles/Links are vision tasks
@@ -63,10 +108,13 @@ type Analysis struct {
 	Fields  map[string]Task `yaml:"fields"`
 }
 
-// Task is one prompt-driven step. It is a struct (not a bare string) to leave room
-// for a future per-task model override without a schema change.
+// Task is one prompt-driven step. UpdatePrompt is only meaningful on the content
+// task: it replaces Prompt when a previous transcription exists (the previous
+// content is appended to it, steering the model toward a minimal diff). The
+// struct form (not a bare string) leaves room for future per-task overrides.
 type Task struct {
-	Prompt string `yaml:"prompt"`
+	Prompt       string `yaml:"prompt"`
+	UpdatePrompt string `yaml:"update_prompt"`
 }
 
 // Load reads each path, deep-merges them (later paths override earlier ones),
@@ -117,15 +165,64 @@ func (c *Config) applyDefaults() {
 	if c.Analysis.Content.Prompt == "" {
 		c.Analysis.Content.Prompt = defaultContentPrompt
 	}
+	if c.Analysis.Content.UpdatePrompt == "" {
+		c.Analysis.Content.UpdatePrompt = defaultUpdatePrompt
+	}
 	if c.Analysis.Titles.Prompt == "" {
 		c.Analysis.Titles.Prompt = defaultTitlePrompt
 	}
 	if c.Analysis.Links.Prompt == "" {
 		c.Analysis.Links.Prompt = defaultLinkPrompt
 	}
-	if c.Provider.APIKey == "" {
-		c.Provider.APIKey = os.Getenv(apiKeyEnv)
+	for _, b := range []**bool{
+		&c.Ingest.SVG.Links, &c.Ingest.SVG.Navigation, &c.Ingest.SVG.Format,
+	} {
+		if *b == nil {
+			t := true
+			*b = &t
+		}
 	}
+	if c.Ingest.SVG.Background == "" {
+		c.Ingest.SVG.Background = defaultBackgroundMode
+	}
+}
+
+// ResolveAPIKey fills Provider.APIKey when it is empty, in precedence order:
+// literal api_key > api_key_command stdout (trimmed) > $OPENAI_API_KEY. Running the
+// command is deferred to here (not Load) so key-less commands like export never invoke it.
+func (c *Config) ResolveAPIKey() error {
+	if c.Provider.APIKey != "" {
+		return nil
+	}
+	if cmd := strings.TrimSpace(c.Provider.APIKeyCommand); cmd != "" {
+		out, err := exec.Command("sh", "-c", cmd).Output()
+		if err != nil {
+			if ee, ok := err.(*exec.ExitError); ok && len(ee.Stderr) > 0 {
+				return fmt.Errorf("provider.api_key_command: %w: %s", err, strings.TrimSpace(string(ee.Stderr)))
+			}
+			return fmt.Errorf("provider.api_key_command: %w", err)
+		}
+		c.Provider.APIKey = strings.TrimSpace(string(out))
+		return nil
+	}
+	c.Provider.APIKey = os.Getenv(apiKeyEnv)
+	return nil
+}
+
+// ValidateIngest checks the fields the ingest command needs: a recognized
+// background mode (defaults applied by Load) and only known color keys.
+func (c *Config) ValidateIngest() error {
+	if !backgroundModes[c.Ingest.SVG.Background] {
+		return fmt.Errorf("ingest.svg.background: unknown mode %q (want extract, inline, blank or remove)", c.Ingest.SVG.Background)
+	}
+	for k := range c.Ingest.SVG.Colors {
+		switch k {
+		case "black", "darkgray", "gray", "white":
+		default:
+			return fmt.Errorf("ingest.svg.colors: unknown shade %q (want black, darkgray, gray or white)", k)
+		}
+	}
+	return nil
 }
 
 // ValidateProvider checks the fields the analyze command needs: provider credentials

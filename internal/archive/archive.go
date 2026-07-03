@@ -27,20 +27,42 @@ import (
 // Archive is a rooted note store.
 type Archive struct {
 	Root string
+	SVG  SVGPipeline
 }
 
-// New returns an Archive rooted at root.
-func New(root string) *Archive { return &Archive{Root: root} }
+// SVGPipeline configures the rewrites Write applies to each rendered page SVG.
+// The bool stages default to on; Background is a mode (default extract) and Colors
+// optionally remaps the renderer's pen shades. Turning stages off / setting
+// background to inline yields the renderer's output byte-verbatim. Any change here
+// changes SVG bytes, so the next Write rewrites every page SVG once — harmless
+// churn; none of it dirties the analyze fingerprint (path geometry only).
+type SVGPipeline struct {
+	Links      bool              // bake note links as clickable overlays (injectLinks)
+	Navigation bool              // bake prev/next half-page zones (injectNav)
+	Format     bool              // reflow into diff-friendly multiline layout (formatSVG)
+	Background BackgroundMode    // background treatment (see BackgroundMode)
+	Colors     map[string]string // remap the four default pen shades (see recolor); nil = none
+}
+
+// DefaultSVGPipeline is the full pipeline: every overlay on, background extracted,
+// colors unchanged.
+func DefaultSVGPipeline() SVGPipeline {
+	return SVGPipeline{Links: true, Navigation: true, Format: true, Background: BackgroundExtract}
+}
+
+// New returns an Archive rooted at root with the default SVG pipeline.
+func New(root string) *Archive { return &Archive{Root: root, SVG: DefaultSVGPipeline()} }
 
 // Write registers a note keyed by its file id, reconciling the note's directory
 // in place rather than rebuilding it. Pages no longer present are pruned (all of
 // their <PAGEID>.* files, including derived analyses); note.json and per-page
 // files are written only when their content changed. Crucially, other <PAGEID>.*
 // artifacts of pages that remain are left untouched, so expensive per-page
-// analyses survive re-ingest. svgs maps page id to rendered SVG bytes; each one's
-// inline background is extracted into the note's backgrounds/ subfolder and
-// referenced by relative href (see extractBackground), then the SVG is reflowed
-// into a diff-friendly layout before writing (see formatSVG).
+// analyses survive re-ingest. svgs maps page id to rendered SVG bytes; each one
+// runs through the a.SVG pipeline before writing: background extraction into the
+// note's backgrounds/ subfolder (extractBackground), prev/next navigation zones
+// (injectNav), clickable note links (injectLinks) and the diff-friendly reflow
+// (formatSVG) — each stage individually toggleable, all on by default.
 func (a *Archive) Write(n *snote.Note, svgs map[string][]byte) error {
 	if n.FileID == "" {
 		return fmt.Errorf("note has empty file id")
@@ -74,30 +96,81 @@ func (a *Archive) Write(n *snote.Note, svgs map[string][]byte) error {
 	if err := writeJSONIfChanged(filepath.Join(dir, "note.json"), noteDoc(n)); err != nil {
 		return err
 	}
-	for _, p := range n.Pages {
+	for i, p := range n.Pages {
 		pd := pageDoc(p)
 		// Re-ingest must not discard a page's derived AI analysis: carry it over
 		// from the existing page JSON (ingest itself never produces one).
 		if old, err := a.ReadPage(n.FileID, p.ID); err == nil {
 			pd.Analysis = old.Analysis
+			carryRegionAnalyses(&pd, old)
 		}
 		if err := writeJSONIfChanged(filepath.Join(dir, p.ID+".json"), pd); err != nil {
 			return err
 		}
 		if svg, ok := svgs[p.ID]; ok {
-			svg, img, name, hasBG := extractBackground(svg)
-			if hasBG {
-				if err := writeBackground(dir, name, img); err != nil {
-					return fmt.Errorf("write background for page %s: %w", p.ID, err)
+			if a.SVG.Background == BackgroundExtract {
+				rewritten, img, name, hasBG := extractBackground(svg)
+				if hasBG {
+					if err := writeBackground(dir, name, img); err != nil {
+						return fmt.Errorf("write background for page %s: %w", p.ID, err)
+					}
+					svg = rewritten
 				}
+			} else {
+				svg = applyBackground(svg, a.SVG.Background)
 			}
-			svg = a.injectLinks(svg, n.FileID, current, p.Links)
-			if err := writeFileIfChanged(filepath.Join(dir, p.ID+".svg"), formatSVG(svg)); err != nil {
+			svg = recolor(svg, a.SVG.Colors)
+			if a.SVG.Navigation {
+				// Nav before links: the later link overlays win hit-testing.
+				var prevID, nextID string
+				if i > 0 {
+					prevID = n.Pages[i-1].ID
+				}
+				if i < len(n.Pages)-1 {
+					nextID = n.Pages[i+1].ID
+				}
+				svg = injectNav(svg, prevID, nextID)
+			}
+			if a.SVG.Links {
+				svg = a.injectLinks(svg, n.FileID, current, p.Links)
+			}
+			if a.SVG.Format {
+				svg = formatSVG(svg)
+			}
+			if err := writeFileIfChanged(filepath.Join(dir, p.ID+".svg"), svg); err != nil {
 				return fmt.Errorf("write svg for page %s: %w", p.ID, err)
 			}
 		}
 	}
 	return nil
+}
+
+// carryRegionAnalyses copies per-title/per-link analyses from old into pd,
+// matched by exact rect (the region's identity: same rect = same handwriting
+// underneath, even if the link's target changed). Regions that moved or resized
+// drop their analysis and get re-transcribed by the next analyze run. Duplicate
+// rects are consumed in order, each old analysis at most once.
+func carryRegionAnalyses(pd *PageDoc, old PageDoc) {
+	titles := map[snote.Rect][]*TitleAnalysis{}
+	for _, t := range old.Titles {
+		titles[t.Rect] = append(titles[t.Rect], t.Analysis)
+	}
+	for i, t := range pd.Titles {
+		if q := titles[t.Rect]; len(q) > 0 {
+			pd.Titles[i].Analysis = q[0]
+			titles[t.Rect] = q[1:]
+		}
+	}
+	links := map[snote.Rect][]*LinkAnalysis{}
+	for _, l := range old.Links {
+		links[l.Rect] = append(links[l.Rect], l.Analysis)
+	}
+	for i, l := range pd.Links {
+		if q := links[l.Rect]; len(q) > 0 {
+			pd.Links[i].Analysis = q[0]
+			links[l.Rect] = q[1:]
+		}
+	}
 }
 
 // archivedPageIDs returns the set of PAGEIDs already present in dir, derived from

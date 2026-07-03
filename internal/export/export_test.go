@@ -16,13 +16,15 @@ func TestRender(t *testing.T) {
 				Number:   1,
 				PageID:   "Pa",
 				SVG:      "F_TEST/Pa.svg",
-				Titles:   []retrieve.TitleView{{Level: 1, Text: "Chapter 1"}},
+				Titles:   []retrieve.TitleView{{Level: 1, Analysis: &archive.TitleAnalysis{Name: "Chapter 1"}}},
 				Keywords: []retrieve.KeywordView{{Text: "alpha"}},
-				Links:    []retrieve.LinkView{{Name: "biofizyka", TargetFileID: "F20260414171729084889FDefCgWZgV3D", Internal: true}},
-				Analysis: &archive.PageAnalysis{
-					Content: "first page text",
-					Links:   []archive.LinkAnalysis{{Name: "potencjał czynnościowy"}},
-				},
+				Links: []retrieve.LinkView{{
+					Name:         "biofizyka",
+					TargetFileID: "F20260414171729084889FDefCgWZgV3D",
+					Internal:     true,
+					Analysis:     &archive.LinkAnalysis{Name: "potencjał czynnościowy"},
+				}},
+				Analysis: &retrieve.PageAnalysisView{Content: "first page text"},
 			},
 			{
 				// No analysis: page.analysis.content must render blank, not error,
@@ -37,7 +39,7 @@ func TestRender(t *testing.T) {
 
 	const tmpl = "{% for p in pages %}* Page {{ p.number }} [{{ p.page_id }}]\n" +
 		"{{ p.analysis.content }}\n" +
-		"{% for t in p.titles %}- L{{ t.level }} {{ t.text }}\n{% endfor %}" +
+		"{% for t in p.titles %}- L{{ t.level }} {{ t.analysis.name }}\n{% endfor %}" +
 		"{% for k in p.keywords %}kw:{{ k.text }}\n{% endfor %}" +
 		"{% for link in p.links %}link:[[denote:{{ link.target_file_id|denote }}]] {{ link.name }} <{{ link.analysis.name }}>\n{% endfor %}" +
 		"{% endfor %}"
@@ -91,8 +93,10 @@ func TestDenoteID(t *testing.T) {
 	cases := map[string]string{
 		"F20260414171729084889FDefCgWZgV3D": "20260414T171729",
 		"F20260629154102100593mO9IZI46DNYe": "20260629T154102",
-		"not-an-id":                         "not-an-id", // no leading digits -> unchanged
-		"F12345":                            "F12345",    // fewer than 14 digits -> unchanged
+		"P20260414171729084889abcdef":       "20260414T171729", // PAGEIDs share the layout
+		"not-an-id":                         "not-an-id",       // no leading digits -> unchanged
+		"F12345":                            "F12345",          // fewer than 14 digits -> unchanged
+		"P12345":                            "P12345",
 	}
 	for in, want := range cases {
 		if got := denoteID(in); got != want {

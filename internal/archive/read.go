@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 )
 
 // The read side of the archive: layout-aware accessors that turn the on-disk
@@ -94,6 +95,26 @@ func (a *Archive) FindPage(pageID string) (string, error) {
 // every sibling artifact (svg, other pages, backgrounds) untouched.
 func (a *Archive) WritePage(fileID string, pd PageDoc) error {
 	return writeJSONIfChanged(filepath.Join(a.Root, fileID, pd.PageID+".json"), pd)
+}
+
+// ReadAnalysisMD returns the page's transcribed content from <fileID>/<pageID>.md.
+// A missing sidecar means the page was never analyzed and reads as ("", nil).
+func (a *Archive) ReadAnalysisMD(fileID, pageID string) (string, error) {
+	b, err := os.ReadFile(filepath.Join(a.Root, fileID, pageID+".md"))
+	if os.IsNotExist(err) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("read analysis %s: %w", pageID, err)
+	}
+	return string(b), nil
+}
+
+// WriteAnalysisMD writes the page's transcribed content (markdown) to the
+// <fileID>/<pageID>.md sidecar, normalized to exactly one trailing newline.
+func (a *Archive) WriteAnalysisMD(fileID, pageID, content string) error {
+	content = strings.TrimRight(content, "\n") + "\n"
+	return writeFileIfChanged(filepath.Join(a.Root, fileID, pageID+".md"), []byte(content))
 }
 
 func readJSON(path string, v any) error {

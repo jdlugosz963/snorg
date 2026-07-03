@@ -4,8 +4,67 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
+	"fmt"
 	"strings"
 )
+
+// BackgroundMode selects how Write treats a rendered page's template background:
+//
+//	extract  lift the inline base64 image into backgrounds/ and reference it (default; visible)
+//	inline   leave the inline base64 image in place (visible)
+//	blank    replace the image with a white rectangle
+//	remove   delete the image (transparent)
+//
+// None of these changes the analyze fingerprint, which is derived from path
+// geometry only.
+type BackgroundMode string
+
+const (
+	BackgroundExtract BackgroundMode = "extract"
+	BackgroundInline  BackgroundMode = "inline"
+	BackgroundBlank   BackgroundMode = "blank"
+	BackgroundRemove  BackgroundMode = "remove"
+)
+
+// applyBackground handles the non-extract background modes (extract is done inline
+// in Write via extractBackground). For blank/remove it replaces or deletes the
+// inline <image> element; inline (or any other value) leaves the SVG untouched. A
+// page with no inline background image is returned unchanged.
+func applyBackground(svg []byte, mode BackgroundMode) []byte {
+	if mode != BackgroundBlank && mode != BackgroundRemove {
+		return svg
+	}
+	s := string(svg)
+	start, end, ok := backgroundImageSpan(s)
+	if !ok {
+		return svg
+	}
+	var repl string
+	if mode == BackgroundBlank {
+		repl = fmt.Sprintf(`<rect x="0" y="0" width="%d" height="%d" fill="#ffffff" />`, navPageW, navPageH)
+	}
+	return []byte(s[:start] + repl + s[end:])
+}
+
+// backgroundImageSpan locates the inline data-URI background <image> element in s,
+// returning the byte span [start,end) of the whole element (including its closing
+// '>'). The base64 payload contains no '>', so the first '>' after the data URI is
+// the element's end. ok is false when there is no inline background image.
+func backgroundImageSpan(s string) (start, end int, ok bool) {
+	h := strings.Index(s, "data:image/")
+	if h < 0 {
+		return 0, 0, false
+	}
+	start = strings.LastIndex(s[:h], "<image")
+	if start < 0 {
+		return 0, 0, false
+	}
+	rel := strings.IndexByte(s[h:], '>')
+	if rel < 0 {
+		return 0, 0, false
+	}
+	return start, h + rel + 1, true
+}
 
 // backgroundsDir is the per-note subfolder holding content-addressed page
 // backgrounds (<root>/<FILE_ID>/backgrounds/<sha256>.<ext>). supernote-tool embeds
