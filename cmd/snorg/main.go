@@ -1,15 +1,15 @@
-// Command snorg is the supernote-organizer CLI. Global flags and the archive
-// path come first, then the command; the merged config (archive config.yaml,
-// overridden by -c files) is loaded once and shared by every command:
+// Command snorg is the supernote-organizer CLI. The archive path is a required
+// global flag (-a/--archive); the merged config (archive config.yaml, overridden
+// by -c files) is loaded once in the root Before hook and shared by every command:
 //
-//	snorg [-c config.yaml ...] [--no-archive-config] <archive-path> <command> [command flags] [args]
+//	snorg -a <archive-path> [-c config.yaml ...] [--no-archive-config] <command> [command flags] [args]
 //
-//	snorg <archive-path> ingest [-j N] <file-or-dir>
-//	snorg <archive-path> list
-//	snorg <archive-path> retrieve <FILE_ID>
-//	snorg <archive-path> query <filter> [arg]
-//	snorg <archive-path> analyze [--force] [PAGEID ...]
-//	snorg <archive-path> export <FILE_ID>
+//	snorg -a <archive-path> ingest [-j N] <file-or-dir>
+//	snorg -a <archive-path> list
+//	snorg -a <archive-path> retrieve <FILE_ID>
+//	snorg -a <archive-path> query <filter> [arg]
+//	snorg -a <archive-path> analyze [--force] [PAGEID ...]
+//	snorg -a <archive-path> export <FILE_ID>
 package main
 
 import (
@@ -41,13 +41,25 @@ func main() {
 	}
 }
 
-// app is the state shared by every command, built by the root dispatcher: the
+// app is the state shared by every command, built by the root Before hook: the
 // archive and the merged config, loaded once. Commands pick the config sections
 // they need and validate only those.
 type app struct {
-	path string // <archive-path> as given on the command line
+	path string // archive path from the -a/--archive flag
 	arch *archive.Archive
 	cfg  *config.Config
+}
+
+// archiveFlag is the required global flag naming the archive root. Being on the
+// root, it must precede the command (urfave enforces Required for every command
+// except --help/completion, which are exempt).
+func archiveFlag() *cli.StringFlag {
+	return &cli.StringFlag{
+		Name:     "archive",
+		Aliases:  []string{"a"},
+		Usage:    "archive root `PATH` (holds the FILE_ID sub-dirs and config.yaml)",
+		Required: true,
+	}
 }
 
 // archiveConfigName is the per-archive default config, loaded from the archive
@@ -85,12 +97,11 @@ func configPaths(archivePath string, cliPaths []string, noArchive bool) []string
 	return append(paths, cliPaths...)
 }
 
-// commands builds the subcommands, closed over the shared app state. Each
-// action is guarded against running before the root dispatcher populated the
-// app: urfave/cli dispatches a bare `snorg <command>` (no archive path) to the
-// command directly, bypassing the root action.
+// commands builds the subcommands, closed over the shared app state. The root
+// Before hook populates the app (config + archive) before any command action
+// runs, so the actions can rely on a.cfg being set.
 func commands(a *app) []*cli.Command {
-	cmds := []*cli.Command{
+	return []*cli.Command{
 		ingestCmd(a),
 		listCmd(a),
 		retrieveCmd(a),
@@ -98,52 +109,36 @@ func commands(a *app) []*cli.Command {
 		analyzeCmd(a),
 		exportCmd(a),
 	}
-	for _, c := range cmds {
-		action := c.Action
-		c.Action = func(ctx context.Context, cmd *cli.Command) error {
-			if a.cfg == nil {
-				return fmt.Errorf("the archive path comes first: snorg [-c config.yaml ...] <archive-path> %s ...", cmd.Name)
-			}
-			return action(ctx, cmd)
-		}
-	}
-	return cmds
 }
 
 const commandNames = "ingest, list, retrieve, query, analyze, export"
 
-// root parses the global flags and the archive path, loads the merged config
-// once into the app shared by every command, and dispatches to the command by
-// hand: urfave/cli's own subcommand matching consumes the first positional
-// argument as the command name, which here is the archive path. StopOnNthArg
-// keeps the command's own flags out of the root parse; they are handed to the
-// subcommand verbatim via Run. The commands are still registered on the root
-// so `--help` (root and per-command) and the built-in help command work.
+// root registers the global flags and subcommands and loads the merged config
+// once in its Before hook, which urfave/cli runs as part of the command chain
+// before the matched subcommand's action. Natural subcommand dispatch does the
+// rest: the archive path is a required global flag (-a), so the first positional
+// argument is the command name, as urfave expects.
 func root() *cli.Command {
 	a := &app{}
-	stopAfterArchive := 1
 	return &cli.Command{
-		Name:         "snorg",
-		Usage:        "supernote-organizer: ingest .note files into a plaintext archive",
-		UsageText:    "snorg [-c config.yaml ...] [--no-archive-config] <archive-path> <command> [command flags] [args]",
-		Flags:        []cli.Flag{configFlag(), noArchiveConfigFlag()},
-		Commands:     commands(a),
-		StopOnNthArg: &stopAfterArchive,
-		Action: func(ctx context.Context, cmd *cli.Command) error {
-			args := cmd.Args().Slice()
-			if len(args) < 2 {
-				return fmt.Errorf("usage: snorg [-c config.yaml ...] <archive-path> <command> [args]\n  commands: %s", commandNames)
-			}
-			sub := cmd.Command(args[1])
-			if sub == nil {
-				return fmt.Errorf("unknown command %q (want: %s)", args[1], commandNames)
-			}
-			cfg, err := config.Load(configPaths(args[0], cmd.StringSlice("config"), cmd.Bool("no-archive-config")))
+		Name:                  "snorg",
+		Usage:                 "supernote-organizer: ingest .note files into a plaintext archive",
+		UsageText:             "snorg -a <archive-path> [-c config.yaml ...] [--no-archive-config] <command> [command flags] [args]",
+		Flags:                 []cli.Flag{archiveFlag(), configFlag(), noArchiveConfigFlag()},
+		Commands:              commands(a),
+		EnableShellCompletion: true,
+		Before: func(ctx context.Context, cmd *cli.Command) (context.Context, error) {
+			archivePath := cmd.String("archive")
+			cfg, err := config.Load(configPaths(archivePath, cmd.StringSlice("config"), cmd.Bool("no-archive-config")))
 			if err != nil {
-				return err
+				return ctx, err
 			}
-			a.path, a.arch, a.cfg = args[0], archive.New(args[0]), cfg
-			return sub.Run(ctx, args[1:])
+			a.path, a.arch, a.cfg = archivePath, archive.New(archivePath), cfg
+			return ctx, nil
+		},
+		Action: func(_ context.Context, cmd *cli.Command) error {
+			// Reached only with -a given but no (or an unknown) command.
+			return fmt.Errorf("usage: snorg -a <archive-path> <command> [args]\n  commands: %s", commandNames)
 		},
 	}
 }
@@ -158,7 +153,7 @@ func ingestCmd(a *app) *cli.Command {
 		},
 		Action: func(_ context.Context, cmd *cli.Command) error {
 			if cmd.Args().Len() != 1 {
-				return fmt.Errorf("usage: snorg <archive-path> ingest [-j N] <file-or-dir>")
+				return fmt.Errorf("usage: snorg -a <archive-path> ingest [-j N] <file-or-dir>")
 			}
 			if err := a.cfg.ValidateIngest(); err != nil {
 				return err
@@ -217,7 +212,7 @@ func listCmd(a *app) *cli.Command {
 		Usage: "list archived FILE_IDs, one per line",
 		Action: func(_ context.Context, cmd *cli.Command) error {
 			if cmd.Args().Len() != 0 {
-				return fmt.Errorf("usage: snorg <archive-path> list")
+				return fmt.Errorf("usage: snorg -a <archive-path> list")
 			}
 			ids, err := retrieve.List(a.arch)
 			if err != nil {
@@ -238,7 +233,7 @@ func retrieveCmd(a *app) *cli.Command {
 		ArgsUsage: "<FILE_ID>",
 		Action: func(_ context.Context, cmd *cli.Command) error {
 			if cmd.Args().Len() != 1 {
-				return fmt.Errorf("usage: snorg <archive-path> retrieve <FILE_ID>")
+				return fmt.Errorf("usage: snorg -a <archive-path> retrieve <FILE_ID>")
 			}
 			view, err := retrieve.Get(a.arch, cmd.Args().Get(0))
 			if err != nil {
@@ -264,7 +259,7 @@ func queryCmd(a *app) *cli.Command {
 		Action: func(_ context.Context, cmd *cli.Command) error {
 			args := cmd.Args().Slice()
 			if len(args) < 1 {
-				return fmt.Errorf("usage: snorg <archive-path> query <filter> [arg]\n  filters: %s", queryFilters)
+				return fmt.Errorf("usage: snorg -a <archive-path> query <filter> [arg]\n  filters: %s", queryFilters)
 			}
 			pred, err := queryPredicate(args[0], args[1:])
 			if err != nil {
@@ -285,7 +280,7 @@ func queryCmd(a *app) *cli.Command {
 func queryPredicate(filter string, args []string) (query.Predicate, error) {
 	arity := func(n int, usage string) error {
 		if len(args) != n {
-			return fmt.Errorf("usage: snorg <archive-path> query %s", usage)
+			return fmt.Errorf("usage: snorg -a <archive-path> query %s", usage)
 		}
 		return nil
 	}
@@ -395,7 +390,7 @@ func exportCmd(a *app) *cli.Command {
 		ArgsUsage: "<FILE_ID>",
 		Action: func(_ context.Context, cmd *cli.Command) error {
 			if cmd.Args().Len() != 1 {
-				return fmt.Errorf("usage: snorg <archive-path> export <FILE_ID>")
+				return fmt.Errorf("usage: snorg -a <archive-path> export <FILE_ID>")
 			}
 			if a.cfg.Export.Template == "" {
 				return fmt.Errorf("export.template is required")

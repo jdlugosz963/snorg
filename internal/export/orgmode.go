@@ -1,6 +1,6 @@
 // Org-mode-exclusive template filters. They only matter to users exporting into
-// org-mode (see examples/orgmode.yaml); every other export format ignores them.
-// The org filter shells out to pandoc — an external PATH tool like
+// org-mode (see examples/emacs/orgmode.yaml); every other export format ignores
+// them. The org filter shells out to pandoc — an external PATH tool like
 // supernote-tool, not a go.mod dependency.
 package export
 
@@ -15,8 +15,8 @@ import (
 
 func init() {
 	for name, fn := range map[string]pongo2.FilterFunction{
-		"org":          filterOrg,
-		"nestheadings": filterNestHeadings,
+		"org":             filterOrg,
+		"nestorgheadings": filterNestOrgHeadings,
 	} {
 		if err := pongo2.RegisterFilter(name, fn); err != nil {
 			panic(err)
@@ -57,17 +57,17 @@ func markdownToOrg(md string) (string, error) {
 	return strings.TrimRight(out.String(), "\n"), nil
 }
 
-// filterNestHeadings demotes org headings by N levels: every line starting with
-// '*' gets N stars prepended, e.g. {{ content|org|nestheadings:2 }} turns "* H"
+// filterNestOrgHeadings demotes org headings by N levels: every line starting with
+// '*' gets N stars prepended, e.g. {{ content|org|nestorgheadings:2 }} turns "* H"
 // into "*** H" so the page's own headings nest under the template's. N defaults
 // to 1 when no parameter is given.
-func filterNestHeadings(in *pongo2.Value, param *pongo2.Value) (*pongo2.Value, *pongo2.Error) {
+func filterNestOrgHeadings(in *pongo2.Value, param *pongo2.Value) (*pongo2.Value, *pongo2.Error) {
 	n := 1
 	if param != nil && !param.IsNil() {
 		n = param.Integer()
 	}
 	if n < 1 {
-		return nil, &pongo2.Error{Sender: "filter:nestheadings",
+		return nil, &pongo2.Error{Sender: "filter:nestorgheadings",
 			OrigError: fmt.Errorf("level must be >= 1, got %d", n)}
 	}
 	stars := strings.Repeat("*", n)

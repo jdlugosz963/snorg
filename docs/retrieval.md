@@ -8,8 +8,8 @@ through the CLI process boundary and stable JSON below.
 ## Commands
 
 ```
-snorg list     <archive-path>            # one FILE_ID per line
-snorg retrieve <archive-path> <FILE_ID>  # one assembled note as indented JSON
+snorg -a <archive-path> list                # one FILE_ID per line
+snorg -a <archive-path> retrieve <FILE_ID>  # one assembled note as indented JSON
 ```
 
 `list` enumerates notes; `retrieve` returns a single `NoteView` — a denormalized
@@ -24,10 +24,13 @@ the on-disk file split.
   "pages": [{
     "number": 1, "page_id": "P...", "starred": false,
     "svg": "F.../P....svg",
-    "titles":   [{"rect": {"x":0,"y":0,"w":0,"h":0}, "level": 1, "text": ""}],
+    "titles":   [{"rect": {"x":0,"y":0,"w":0,"h":0}, "level": 1,
+                  "analysis": {"name": "Chapter 1"}}],
     "keywords": [{"text": "fizyka"}],
     "links":    [{"rect": {"x":0,"y":0,"w":0,"h":0}, "target_page_id": "P...",
-                  "target_file_id": "F...", "name": "linked-note", "internal": true}]
+                  "target_file_id": "F...", "name": "linked-note", "internal": true,
+                  "analysis": {"name": "see also"}}],
+    "analysis": {"content": "# Chapter 1\n\n...", "fields": {"description": "..."}}
   }]
 }
 ```
@@ -38,9 +41,13 @@ the on-disk file split.
 - `internal` is derived: `target_file_id == file_id` (link stays within this note).
 - link `name` is the target note's human name, decoded from the `.note`'s `LINKFILE`
   (base64 device path → basename without extension); `""` when unknown.
-- `text` on titles is empty until the future vision-LLM phase fills it. Fields may be
-  added freely over time — there is no backward-compatibility guarantee, so consumers
-  should ignore unknown fields rather than pin a shape.
+- everything `analyze` derives sits under `analysis` keys and is **absent until the
+  page is analyzed**: per-title/per-link `analysis.name` (region transcriptions) and
+  the page-level `analysis` — `content` (the Markdown transcription, assembled from
+  the `<PAGEID>.md` sidecar) and `fields` (custom configured outputs). The view
+  mirrors the on-disk structure, so export templates and external consumers see one
+  shape. Fields may be added freely over time — there is no backward-compatibility
+  guarantee, so consumers should ignore unknown fields rather than pin a shape.
 
 ## Consuming it (intended pattern)
 
@@ -53,18 +60,18 @@ stays read-only.
 Pseudocode (illustrative; an org-mode generator, but nothing here is org-specific):
 
 ```
-for id in `snorg list <archive>`:
-    view = json(`snorg retrieve <archive> id`)
+for id in `snorg -a <archive> list`:
+    view = json(`snorg -a <archive> retrieve id`)
     doc  = open_or_create(outdir/(id + ".ext"))
 
     root = find_managed_root(doc, key = id) or create_managed_root(doc, key = id,
                                                                    title = view.source or id)
     # Each managed section below is reset (regenerated) on every run.
     reset_section(root, "Pages",    render_pages(view))     # per page: heading + link(join(archive, p.svg))
-    reset_section(root, "Titles",   render_titles(view))    # rect/level now, text once LLM fills it
+    reset_section(root, "Titles",   render_titles(view))    # rect/level + analysis.name once analyzed
     reset_section(root, "Keywords", render_keywords(view))
     reset_section(root, "Links",    render_links(view))     # internal vs external (target_file_id/target_page_id)
-    # future: reset_section(root, "Analysis", render_analysis(view))
+    reset_section(root, "Content",  render_content(view))   # page.analysis.content / .fields
     write(doc)                                              # user headings outside managed sections untouched
 ```
 

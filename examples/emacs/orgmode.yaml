@@ -1,0 +1,30 @@
+export:
+  template: |
+    * Generated
+    {% for page in pages %}
+    {% if page.titles.0.analysis.name %}
+    ** {{ page.titles.0.analysis.name }}
+    {% else %}
+    ** Page {{ page.number }}
+    {% endif %}
+    :PROPERTIES:
+    :SNORG_PAGEID: {{ page.page_id }}
+    :SNORG_SVGP: {{ page.svg }}
+    {% if page.starred %}
+    :STARRED: t
+    {% endif %}
+    :END:
+    [[snorg:{{ page.svg }}][page {{ page.number }}]]
+
+    {% if page.analysis.content %}
+    {{ page.analysis.content|org|nestorgheadings:2 }}
+
+    {% endif %}
+    {% if page.links %}
+    *** Links
+    {% for link in page.links %}
+    - [[denote-snorg:{{ link.target_file_id|denote }}::{{ link.target_page_id }}][{{ link.analysis.name|default:link.name|cut:".note" }}]]
+    {% endfor %}
+
+    {% endif %}
+    {% endfor %}

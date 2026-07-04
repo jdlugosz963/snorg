@@ -10,33 +10,33 @@ import (
 	"github.com/jdlugosz963/snorg/internal/retrieve"
 )
 
-func TestNestHeadings(t *testing.T) {
+func TestNestOrgHeadings(t *testing.T) {
 	view := &retrieve.NoteView{
 		Pages: []retrieve.PageView{{
 			Number:   1,
 			Analysis: &retrieve.PageAnalysisView{Content: "* H1\ntext with * inside\n** H2\n- list item"},
 		}},
 	}
-	got, err := Render(view, "{{ pages.0.analysis.content|nestheadings:2 }}")
+	got, err := Render(view, "{{ pages.0.analysis.content|nestorgheadings:2 }}")
 	if err != nil {
 		t.Fatal(err)
 	}
 	want := "*** H1\ntext with * inside\n**** H2\n- list item"
 	if got != want {
-		t.Errorf("nestheadings = %q, want %q", got, want)
+		t.Errorf("nestorgheadings = %q, want %q", got, want)
 	}
 }
 
-func TestNestHeadingsDefaultsToOne(t *testing.T) {
+func TestNestOrgHeadingsDefaultsToOne(t *testing.T) {
 	view := &retrieve.NoteView{
 		Pages: []retrieve.PageView{{Number: 1, Analysis: &retrieve.PageAnalysisView{Content: "* H"}}},
 	}
-	got, err := Render(view, "{{ pages.0.analysis.content|nestheadings }}")
+	got, err := Render(view, "{{ pages.0.analysis.content|nestorgheadings }}")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got != "** H" {
-		t.Errorf("nestheadings = %q, want ** H", got)
+		t.Errorf("nestorgheadings = %q, want ** H", got)
 	}
 }
 
@@ -50,7 +50,7 @@ func TestOrgFilter(t *testing.T) {
 			Analysis: &retrieve.PageAnalysisView{Content: "# Heading\n\nsome **bold** text"},
 		}},
 	}
-	got, err := Render(view, "{{ pages.0.analysis.content|org|nestheadings:1 }}")
+	got, err := Render(view, "{{ pages.0.analysis.content|org|nestorgheadings:1 }}")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -63,22 +63,20 @@ func TestOrgFilter(t *testing.T) {
 	}
 }
 
-// TestOrgmodeExample renders the shipped examples/orgmode.yaml over a realistic
-// view: denote header, per-page headings (title transcription or Page N
-// fallback), the description field, demoted content headings and denote links.
+// TestOrgmodeExample renders the shipped examples/emacs/orgmode.yaml over a realistic
+// view: per-page headings (title transcription or Page N fallback), page properties,
+// the page SVG snorg link, demoted content headings and denote-snorg links. (The
+// denote header and tags are produced by snorg.el in elisp, not this template.)
 func TestOrgmodeExample(t *testing.T) {
 	if _, err := exec.LookPath("pandoc"); err != nil {
 		t.Skip("pandoc not found on PATH")
 	}
-	cfg, err := config.Load([]string{"../../examples/orgmode.yaml"})
+	cfg, err := config.Load([]string{"../../examples/emacs/orgmode.yaml"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if cfg.Export.Template == "" {
-		t.Fatal("examples/orgmode.yaml has no export.template")
-	}
-	if cfg.Analysis.Fields["description"].Prompt == "" {
-		t.Fatal("examples/orgmode.yaml has no description field prompt")
+		t.Fatal("examples/emacs/orgmode.yaml has no export.template")
 	}
 
 	view := &retrieve.NoteView{
@@ -86,12 +84,11 @@ func TestOrgmodeExample(t *testing.T) {
 		Source: "biofizyka.note",
 		Pages: []retrieve.PageView{
 			{
-				Number:   1,
-				PageID:   "P20260414171730000001aaaaaa",
-				Starred:  true,
-				SVG:      "F20260414171729084889FDefCgWZgV3D/P20260414171730000001aaaaaa.svg",
-				Titles:   []retrieve.TitleView{{Level: 1, Analysis: &archive.TitleAnalysis{Name: "Neurony"}}},
-				Keywords: []retrieve.KeywordView{{Text: "biofizyka"}},
+				Number:  1,
+				PageID:  "P20260414171730000001aaaaaa",
+				Starred: true,
+				SVG:     "F20260414171729084889FDefCgWZgV3D/P20260414171730000001aaaaaa.svg",
+				Titles:  []retrieve.TitleView{{Level: 1, Analysis: &archive.TitleAnalysis{Name: "Neurony"}}},
 				Links: []retrieve.LinkView{{
 					Name:         "komorki.note",
 					TargetFileID: "F20260629154102100593mO9IZI46DNYe",
@@ -100,7 +97,6 @@ func TestOrgmodeExample(t *testing.T) {
 				}},
 				Analysis: &retrieve.PageAnalysisView{
 					Content: "# Potencjał czynnościowy\n\nnotatki z wykładu",
-					Fields:  map[string]string{"description": "Notatki o potencjale czynnościowym neuronu."},
 				},
 			},
 			{
@@ -117,17 +113,13 @@ func TestOrgmodeExample(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, want := range []string{
-		"#+title:      biofizyka",
-		"#+identifier: 20260414T171729",
-		":biofizyka:",
-		"* Neurony",
+		"** Neurony",
 		":PAGE_ID: P20260414171730000001aaaaaa",
 		":STARRED: t",
-		"Notatki o potencjale czynnościowym neuronu.",
-		"[[file:F20260414171729084889FDefCgWZgV3D/P20260414171730000001aaaaaa.svg]]",
-		"** Potencjał czynnościowy", // markdown # demoted under the page heading
-		"- [[denote:20260629T154102][biologia komórki]]",
-		"* Page 2",
+		"[[snorg:F20260414171729084889FDefCgWZgV3D/P20260414171730000001aaaaaa.svg]]",
+		"*** Potencjał czynnościowy", // markdown # -> org * demoted 2 under the page heading
+		"- [[denote-snorg:20260629T154102::P20260629154103000001bbbbbb][biologia komórki]]",
+		"** Page 2",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("output missing %q\n--- got ---\n%s", want, got)

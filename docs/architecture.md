@@ -3,40 +3,64 @@
 ## CLI
 
 ```
-snorg ingest   [-j N] <file-or-dir> <archive-path>
-snorg list     <archive-path>
-snorg retrieve <archive-path> <FILE_ID>
-snorg query    <archive-path> <filter> [arg]
-snorg export   [-c config.yaml ...] <archive-path> <FILE_ID>
+snorg -a <archive-path> [-c config.yaml ...] [--no-archive-config] <command> [command flags] [args]
+
+snorg -a <archive-path> ingest [-j N] <file-or-dir>
+snorg -a <archive-path> list
+snorg -a <archive-path> retrieve <FILE_ID>
+snorg -a <archive-path> query <filter> [arg]
+snorg -a <archive-path> analyze [--force] [PAGEID ...]
+snorg -a <archive-path> export <FILE_ID>
 ```
-Archive path is a positional argument (never hardcoded). `ingest` takes a single
-`.note` or a directory (walked recursively for `*.note`) and ingests notes through
-a worker pool: `-j N` caps concurrent notes, default `runtime.NumCPU()` (work is
-CPU-bound supernote-tool rendering). A failed note never aborts the batch — all are
-attempted and failures summarized (non-zero exit). Re-ingest reconciles the
-note's directory in place (see Archive layout); it is the update path. `list`,
-`retrieve` and `query` are the read side — the platform-agnostic interface external
-tools build on (see [retrieval.md](retrieval.md)). `query` takes one filter per call
-(`keyword <regexp>` matched against `Keyword.Text`, or `starred`) and prints the
-PAGEID of each matching page, one per line.
+
+The archive path is a required global flag (`-a`/`--archive`, never hardcoded) and
+comes before the command, together with the global config flags: the root's `Before`
+hook loads the merged config once (see [config.md](config.md)) and hands it to the
+command, which picks and validates only the sections it uses. The CLI is built on
+`urfave/cli/v3`. `ingest` takes
+a single `.note` or a directory (walked recursively for `*.note`) and ingests
+notes through a worker pool: `-j N` caps concurrent notes, default
+`runtime.NumCPU()` (work is CPU-bound supernote-tool rendering); `-c` config
+controls the SVG pipeline (see below). A failed note never aborts the batch — all
+are attempted and failures summarized (non-zero exit). Re-ingest reconciles the
+note's directory in place (see Archive layout); it is the update path.
+
+`list`, `retrieve` and `query` are the read side — the platform-agnostic interface
+external tools build on (see [retrieval.md](retrieval.md)). `query` takes one
+filter per call — `all`, `note <FILE_ID>`, `unanalyzed`, `keyword <regexp>`
+(matched against `Keyword.Text`), `starred` — and prints the PAGEID of each
+matching page, one per line, ready to pipe into `analyze`.
+
+`analyze` takes PAGEIDs as arguments, or reads them one-per-line from stdin when
+none are given, and processes them sequentially (LLM rate limits; a failed page
+never aborts the batch). Unchanged pages are skipped without an LLM call (see
+[config.md](config.md), "Incremental analysis"), so the canonical batch run is:
+
+```sh
+snorg -a <archive> query all | snorg -c cfg.yaml -a <archive> analyze
+```
 
 ## Archive layout (plaintext contract)
 
 ```
 <archive>/<FILE_ID>/
     note.json          # file metadata + ordered page placement (id, number)
-    <PAGEID>.json      # per page: starred, titles(rect,level), keywords(text), links
+    <PAGEID>.json      # per page: starred, titles(rect,level,analysis), keywords(text),
+                       # links(...,analysis), analysis{source_hash,fields}
+    <PAGEID>.md        # per page: the analyze'd content transcription (Markdown)
     <PAGEID>.svg       # per page rendered vector (one <path>/command per line)
     backgrounds/
         <sha256>.png   # page backgrounds, content-addressed, deduped per note
 ```
-Stable filenames + indented JSON → clean VCS diffs. SVGs are reflowed so each
-`<path>` and each `d` command sits on its own line (`archive.formatSVG`), so a
-changed stroke touches only its own lines instead of one giant line. supernote-tool
-embeds the same template background inline in every page; `archive.extractBackground`
-lifts it into the note's `backgrounds/` subfolder and the SVG references it by
-descendant href (`backgrounds/<sha256>.png`), so the giant base64 line is gone and
-one PNG is stored per note instead of once per page. The href must stay a descendant
+Stable filenames + indented JSON → clean VCS diffs. The page transcription lives
+in the `<PAGEID>.md` sidecar — multiline Markdown diffs like prose, not like a
+JSON string. SVGs are reflowed so each `<path>` and each `d` command sits on its
+own line (`archive.formatSVG`), so a changed stroke touches only its own lines
+instead of one giant line. supernote-tool embeds the same template background
+inline in every page; `archive.extractBackground` lifts it into the note's
+`backgrounds/` subfolder and the SVG references it by descendant href
+(`backgrounds/<sha256>.png`), so the giant base64 line is gone and one PNG is
+stored per note instead of once per page. The href must stay a descendant
 path — librsvg-based viewers (Emacs, imv, rsvg) refuse to load resources from a
 parent directory, so a shared archive-root folder would render only in browsers;
 the per-note copy renders everywhere at the cost of duplicating templates across
@@ -48,50 +72,91 @@ scripts depend on.
 hyperlinks (`archive.injectLinks`): an invisible `<a>`-wrapped `<rect>` at the link's
 pixel rect, so the region navigates without altering the note's appearance. The href is
 **relative to the page SVG** — `<PAGEID>.svg` for a same-note jump, `../<FILE_ID>/<PAGEID>.svg`
-for another note — and is only emitted when the target page's SVG exists in the archive
-(a same-note target is always written this `Write`; a cross-note target must already be
-ingested, otherwise the link is skipped until a later re-ingest). Resolution is a small
-ordered pipeline (`archive.linkHref`) so other link kinds (e.g. web links) can be added
-later without touching callers; today only note-page targets resolve.
+for another note. A same-note jump resolves only to a page written in this `Write`;
+a cross-note jump is baked **unconditionally** to its deterministic archive-relative path,
+so it works regardless of ingest order — the href simply dangles until the target note is
+ingested. Resolution is a small ordered pipeline (`archive.linkHref`) so other link kinds
+(e.g. web links) can be added later without touching callers; today only note-page targets resolve.
+
+**Page navigation.** `archive.injectNav` additionally bakes two invisible
+half-page zones into each SVG: tapping the left half opens the previous page,
+the right half the next one (same-note relative hrefs; first/last page get only
+one zone). Nav anchors are emitted **before** the link overlays — SVG hit-testing
+picks the last element in document order on overlap, so handwriting links always
+win over navigation. Because each SVG embeds its neighbors, reordering pages
+rewrites the affected SVGs (inherent to the feature).
+
+**SVG pipeline stages.** The rewrites are configurable via `ingest.svg`
+(`archive.SVGPipeline`): `links`/`navigation`/`format` are booleans (default on);
+`background` is a mode — `extract` (default; lift the inline base64 into
+`backgrounds/`), `inline` (leave it), `blank` (replace with a white rect) or
+`remove` (delete the `<image>`); `colors` optionally remaps the renderer's four
+default pen-shade `fill=` values (`archive.recolor`, verbatim substitution, so the
+`fill="none"` overlays are untouched). Order in `Write`: background → recolor →
+navigation → links → format. With overlays off, `background: inline` and no
+`colors`, the renderer's SVG is stored byte-verbatim. None of these stages changes
+the analyze fingerprint (path geometry only). See [config.md](config.md).
 
 **Incremental update.** Re-ingest does not rebuild the directory (that would discard
 expensive per-page LLM analyses). Instead `archive.Write` reconciles: pages dropped
-from the note have all their `<PAGEID>.*` files pruned; `note.json` and per-page files
-are written only when their bytes change; any other `<PAGEID>.*` artifacts of pages that
-remain are left untouched.
+from the note have all their `<PAGEID>.*` files pruned (`.md` included); `note.json`
+and per-page files are written only when their bytes change; any other `<PAGEID>.*`
+artifacts of pages that remain are left untouched. A page's `analysis` (fields +
+source hash) is carried over, and per-title/per-link transcriptions are carried by
+**exact rect match** (`archive.carryRegionAnalyses`) — a moved region drops its
+transcription and is re-transcribed by the next `analyze` run.
 
 ## Packages
 
-- `cmd/snorg` — CLI entry + subcommand dispatch (stdlib, no framework).
+- `cmd/snorg` — CLI entry: one `urfave/cli/v3` command tree, thin actions over the
+  internal packages. The root action loads the merged
+  config once into an `app` shared by every command and dispatches by hand
+  (the archive path precedes the command name, which the library's own
+  subcommand matching cannot express).
 - `internal/snote` — device-agnostic domain model (`Note`/`Page`/`Title`/`Keyword`/`Link`)
   and the `Source` interface (the format seam).
 - `internal/snote/sntool` — `Source` impl shelling out to `supernote-tool`
   (`analyze` + `convert -t svg`). `footer.go` parses page association from footer keys.
   Replaceable by a native-Go parser without touching callers.
 - `internal/archive` — owns the on-disk layout; `doc.go` is the JSON serialization boundary
-  (`PageDoc.Analysis` carries derived AI output); `Write` reconciles a note's directory in place
-  (preserving each page's `analysis`) and bakes each page's links into the SVG as relative
-  `<a>` hyperlinks (`injectLinks`), `read.go` are the layout-aware accessors
-  (`List`/`ReadNote`/`ReadPage`/`ReadSVG`/`SVGRel`/`FindPage`) plus `WritePage`.
+  (per-title/per-link `analysis` nested on the items; page-level `analysis` holds
+  `source_hash` + `fields`); `Write` reconciles a note's directory in place and runs the
+  SVG pipeline (background mode → `recolor` → `injectNav` → `injectLinks` → `formatSVG`,
+  each configurable); `read.go` are the layout-aware accessors (`List`/`ReadNote`/`ReadPage`/
+  `ReadSVG`/`SVGRel`/`FindPage`) plus `WritePage` and the `<PAGEID>.md` sidecar pair
+  `ReadAnalysisMD`/`WriteAnalysisMD`.
 - `internal/retrieve` — platform-agnostic read contract: assembles `note.json` + each
-  `<PAGEID>.json` into one denormalized `NoteView` (the stable JSON consumers depend on).
+  `<PAGEID>.json` + `<PAGEID>.md` into one denormalized `NoteView` (the stable JSON
+  consumers depend on).
 - `internal/query` — read-only metadata filter: walks every note/page via the `archive`
-  accessors and returns the pages matching a `Predicate` (`Starred`, `Keyword(regexp)`).
+  accessors and returns the pages matching a `Predicate` (`All`, `Starred`, `Unanalyzed`,
+  `InNote(fileID)`, `Keyword(regexp)`).
 - `internal/config` — loads + deep-merges YAML config (provider creds, analysis prompts,
-  `export.template`); `Load` parses + defaults only — commands validate the section they use.
-  External dep: `yaml.v3`.
-- `internal/analyze` — vision-LLM analysis of one page (by PAGEID): rasterizes the page SVG
-  (`oksvg`/`rasterx`), crops title/link rects, transcribes them and the page via a `Transcriber`
-  (openai-go; endpoint/model/key from config), and writes the result into `<PAGEID>.json` under
-  `analysis`. External deps: `openai-go`, `oksvg`/`rasterx`.
-- `internal/export` — renders a `retrieve.NoteView` through one pongo2 template (`export` cmd):
-  view → JSON → `map[string]any` context, so templates bind to the `retrieve` json keys; output
-  to stdout. External dep: `pongo2/v6`.
+  `ingest.svg` toggles, `export.template`); `Load` parses + defaults only — commands
+  validate the section they use. External dep: `yaml.v3`.
+- `internal/analyze` — incremental vision-LLM analysis of one page (by PAGEID): fingerprints
+  the page by its path geometry (`pathHash`, `analysis.source_hash`) and skips unchanged
+  pages without even rasterizing; otherwise rasterizes the SVG (`oksvg`/`rasterx`),
+  transcribes the page (through the update prompt + previous `<PAGEID>.md` when one exists),
+  crops title/link rects, runs the custom fields, and writes `<PAGEID>.md` + `<PAGEID>.json`.
+  The geometry hash is invariant under recolor/background/overlays, so restyling never
+  re-triggers analysis. External deps: `openai-go`, `oksvg`/`rasterx`.
+- `internal/export` — renders a `retrieve.NoteView` through one pongo2 template (`export`
+  cmd): view → JSON → `map[string]any` context, so templates bind to the `retrieve` json
+  keys verbatim; output to stdout. Filters, one file per concern: `denote.go`
+  (FILE_ID/PAGEID → denote id), `orgmode.go` (org-mode-only: `org` via pandoc
+  shell-out, `nestorgheadings:N`), `markdown.go` (Markdown-only: `nestmdheadings:N`).
+  External dep: `pongo2/v6`; PATH tool: `pandoc` (only for the `org` filter).
 - `internal/ingest` — orchestrator: `Source.Read` → render SVGs → `Archive.Write`.
+- `examples/emacs/snorg.el` — Emacs org/denote consumer (outside the Go tree): drives the CLI
+  (`list`/`retrieve`/`export`) to import notes as denote org files, adds the `snorg:`
+  (page SVG) and `denote-snorg:` (page-jump) org links, and a dual-window review mode.
 
 ## Extension points
 
 New retrieval/export commands add cases in `cmd/snorg` and read via `archive`
-accessors, projecting into a `retrieve` view. Vision-LLM analysis enriches the `Doc`
+accessors, projecting into a `retrieve` view. Analysis enriches the `Doc`
 JSON schemas (and the views) with new fields (free to add — no backcompat). A native
-parser is a new `snote.Source` implementation.
+parser is a new `snote.Source` implementation. New link kinds extend
+`archive.linkHref`; new export filters register in their own file in
+`internal/export` (grouped by target format, like `orgmode.go`).

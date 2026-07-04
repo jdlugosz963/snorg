@@ -8,6 +8,30 @@ Working notes for SNORG. Sample: `note.note` (6 pages), device `N5`, renders 192
 - `convert -n N -t {png,svg,pdf,txt} <in> <out>` — **`-n` is 0-indexed**, `-a` = all pages.
 - Page renders at **1920×2560 px**; all `*RECT` values are in this pixel space.
 
+## SVG rendering & colors
+
+`convert -t svg` emits per page: one `<image>` (base64 PNG page template/background) +
+**exactly 4 `<path>`**, one per pen shade — each merges *all* strokes of that shade into
+one filled path (`fill=`, potrace-traced regions, not `stroke`). No `<g>`/ids/classes;
+titles/keywords/links are **not** distinct SVG elements (only `RECT` metadata). The sole
+color axis is thus the 4 pen shades, not semantic elements — title vs body separate only
+if drawn with different shades.
+
+- **Stored** in the `.note` as a discrete per-stroke color code (device-dependent, e.g.
+  RATTA_RLE `0x61`=black, `0x63`/`0x9d`=dark-gray, `0x64`/`0xc9`=gray, `0x65`=white, plus
+  `MARKER_*` variants); not anti-aliased, so the 4 rendered layers are clean.
+- **Default palette** (supernotelib `color.py`) → SVG `fill`: black `#000000`, dark-gray
+  `#9d9d9d`, gray `#c9c9c9`, white/eraser `#fefefe`. (X-series compat: dark-gray `#303030`,
+  gray `#505050`.)
+- **Set/change**: `convert -c black,darkgray,gray,white …` — 4 comma-separated colors in
+  that fixed order, each a CSS name or hex (parsed by the `colour` lib), e.g.
+  `-c '#1a1aff',red,green,white`. **SNORG renders without `-c`** (`internal/snote/sntool`)
+  and instead recolors *downstream* in the SVG pipeline (`archive.recolor`, driven by
+  `ingest.svg.colors`): it substitutes the 4 default `fill=` values verbatim. Doing it
+  in-app (not via `-c`) is deliberate — the analyze fingerprint is path geometry, which
+  ignores `fill`, so recolor never dirties an analysis (a `-c` re-render would still be
+  byte-identical here, but keeping the render seam `-c`-free avoids depending on that).
+
 ## Identifiers
 
 - **File id**: `__header__.FILE_ID` (e.g. `F20260629154102100593mO9IZI46DNYe`). Stable; links reference it via `LINKFILEID`.

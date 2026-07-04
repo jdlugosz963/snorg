@@ -48,27 +48,32 @@ func TestRootDispatch(t *testing.T) {
 	ctx := context.Background()
 	arch := t.TempDir()
 
-	// Too few positionals: usage error.
-	if err := root().Run(ctx, []string{"snorg", arch}); err == nil || !strings.Contains(err.Error(), "usage:") {
+	// Missing archive flag: urfave enforces the required global flag.
+	if err := root().Run(ctx, []string{"snorg", "list"}); err == nil || !strings.Contains(err.Error(), "archive") {
+		t.Errorf("missing -a: got %v, want required-flag error", err)
+	}
+
+	// Archive given but no command: root Action prints a usage error.
+	if err := root().Run(ctx, []string{"snorg", "-a", arch}); err == nil || !strings.Contains(err.Error(), "usage:") {
 		t.Errorf("missing command: got %v, want usage error", err)
 	}
 
-	// Unknown command name.
-	if err := root().Run(ctx, []string{"snorg", arch, "bogus"}); err == nil || !strings.Contains(err.Error(), `unknown command "bogus"`) {
-		t.Errorf("unknown command: got %v, want unknown-command error", err)
+	// Unknown command name falls through to the root Action's usage error.
+	if err := root().Run(ctx, []string{"snorg", "-a", arch, "bogus"}); err == nil || !strings.Contains(err.Error(), "usage:") {
+		t.Errorf("unknown command: got %v, want usage error", err)
 	}
 
 	// A real command runs against the shared archive (empty archive matches nothing).
-	if err := root().Run(ctx, []string{"snorg", arch, "query", "all"}); err != nil {
+	if err := root().Run(ctx, []string{"snorg", "-a", arch, "query", "all"}); err != nil {
 		t.Errorf("query all on empty archive: %v", err)
 	}
 
 	// The command's own flags must reach the command, not the root parser,
 	// and -c must be honored at the root (missing file = load error).
-	if err := root().Run(ctx, []string{"snorg", "-c", filepath.Join(arch, "absent.yaml"), arch, "query", "all"}); err == nil || !strings.Contains(err.Error(), "read config") {
+	if err := root().Run(ctx, []string{"snorg", "-c", filepath.Join(arch, "absent.yaml"), "-a", arch, "query", "all"}); err == nil || !strings.Contains(err.Error(), "read config") {
 		t.Errorf("-c with missing file: got %v, want read-config error", err)
 	}
-	err := root().Run(ctx, []string{"snorg", arch, "analyze", "--force", "PAGEID"})
+	err := root().Run(ctx, []string{"snorg", "-a", arch, "analyze", "--force", "PAGEID"})
 	if err == nil || strings.Contains(err.Error(), "--force") {
 		t.Errorf("analyze --force: got %v, want a non-flag-parse error (provider validation)", err)
 	}

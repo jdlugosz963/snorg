@@ -1,0 +1,66 @@
+# Example snorg config — annotated schema reference (full details: docs/config.md).
+# Global flags come before the command; later -c files win:
+#   snorg -c examples/config.yaml -a <archive> <command>
+# Each command reads only its own sections, so any section can live in its own
+# file (e.g. keep provider secrets in a separate, gitignored file):
+#   ingest -> ingest  |  analyze -> provider + analysis  |  export -> export
+
+# LLM provider for `analyze` (OpenAI-compatible endpoint).
+provider:
+  endpoint: https://openrouter.ai/api/v1     # base URL
+  api_key: ""                                # empty -> api_key_command, then $OPENAI_API_KEY
+  # api_key_command: "pass show openai/snorg"  # stdout is the key when api_key is empty
+  model: anthropic/claude-sonnet-4.6         # one model for every task
+
+# Vision-LLM analysis. Every prompt is optional — built-in defaults apply.
+analysis:
+  content:
+    # prompt: "..."          # whole-page vision prompt (default: Markdown -> <PAGEID>.md sidecar)
+    # update_prompt: "..."   # used instead when a prior transcription exists (steers a minimal diff)
+  # fields:                  # optional custom text outputs (text->text over the content, no image):
+  #   summary:               #   exposed to templates as analysis.fields.summary
+  #     prompt: "Summarize this note page in two sentences:"
+
+# SVG rewrites applied on ingest. links/navigation/format default true; background
+# defaults to extract. None affect the analyze fingerprint, so restyling never re-transcribes.
+ingest:
+  svg:
+    links: true          # bake note links as clickable overlays
+    navigation: true     # tap left/right half of a page -> previous/next
+    format: true         # diff-friendly multiline layout
+    background: extract  # extract | inline | blank | remove
+    # colors:            # remap the four default pen shades (CSS name or hex); unset shades keep defaults
+    #   black: "#1a1aff"
+
+# Single pongo2 (Jinja2-style) template over the `snorg retrieve` JSON — same keys,
+# same nesting (pages -> titles/keywords/links/analysis). Rendered with trim_blocks +
+# lstrip_blocks: keep {% %} tags on their own lines; never END an output line with one.
+# Filters beyond the pongo2 built-ins (docs/config.md): denote, org, nestorgheadings:N,
+# nestmdheadings:N (demote Markdown '#' headings by N).
+export:
+  template: |
+    # {{ source|cut:".note" }}
+    {% for page in pages %}
+    {% if page.starred %}
+    ## ⭐ Page {{ page.number }}
+    {% else %}
+    ## Page {{ page.number }}
+    {% endif %}
+    {% if page.keywords %}
+    {% for kw in page.keywords %} `{{ kw.text }}`{% endfor %}
+
+    {% endif %}
+    ![Page {{ page.number }}]({{ page.svg }})
+
+    {% if page.analysis.content %}
+    {{ page.analysis.content|nestmdheadings:2 }}
+
+    {% endif %}
+    {% if page.links %}
+    **Links**
+    {% for link in page.links %}
+    - {{ link.analysis.name|default:link.name|cut:".note" }}
+    {% endfor %}
+
+    {% endif %}
+    {% endfor %}
