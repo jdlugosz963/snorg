@@ -83,3 +83,15 @@ that open a page's SVG or jump between notes. See `examples/emacs/README.md`.
 See `docs/` for principles, architecture, the `.note` format, configuration and
 the read contract; `examples/config.yaml` for an annotated config with a Markdown
 export template.
+
+## Contributing
+
+Contributions are welcome — issues and pull requests both. Known limitations and
+open problems worth tackling:
+
+- **Only tested on the Supernote Manta.**
+- **Links only resolve between `.note` files.** Other link kinds (web URLs, links to
+  non-note files) are not handled yet.
+- **Analysis prompts need fine-tuning.** The vision-LLM prompts could interpret notes
+  more deeply — reconstructing tables, diagrams, etc. — and should emit Markdown that
+  survives the `pandoc` conversion to org (and other formats) cleanly.
