@@ -38,7 +38,12 @@ Config variables (all plain `defvar`s you may override):
   property), split into two windows: note on the left, page SVG on the right.
   The left buffer folds down to just the page under review; `M-n`/`M-p` cycle
   pages (refolding to follow the SVG) and `q` quits, restoring the prior folding.
-  The SVG is read from the heading's `:SNORG_SVGP:` property.
+  The SVG is read from the heading's `:SNORG_SVGP:` property. In the review
+  window `o` opens the current SVG in the system viewer (`xdg-open`), and — when
+  the archive is a git repo — `M-P`/`M-N` step a diff overlay of the current page
+  against progressively older/newer revisions (strokes added since the compared
+  revision are green, removed strokes red); `M-N` back to depth 0 restores the
+  plain SVG, and switching pages resets it.
 - `M-x snorg-reset-cache` — drop the per-session `retrieve` cache.
 
 ## Keybindings

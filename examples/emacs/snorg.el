@@ -22,7 +22,9 @@
 ;;
 ;; - `snorg-view' -- a dual-window review mode: the note buffer on the left,
 ;;   the current page SVG on the right; the left buffer folds to just the page
-;;   under review.  `M-n'/`M-p' cycle pages, `q' quits (restoring the folding).
+;;   under review.  `M-n'/`M-p' cycle pages, `o' opens the SVG in the system
+;;   viewer (xdg-open), `M-P'/`M-N' step a git diff overlay of the current page
+;;   against older/newer revisions, and `q' quits (restoring the folding).
 ;;   The page SVG is read from the heading's :SNORG_SVGP: property.
 ;;
 ;; - `snorg-command-map' -- an (unbound) prefix keymap gathering the interactive
@@ -37,6 +39,7 @@
 (require 'denote)
 (require 'json)
 (require 'subr-x)
+(require 'cl-lib)
 
 ;;;; Configuration
 
@@ -337,10 +340,30 @@ Open the denote note and move point to the heading whose :SNORG_PAGEID: matches.
   "Snapshot of the buffer's fold state saved on entering `snorg-view-mode'.
 Restored on quit so review folding does not clobber the user's outline.")
 
+(defvar-local snorg-view--svg nil
+  "Absolute path of the page SVG currently under review.")
+
+(defvar-local snorg-view--diff-depth 0
+  "How many git revisions back the diff overlay compares against.
+0 means the plain current SVG is shown, with no overlay.")
+
+(defvar-local snorg-view--revisions nil
+  "Cached commit hashes touching `snorg-view--svg', newest-first.
+Computed lazily and cleared when the reviewed page changes.")
+
+(defvar snorg-view-diff-added-color "#0a8f0a"
+  "Fill color for strokes added since the compared revision (green).")
+
+(defvar snorg-view-diff-removed-color "#d01010"
+  "Fill color for strokes removed since the compared revision (red).")
+
 (defvar snorg-view-mode-map
   (let ((map (make-sparse-keymap)))
     (define-key map (kbd "M-n") #'snorg-view-next)
     (define-key map (kbd "M-p") #'snorg-view-prev)
+    (define-key map (kbd "o")   #'snorg-view-open-external)
+    (define-key map (kbd "M-P") #'snorg-view-diff-older)
+    (define-key map (kbd "M-N") #'snorg-view-diff-newer)
     (define-key map (kbd "q")   #'snorg-view-quit)
     map)
   "Keymap for `snorg-view-mode'.")
@@ -381,9 +404,13 @@ Collapse every page to its heading, then reveal only the current one."
     (org-fold-show-subtree)))
 
 (defun snorg--show-page ()
-  "Display the SVG of the page at point in the side window."
+  "Display the SVG of the page at point in the side window.
+Reset the diff overlay state so page navigation drops back to the plain SVG."
   (snorg-view--focus)
   (let ((svg (snorg--page-svg-at-point)))
+    (setq snorg-view--svg svg
+          snorg-view--diff-depth 0
+          snorg-view--revisions nil)
     (cond
      ((not svg) (message "snorg: no SVG for this page"))
      ((not (file-exists-p svg)) (message "snorg: missing SVG %s" svg))
@@ -393,7 +420,9 @@ Collapse every page to its heading, then reveal only the current one."
 (defun snorg-view ()
   "Open a dual-window review for the page heading at point.
 The note stays on the left; the page SVG shows on the right.  Use
-`M-n'/`M-p' to move between pages and `q' to quit."
+`M-n'/`M-p' to move between pages, `o' to open the SVG in the system
+viewer, `M-P'/`M-N' to step a git diff overlay against older/newer
+revisions, and `q' to quit."
   (interactive)
   (unless (org-entry-get nil "SNORG_SVGP")
     (user-error "Point is not on a heading with a :SNORG_SVGP: property"))
@@ -429,6 +458,198 @@ The note stays on the left; the page SVG shows on the right.  Use
     (org-fold-show-all)
     (org-fold-core-regions snorg-view--saved-folds :override t :clean-markers t)
     (setq snorg-view--saved-folds nil)))
+
+;;;; Open externally
+
+(defun snorg-view-open-external ()
+  "Open the SVG under review in the system viewer via `xdg-open'.
+Runs asynchronously so Emacs is not blocked."
+  (interactive)
+  (unless (and snorg-view--svg (file-exists-p snorg-view--svg))
+    (user-error "snorg: no SVG to open"))
+  (if (fboundp 'browse-url-xdg-open)
+      (browse-url-xdg-open snorg-view--svg)
+    (start-process "snorg-xdg-open" nil "xdg-open" snorg-view--svg)))
+
+;;;; Version diff overlay
+
+(defun snorg-view--git (file &rest args)
+  "Run git with ARGS in FILE's directory; return stdout, or nil on failure."
+  (let ((default-directory (file-name-directory file)))
+    (with-temp-buffer
+      (when (eq 0 (apply #'call-process "git" nil t nil args))
+        (buffer-string)))))
+
+(defun snorg-view--git-tracked-p (file)
+  "Return non-nil when FILE is tracked in a git repository."
+  (and (snorg-view--git file "ls-files" "--error-unmatch" "--"
+                        (file-name-nondirectory file))
+       t))
+
+(defun snorg-view--revisions (file)
+  "Return commit hashes touching FILE, newest-first, memoized per page."
+  (or snorg-view--revisions
+      (setq snorg-view--revisions
+            (let ((out (snorg-view--git file "log" "--pretty=%h" "--"
+                                        (file-name-nondirectory file))))
+              (and out (split-string out "\n" t))))))
+
+(defun snorg-view--rev-label (file rev)
+  "Return a one-line `hash date subject' label for REV of FILE."
+  (string-trim
+   (or (snorg-view--git file "show" "-s" "--date=short"
+                        "--format=%h %ad %s" rev)
+       rev)))
+
+(defun snorg-view--svg-at-rev (file rev)
+  "Return the contents of FILE at git revision REV, or nil."
+  (snorg-view--git file "show"
+                   (concat rev ":./" (file-name-nondirectory file))))
+
+(defun snorg-view--path-data (svg)
+  "Return the normalized `d' string of every <path> in SVG.
+Element boundaries are found with plain `search-forward' rather than a
+newline-spanning regexp: `\\(?:.\\|\\n\\)*?' recurses in Emacs's regexp
+engine and overflows its stack on large SVGs (a page is one 300KB+ path).
+The `d' data has no quotes, so `[^\"]*' (which matches newlines) captures
+the whole reflowed attribute cheaply."
+  (let ((data nil))
+    (with-temp-buffer
+      (insert svg)
+      (goto-char (point-min))
+      (let ((case-fold-search nil))
+        (while (search-forward "<path" nil t)
+          (let ((beg (match-beginning 0))
+                (end (search-forward "/>" nil t)))
+            (when end
+              (let ((elem (buffer-substring-no-properties beg end)))
+                (when (string-match "\\bd=\"\\([^\"]*\\)\"" elem)
+                  (push (replace-regexp-in-string
+                         "[ \t\n]+" " " (string-trim (match-string 1 elem)))
+                        data))))))))
+    (nreverse data)))
+
+(defun snorg-view--split-strokes (d)
+  "Split a normalized path `d' string into per-stroke subpaths.
+Supernote renders a whole page as one aggregate <path> per pen shade whose
+`d' concatenates every stroke as a subpath, so the stroke — a run from one
+moveto (M/m) to the next — is the diff unit, not the <path> element."
+  (let ((strokes nil) (cur nil))
+    (dolist (tok (split-string d " " t))
+      (when (and cur (or (string= tok "M") (string= tok "m")))
+        (push (string-join (nreverse cur) " ") strokes)
+        (setq cur nil))
+      (push tok cur))
+    (when cur (push (string-join (nreverse cur) " ") strokes))
+    (nreverse strokes)))
+
+(defun snorg-view--strokes (svg)
+  "Return every stroke (subpath) in SVG as a list of normalized `d' strings.
+This is the stroke identity: immune to `formatSVG' indentation and to
+fill/background restyling (which never touch `d')."
+  (let ((out nil))
+    (dolist (d (snorg-view--path-data svg))
+      (dolist (s (snorg-view--split-strokes d))
+        (push s out)))
+    (nreverse out)))
+
+(defun snorg-view--stroke-set (strokes)
+  "Return a hash table with each string in STROKES as a key."
+  (let ((h (make-hash-table :test 'equal)))
+    (dolist (s strokes) (puthash s t h))
+    h))
+
+(defun snorg-view--stroke-path (d color &optional opacity)
+  "Return a filled <path> element drawing stroke geometry D in COLOR."
+  (format "<path d=\"%s\" fill=\"%s\"%s />"
+          d color
+          (if opacity (format " fill-opacity=\"%s\"" opacity) "")))
+
+(defun snorg-view--build-overlay (file rev)
+  "Return an overlay SVG string comparing FILE (working tree) against REV.
+Strokes present only in the current version are drawn green (added), strokes
+present only in REV are drawn red (removed) and appended before </svg>;
+unchanged strokes come through from the current SVG unaltered."
+  (let* ((cur (with-temp-buffer
+                (insert-file-contents file) (buffer-string)))
+         (old (or (snorg-view--svg-at-rev file rev) ""))
+         (cur-strokes (snorg-view--strokes cur))
+         (old-strokes (snorg-view--strokes old))
+         (cur-set (snorg-view--stroke-set cur-strokes))
+         (old-set (snorg-view--stroke-set old-strokes))
+         (added (cl-remove-if (lambda (s) (gethash s old-set)) cur-strokes))
+         (removed (cl-remove-if (lambda (s) (gethash s cur-set)) old-strokes))
+         (extra (concat
+                 "\n"
+                 (mapconcat
+                  (lambda (s)
+                    (snorg-view--stroke-path
+                     s snorg-view-diff-removed-color "0.7"))
+                  removed "\n")
+                 "\n"
+                 (mapconcat
+                  (lambda (s)
+                    (snorg-view--stroke-path s snorg-view-diff-added-color))
+                  added "\n")
+                 "\n")))
+    (if (string-match "</svg>" cur)
+        (replace-match (concat extra "</svg>") t t cur)
+      (concat cur extra))))
+
+(defun snorg-view--display-overlay (svg label)
+  "Show overlay SVG string in the side window, titled LABEL."
+  (let ((buf (get-buffer-create "*snorg-diff*")))
+    (with-current-buffer buf
+      (let ((inhibit-read-only t))
+        (fundamental-mode)
+        (erase-buffer)
+        (insert svg)
+        (image-mode))
+      (setq header-line-format label))
+    (set-window-buffer snorg-view--window buf)))
+
+(defun snorg-view--restore-svg ()
+  "Put the plain page SVG file back in the side window."
+  (when (and snorg-view--svg (file-exists-p snorg-view--svg))
+    (set-window-buffer snorg-view--window
+                       (find-file-noselect snorg-view--svg))))
+
+(defun snorg-view--refresh-diff ()
+  "Render the overlay for the current `snorg-view--diff-depth' (0 = plain)."
+  (if (<= snorg-view--diff-depth 0)
+      (snorg-view--restore-svg)
+    (let* ((file snorg-view--svg)
+           (revs (snorg-view--revisions file))
+           (rev (nth snorg-view--diff-depth revs)))
+      (snorg-view--display-overlay
+       (snorg-view--build-overlay file rev)
+       (format " diff %d/%d  %s"
+               snorg-view--diff-depth (1- (length revs))
+               (snorg-view--rev-label file rev))))))
+
+(defun snorg-view-diff-older ()
+  "Compare the current SVG against an older git revision (deeper each call)."
+  (interactive)
+  (unless (and snorg-view--svg (file-exists-p snorg-view--svg))
+    (user-error "snorg: no SVG to diff"))
+  (if (not (snorg-view--git-tracked-p snorg-view--svg))
+      (message "snorg: %s is not under version control"
+               (file-name-nondirectory snorg-view--svg))
+    (let ((revs (snorg-view--revisions snorg-view--svg)))
+      (if (< (length revs) 2)
+          (message "snorg: no earlier version to compare")
+        (if (>= snorg-view--diff-depth (1- (length revs)))
+            (message "snorg: already at the oldest version")
+          (setq snorg-view--diff-depth (1+ snorg-view--diff-depth))
+          (snorg-view--refresh-diff))))))
+
+(defun snorg-view-diff-newer ()
+  "Step the diff comparison back toward the current version."
+  (interactive)
+  (if (<= snorg-view--diff-depth 0)
+      (message "snorg: already at the current version")
+    (setq snorg-view--diff-depth (1- snorg-view--diff-depth))
+    (snorg-view--refresh-diff)))
 
 ;;;; Command keymap
 
