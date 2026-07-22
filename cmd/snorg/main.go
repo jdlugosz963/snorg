@@ -6,10 +6,14 @@
 //
 //	snorg -a <archive-path> ingest [-j N] <file-or-dir>
 //	snorg -a <archive-path> list
-//	snorg -a <archive-path> retrieve <FILE_ID>
 //	snorg -a <archive-path> query <filter> [arg]
+//	snorg -a <archive-path> retrieve [PAGEID ...]
 //	snorg -a <archive-path> analyze [--force] [PAGEID ...]
-//	snorg -a <archive-path> export <FILE_ID>
+//	snorg -a <archive-path> export [PAGEID ...]
+//
+// retrieve, analyze and export take PAGEIDs as arguments or stdin lines, so
+// query pipes into any of them. query itself also reads PAGEIDs from stdin when
+// they are piped in, restricting its filter to that set (query A | query B == A∩B).
 package main
 
 import (
@@ -21,6 +25,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/urfave/cli/v3"
 
@@ -229,17 +234,18 @@ func listCmd(a *app) *cli.Command {
 func retrieveCmd(a *app) *cli.Command {
 	return &cli.Command{
 		Name:      "retrieve",
-		Usage:     "print the assembled note as JSON (the read interface)",
-		ArgsUsage: "<FILE_ID>",
+		Usage:     "print the assembled pages as a JSON array of notes (no PAGEIDs = read them from stdin)",
+		ArgsUsage: "[PAGEID ...]",
 		Action: func(_ context.Context, cmd *cli.Command) error {
-			if cmd.Args().Len() != 1 {
-				return fmt.Errorf("usage: snorg -a <archive-path> retrieve <FILE_ID>")
-			}
-			view, err := retrieve.Get(a.arch, cmd.Args().Get(0))
+			pageIDs, err := pageIDArgs(cmd)
 			if err != nil {
 				return err
 			}
-			b, err := json.MarshalIndent(view, "", "  ")
+			views, err := retrieve.Get(a.arch, pageIDs)
+			if err != nil {
+				return err
+			}
+			b, err := json.MarshalIndent(views, "", "  ")
 			if err != nil {
 				return err
 			}
@@ -249,12 +255,28 @@ func retrieveCmd(a *app) *cli.Command {
 	}
 }
 
-const queryFilters = "all, note <FILE_ID>, unanalyzed, keyword <regexp>, starred"
+// pageIDArgs returns the command's PAGEIDs: the positional arguments, or the
+// stdin lines (piped from query) when there are none. Empty is an error.
+func pageIDArgs(cmd *cli.Command) ([]string, error) {
+	pageIDs := cmd.Args().Slice()
+	if len(pageIDs) == 0 {
+		var err error
+		if pageIDs, err = readLines(os.Stdin); err != nil {
+			return nil, err
+		}
+		if len(pageIDs) == 0 {
+			return nil, fmt.Errorf("no PAGEIDs given (arguments or stdin lines)")
+		}
+	}
+	return pageIDs, nil
+}
+
+const queryFilters = "all, note <FILE_ID>, unanalyzed, keyword <regexp>, starred, date <spec>"
 
 func queryCmd(a *app) *cli.Command {
 	return &cli.Command{
 		Name:      "query",
-		Usage:     "print PAGEIDs of matching pages, one per line (pipe into analyze)",
+		Usage:     "print PAGEIDs of matching pages, one per line (pipe into retrieve/analyze/export)",
 		ArgsUsage: "<filter> [arg]   (filters: " + queryFilters + ")",
 		Action: func(_ context.Context, cmd *cli.Command) error {
 			args := cmd.Args().Slice()
@@ -264,6 +286,15 @@ func queryCmd(a *app) *cli.Command {
 			pred, err := queryPredicate(args[0], args[1:])
 			if err != nil {
 				return err
+			}
+			// Piped PAGEIDs (query A | query B) restrict the filter to that set,
+			// so filters intersect. A terminal stdin is left alone (no blocking).
+			if stdinPiped() {
+				ids, err := readLines(os.Stdin)
+				if err != nil {
+					return err
+				}
+				pred = query.And(query.InSet(ids), pred)
 			}
 			matches, err := query.Pages(a.arch, pred)
 			if err != nil {
@@ -305,9 +336,65 @@ func queryPredicate(filter string, args []string) (query.Predicate, error) {
 			return nil, fmt.Errorf("invalid keyword regexp: %w", err)
 		}
 		return query.Keyword(re), nil
+	case "date":
+		if err := arity(1, "date <spec>   (today|yesterday|YYYY-MM-DD|FROM..TO, open ends ok)"); err != nil {
+			return nil, err
+		}
+		from, to, err := parseDateSpec(args[0])
+		if err != nil {
+			return nil, err
+		}
+		return query.Date(from, to), nil
 	default:
 		return nil, fmt.Errorf("unknown filter: %q (want: %s)", filter, queryFilters)
 	}
+}
+
+// parseDateSpec turns a date filter argument into an inclusive [from, to] range
+// formatted "YYYYMMDD" (an empty bound is open). Accepts "today"/"yesterday", a
+// single "YYYY-MM-DD" day, and "FROM..TO" ranges with either end omitted.
+func parseDateSpec(spec string) (from, to string, err error) {
+	day := func(s string) (string, error) {
+		t, err := time.Parse("2006-01-02", s)
+		if err != nil {
+			return "", fmt.Errorf("invalid date %q (want YYYY-MM-DD): %w", s, err)
+		}
+		return t.Format("20060102"), nil
+	}
+	switch spec {
+	case "today":
+		d := time.Now().Format("20060102")
+		return d, d, nil
+	case "yesterday":
+		d := time.Now().AddDate(0, 0, -1).Format("20060102")
+		return d, d, nil
+	}
+	lo, hi, isRange := strings.Cut(spec, "..")
+	if !isRange {
+		d, err := day(spec)
+		return d, d, err
+	}
+	if lo != "" {
+		if from, err = day(lo); err != nil {
+			return "", "", err
+		}
+	}
+	if hi != "" {
+		if to, err = day(hi); err != nil {
+			return "", "", err
+		}
+	}
+	if from == "" && to == "" {
+		return "", "", fmt.Errorf("empty date range %q", spec)
+	}
+	return from, to, nil
+}
+
+// stdinPiped reports whether stdin is a pipe or redirect (not a terminal), i.e.
+// PAGEIDs are being piped into query. Reading a terminal stdin would block.
+func stdinPiped() bool {
+	fi, err := os.Stdin.Stat()
+	return err == nil && fi.Mode()&os.ModeCharDevice == 0
 }
 
 func analyzeCmd(a *app) *cli.Command {
@@ -326,15 +413,9 @@ func analyzeCmd(a *app) *cli.Command {
 			if err := cfg.ValidateProvider(); err != nil {
 				return err
 			}
-			pageIDs := cmd.Args().Slice()
-			if len(pageIDs) == 0 {
-				var err error
-				if pageIDs, err = readLines(os.Stdin); err != nil {
-					return err
-				}
-				if len(pageIDs) == 0 {
-					return fmt.Errorf("no PAGEIDs given (arguments or stdin lines)")
-				}
+			pageIDs, err := pageIDArgs(cmd)
+			if err != nil {
+				return err
 			}
 
 			tr, err := analyze.NewOpenAI(cfg.Provider.Endpoint, cfg.Provider.APIKey, cfg.Provider.Model)
@@ -386,20 +467,21 @@ func readLines(r *os.File) ([]string, error) {
 func exportCmd(a *app) *cli.Command {
 	return &cli.Command{
 		Name:      "export",
-		Usage:     "render the retrieved note through the config's pongo2 template to stdout",
-		ArgsUsage: "<FILE_ID>",
+		Usage:     "render the retrieved pages through the config's pongo2 template (no PAGEIDs = read them from stdin)",
+		ArgsUsage: "[PAGEID ...]",
 		Action: func(_ context.Context, cmd *cli.Command) error {
-			if cmd.Args().Len() != 1 {
-				return fmt.Errorf("usage: snorg -a <archive-path> export <FILE_ID>")
-			}
 			if a.cfg.Export.Template == "" {
 				return fmt.Errorf("export.template is required")
 			}
-			view, err := retrieve.Get(a.arch, cmd.Args().Get(0))
+			pageIDs, err := pageIDArgs(cmd)
 			if err != nil {
 				return err
 			}
-			out, err := export.Render(view, a.cfg.Export.Template)
+			views, err := retrieve.Get(a.arch, pageIDs)
+			if err != nil {
+				return err
+			}
+			out, err := export.Render(views, a.cfg.Export.Template)
 			if err != nil {
 				return err
 			}

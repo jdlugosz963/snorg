@@ -1,7 +1,8 @@
 export:
   template: |
     * Generated
-    {% for page in pages %}
+    {% for note in notes %}
+    {% for page in note.pages %}
     {% if page.titles.0.analysis.name %}
     ** {{ page.titles.0.analysis.name }}
     {% else %}
@@ -27,4 +28,5 @@ export:
     {% endfor %}
 
     {% endif %}
+    {% endfor %}
     {% endfor %}

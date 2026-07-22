@@ -1,13 +1,15 @@
 // Package retrieve is the platform-agnostic read contract over an archive: it
-// assembles the per-note storage files (note.json + each <PAGEID>.json) into a
-// single denormalized NoteView that any external tool can consume to build a
-// human-readable form (e.g. an org-mode generator). It is deliberately ignorant
-// of any consumer; the view types are the stable JSON contract, decoupled from
-// the on-disk Doc types.
+// assembles the per-note storage files (note.json + each <PAGEID>.json) into
+// denormalized NoteViews that any external tool can consume to build a
+// human-readable form (e.g. an org-mode generator). Pages are addressed by
+// PAGEID (typically piped from query) and come back grouped per owning note.
+// It is deliberately ignorant of any consumer; the view types are the stable
+// JSON contract, decoupled from the on-disk Doc types.
 package retrieve
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/jdlugosz963/snorg/internal/archive"
@@ -73,37 +75,75 @@ func List(a *archive.Archive) ([]string, error) {
 	return a.List()
 }
 
-// Get assembles the NoteView for fileID, preserving note.json page order.
-func Get(a *archive.Archive, fileID string) (*NoteView, error) {
-	nd, err := a.ReadNote(fileID)
+// Get assembles NoteViews for the given PAGEIDs (deduplicated), grouped per
+// owning note in archive List order; each view carries full note metadata but
+// only the requested pages, in note.json placement order. A PAGEID owned by no
+// note is an error.
+func Get(a *archive.Archive, pageIDs []string) ([]*NoteView, error) {
+	pending := make(map[string]bool, len(pageIDs))
+	for _, id := range pageIDs {
+		pending[id] = true
+	}
+	ids, err := a.List()
 	if err != nil {
 		return nil, err
 	}
-	view := &NoteView{
-		FileID:    nd.FileID,
-		Signature: nd.Signature,
-		Device:    nd.Device,
-		Source:    nd.Source,
-		Pages:     make([]PageView, 0, len(nd.Pages)),
-	}
-	for _, ref := range nd.Pages {
-		pd, err := a.ReadPage(fileID, ref.ID)
+	var views []*NoteView
+	for _, fileID := range ids {
+		nd, err := a.ReadNote(fileID)
 		if err != nil {
-			return nil, fmt.Errorf("page %s: %w", ref.ID, err)
+			return nil, fmt.Errorf("note %s: %w", fileID, err)
 		}
-		var analysis *PageAnalysisView
-		if pd.Analysis != nil {
-			content, err := a.ReadAnalysisMD(fileID, ref.ID)
-			if err != nil {
-				return nil, fmt.Errorf("page %s: %w", ref.ID, err)
+		var view *NoteView
+		for _, ref := range nd.Pages {
+			if !pending[ref.ID] {
+				continue
 			}
-			// The sidecar ends in a newline (file hygiene); the view carries the
-			// content itself so templates control the surrounding whitespace.
-			analysis = &PageAnalysisView{Content: strings.TrimRight(content, "\n"), Fields: pd.Analysis.Fields}
+			delete(pending, ref.ID)
+			pv, err := getPage(a, fileID, ref)
+			if err != nil {
+				return nil, err
+			}
+			if view == nil {
+				view = &NoteView{
+					FileID:    nd.FileID,
+					Signature: nd.Signature,
+					Device:    nd.Device,
+					Source:    nd.Source,
+				}
+				views = append(views, view)
+			}
+			view.Pages = append(view.Pages, pv)
 		}
-		view.Pages = append(view.Pages, pageView(nd.FileID, ref, pd, a.SVGRel(fileID, ref.ID), analysis))
 	}
-	return view, nil
+	if len(pending) > 0 {
+		missing := make([]string, 0, len(pending))
+		for id := range pending {
+			missing = append(missing, id)
+		}
+		sort.Strings(missing)
+		return nil, fmt.Errorf("page(s) not found in archive: %s", strings.Join(missing, ", "))
+	}
+	return views, nil
+}
+
+// getPage assembles one PageView, joining <PAGEID>.json with the .md sidecar.
+func getPage(a *archive.Archive, fileID string, ref archive.NotePageRef) (PageView, error) {
+	pd, err := a.ReadPage(fileID, ref.ID)
+	if err != nil {
+		return PageView{}, fmt.Errorf("page %s: %w", ref.ID, err)
+	}
+	var analysis *PageAnalysisView
+	if pd.Analysis != nil {
+		content, err := a.ReadAnalysisMD(fileID, ref.ID)
+		if err != nil {
+			return PageView{}, fmt.Errorf("page %s: %w", ref.ID, err)
+		}
+		// The sidecar ends in a newline (file hygiene); the view carries the
+		// content itself so templates control the surrounding whitespace.
+		analysis = &PageAnalysisView{Content: strings.TrimRight(content, "\n"), Fields: pd.Analysis.Fields}
+	}
+	return pageView(fileID, ref, pd, a.SVGRel(fileID, ref.ID), analysis), nil
 }
 
 func pageView(fileID string, ref archive.NotePageRef, pd archive.PageDoc, svg string, analysis *PageAnalysisView) PageView {

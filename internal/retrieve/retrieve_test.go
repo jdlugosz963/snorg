@@ -2,6 +2,7 @@ package retrieve_test
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/jdlugosz963/snorg/internal/archive"
@@ -41,16 +42,21 @@ func TestGetAssemblesOrderedView(t *testing.T) {
 	}
 	writeNote(t, a, n, map[string]string{"Pa": "<svg>a</svg>", "Pb": "<svg>b</svg>"})
 
-	view, err := retrieve.Get(a, "F_TEST")
+	// Argument order is irrelevant: pages come back in placement order.
+	views, err := retrieve.Get(a, []string{"Pb", "Pa"})
 	if err != nil {
 		t.Fatal(err)
 	}
+	if len(views) != 1 {
+		t.Fatalf("views = %d want 1", len(views))
+	}
+	view := views[0]
 
 	if view.FileID != "F_TEST" || view.Source != "note.note" {
 		t.Errorf("note metadata = %+v", view)
 	}
 	if len(view.Pages) != 2 || view.Pages[0].PageID != "Pa" || view.Pages[1].PageID != "Pb" {
-		t.Fatalf("pages not in order: %+v", view.Pages)
+		t.Fatalf("pages not in placement order: %+v", view.Pages)
 	}
 
 	p := view.Pages[0]
@@ -74,6 +80,46 @@ func TestGetAssemblesOrderedView(t *testing.T) {
 	}
 	if p.Links[1].Name != "other-note" {
 		t.Errorf("link name = %q want other-note", p.Links[1].Name)
+	}
+}
+
+// TestGetGroupsByNote: PAGEIDs spanning notes come back as one NoteView per
+// owning note (archive List order), holding only the requested pages;
+// duplicates are deduplicated.
+func TestGetGroupsByNote(t *testing.T) {
+	root := t.TempDir()
+	a := archive.New(root)
+	writeNote(t, a, &snote.Note{FileID: "F_B", Source: "b.note", Pages: []snote.Page{
+		{ID: "Pb1", Number: 1}, {ID: "Pb2", Number: 2},
+	}}, map[string]string{"Pb1": "<svg/>", "Pb2": "<svg/>"})
+	writeNote(t, a, &snote.Note{FileID: "F_A", Source: "a.note", Pages: []snote.Page{
+		{ID: "Pa1", Number: 1},
+	}}, map[string]string{"Pa1": "<svg/>"})
+
+	views, err := retrieve.Get(a, []string{"Pb2", "Pa1", "Pb2"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(views) != 2 || views[0].FileID != "F_A" || views[1].FileID != "F_B" {
+		t.Fatalf("views = %+v want F_A then F_B", views)
+	}
+	if len(views[0].Pages) != 1 || views[0].Pages[0].PageID != "Pa1" {
+		t.Errorf("F_A pages = %+v", views[0].Pages)
+	}
+	if len(views[1].Pages) != 1 || views[1].Pages[0].PageID != "Pb2" {
+		t.Errorf("F_B pages = %+v want only the requested Pb2", views[1].Pages)
+	}
+}
+
+func TestGetUnknownPageIDFails(t *testing.T) {
+	root := t.TempDir()
+	a := archive.New(root)
+	writeNote(t, a, &snote.Note{FileID: "F_TEST", Pages: []snote.Page{{ID: "Pa", Number: 1}}},
+		map[string]string{"Pa": "<svg/>"})
+
+	_, err := retrieve.Get(a, []string{"Pa", "P_MISSING"})
+	if err == nil || !strings.Contains(err.Error(), "P_MISSING") {
+		t.Fatalf("err = %v, want a not-found error naming P_MISSING", err)
 	}
 }
 
@@ -107,11 +153,11 @@ func TestGetAssemblesAnalysis(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	view, err := retrieve.Get(a, "F_TEST")
+	views, err := retrieve.Get(a, []string{"Pa"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	p := view.Pages[0]
+	p := views[0].Pages[0]
 	if p.Analysis == nil || p.Analysis.Content != "# Chapter\n\nbody" {
 		t.Errorf("analysis = %+v, want content from sidecar without trailing newline", p.Analysis)
 	}

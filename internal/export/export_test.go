@@ -37,14 +37,14 @@ func TestRender(t *testing.T) {
 		},
 	}
 
-	const tmpl = "{% for p in pages %}* Page {{ p.number }} [{{ p.page_id }}]\n" +
+	const tmpl = "{% for p in notes.0.pages %}* Page {{ p.number }} [{{ p.page_id }}]\n" +
 		"{{ p.analysis.content }}\n" +
 		"{% for t in p.titles %}- L{{ t.level }} {{ t.analysis.name }}\n{% endfor %}" +
 		"{% for k in p.keywords %}kw:{{ k.text }}\n{% endfor %}" +
 		"{% for link in p.links %}link:[[denote:{{ link.target_file_id|denote }}]] {{ link.name }} <{{ link.analysis.name }}>\n{% endfor %}" +
 		"{% endfor %}"
 
-	got, err := Render(view, tmpl)
+	got, err := Render([]*retrieve.NoteView{view}, tmpl)
 	if err != nil {
 		t.Fatalf("Render: %v", err)
 	}
@@ -64,8 +64,30 @@ func TestRender(t *testing.T) {
 }
 
 func TestRenderBadTemplate(t *testing.T) {
-	if _, err := Render(&retrieve.NoteView{}, "{% for %}"); err == nil {
+	if _, err := Render(nil, "{% for %}"); err == nil {
 		t.Fatal("expected parse error for malformed template")
+	}
+}
+
+// TestRenderSpansNotes: one render sees every note, so a template can emit a
+// shared root once and pages from many notes flat under it.
+func TestRenderSpansNotes(t *testing.T) {
+	views := []*retrieve.NoteView{
+		{Source: "a.note", Pages: []retrieve.PageView{{Number: 1, PageID: "Pa"}}},
+		{Source: "b.note", Pages: []retrieve.PageView{{Number: 3, PageID: "Pb"}}},
+	}
+	const tmpl = "* root\n" +
+		"{% for note in notes %}\n" +
+		"{% for p in note.pages %}\n" +
+		"** {{ note.source }} {{ p.page_id }}\n" +
+		"{% endfor %}\n" +
+		"{% endfor %}"
+	got, err := Render(views, tmpl)
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	if want := "* root\n** a.note Pa\n** b.note Pb\n"; got != want {
+		t.Errorf("Render = %q, want %q", got, want)
 	}
 }
 
@@ -75,12 +97,12 @@ func TestRenderBadTemplate(t *testing.T) {
 func TestRenderTrimsBlocks(t *testing.T) {
 	view := &retrieve.NoteView{Pages: []retrieve.PageView{{Number: 1}, {Number: 2}}}
 	// Block tags on their own indented lines (including if/endif) — the clean style.
-	const tmpl = "{% for p in pages %}\n" +
+	const tmpl = "{% for p in notes.0.pages %}\n" +
 		"  {% if p.number %}\n" +
 		"- {{ p.number }}\n" +
 		"  {% endif %}\n" +
 		"{% endfor %}"
-	got, err := Render(view, tmpl)
+	got, err := Render([]*retrieve.NoteView{view}, tmpl)
 	if err != nil {
 		t.Fatalf("Render: %v", err)
 	}

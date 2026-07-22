@@ -32,15 +32,18 @@ ingest:
     # colors:            # remap the four default pen shades (CSS name or hex); unset shades keep defaults
     #   black: "#1a1aff"
 
-# Single pongo2 (Jinja2-style) template over the `snorg retrieve` JSON — same keys,
-# same nesting (pages -> titles/keywords/links/analysis). Rendered with trim_blocks +
-# lstrip_blocks: keep {% %} tags on their own lines; never END an output line with one.
-# Filters beyond the pongo2 built-ins (docs/config.md): denote, org, nestorgheadings:N,
-# nestmdheadings:N (demote Markdown '#' headings by N).
+# Single pongo2 (Jinja2-style) template, rendered once over the whole export. The
+# context is the `snorg retrieve` JSON array under `notes` (`export` takes PAGEIDs —
+# piped from `query` — and groups them per owning note), so iterate notes, then
+# note.pages -> titles/keywords/links/analysis; same keys, same nesting. Rendered with
+# trim_blocks + lstrip_blocks: keep {% %} tags on their own lines; never END an output
+# line with one. Filters beyond the pongo2 built-ins (docs/config.md): denote, org,
+# nestorgheadings:N, nestmdheadings:N (demote Markdown '#' headings by N).
 export:
   template: |
-    # {{ source|cut:".note" }}
-    {% for page in pages %}
+    {% for note in notes %}
+    # {{ note.source|cut:".note" }}
+    {% for page in note.pages %}
     {% if page.starred %}
     ## ⭐ Page {{ page.number }}
     {% else %}
@@ -63,4 +66,5 @@ export:
     {% endfor %}
 
     {% endif %}
+    {% endfor %}
     {% endfor %}

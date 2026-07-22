@@ -7,8 +7,10 @@
 ;;; Commentary:
 
 ;; Emacs client for `snorg' (supernote-organizer).  It talks to the snorg
-;; CLI (`list', `retrieve', `export') and brings archived Supernote notes
-;; into Emacs as denote org notes.
+;; CLI (`list', `query', `retrieve', `export') and brings archived Supernote
+;; notes into Emacs as denote org notes.  `retrieve' and `export' are
+;; page-oriented (they take PAGEIDs), so the per-note helpers here first ask
+;; `query note' for the note's pages.
 ;;
 ;; Features:
 ;;
@@ -99,16 +101,23 @@ Return stdout as a string, or signal an error with the CLI output."
   "Return the archived FILE_IDs as a list of strings."
   (split-string (snorg--call "list") "\n" t))
 
+(defun snorg--note-pageids (file-id)
+  "Return the PAGEIDs of FILE-ID (placement order) via `query note'."
+  (split-string (snorg--call "query" "note" file-id) "\n" t))
+
 (defun snorg-retrieve (file-id)
-  "Return the retrieve JSON for FILE-ID parsed as an alist."
+  "Return the retrieve JSON for FILE-ID parsed as an alist.
+`retrieve' takes PAGEIDs and groups them per note; passing one note's
+pages yields a single-element array, whose sole NoteView is returned."
   (let ((json-object-type 'alist)
         (json-array-type 'list)
         (json-key-type 'symbol))
-    (json-read-from-string (snorg--call "retrieve" file-id))))
+    (car (json-read-from-string
+          (apply #'snorg--call "retrieve" (snorg--note-pageids file-id))))))
 
 (defun snorg-export (file-id)
   "Return the exported org text for FILE-ID."
-  (snorg--call "export" file-id))
+  (apply #'snorg--call "export" (snorg--note-pageids file-id)))
 
 ;;;; Note selection
 

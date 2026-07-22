@@ -7,10 +7,10 @@ snorg -a <archive-path> [-c config.yaml ...] [--no-archive-config] <command> [co
 
 snorg -a <archive-path> ingest [-j N] <file-or-dir>
 snorg -a <archive-path> list
-snorg -a <archive-path> retrieve <FILE_ID>
 snorg -a <archive-path> query <filter> [arg]
+snorg -a <archive-path> retrieve [PAGEID ...]
 snorg -a <archive-path> analyze [--force] [PAGEID ...]
-snorg -a <archive-path> export <FILE_ID>
+snorg -a <archive-path> export [PAGEID ...]
 ```
 
 The archive path is a required global flag (`-a`/`--archive`, never hardcoded) and
@@ -25,14 +25,21 @@ controls the SVG pipeline (see below). A failed note never aborts the batch — 
 are attempted and failures summarized (non-zero exit). Re-ingest reconciles the
 note's directory in place (see Archive layout); it is the update path.
 
-`list`, `retrieve` and `query` are the read side — the platform-agnostic interface
+`list`, `query` and `retrieve` are the read side — the platform-agnostic interface
 external tools build on (see [retrieval.md](retrieval.md)). `query` takes one
 filter per call — `all`, `note <FILE_ID>`, `unanalyzed`, `keyword <regexp>`
 (matched against `Keyword.Text`), `starred` — and prints the PAGEID of each
-matching page, one per line, ready to pipe into `analyze`.
+matching page, one per line. `retrieve`, `analyze` and `export` all take PAGEIDs
+as arguments, or read them one-per-line from stdin when none are given, so
+`query` pipes into any of them.
 
-`analyze` takes PAGEIDs as arguments, or reads them one-per-line from stdin when
-none are given, and processes them sequentially (LLM rate limits; a failed page
+`retrieve` prints the selected pages assembled into a JSON array of `NoteView`s,
+grouped per owning note (full note metadata, only the requested pages); a whole
+note is `query note <FILE_ID> | retrieve`. `export` groups the same way and
+renders the config's template once over the whole array (context key `notes`),
+so one template invocation sees every selected note.
+
+`analyze` processes its pages sequentially (LLM rate limits; a failed page
 never aborts the batch). Unchanged pages are skipped without an LLM call (see
 [config.md](config.md), "Incremental analysis"), so the canonical batch run is:
 
@@ -126,8 +133,9 @@ transcription and is re-transcribed by the next `analyze` run.
   `ReadSVG`/`SVGRel`/`FindPage`) plus `WritePage` and the `<PAGEID>.md` sidecar pair
   `ReadAnalysisMD`/`WriteAnalysisMD`.
 - `internal/retrieve` — platform-agnostic read contract: assembles `note.json` + each
-  `<PAGEID>.json` + `<PAGEID>.md` into one denormalized `NoteView` (the stable JSON
-  consumers depend on).
+  `<PAGEID>.json` + `<PAGEID>.md` into denormalized `NoteView`s (the stable JSON
+  consumers depend on). `Get` takes PAGEIDs and groups them per owning note (archive
+  List order, pages in placement order); an unknown PAGEID is an error.
 - `internal/query` — read-only metadata filter: walks every note/page via the `archive`
   accessors and returns the pages matching a `Predicate` (`All`, `Starred`, `Unanalyzed`,
   `InNote(fileID)`, `Keyword(regexp)`).
@@ -141,15 +149,16 @@ transcription and is re-transcribed by the next `analyze` run.
   crops title/link rects, runs the custom fields, and writes `<PAGEID>.md` + `<PAGEID>.json`.
   The geometry hash is invariant under recolor/background/overlays, so restyling never
   re-triggers analysis. External deps: `openai-go`, `oksvg`/`rasterx`.
-- `internal/export` — renders a `retrieve.NoteView` through one pongo2 template (`export`
-  cmd): view → JSON → `map[string]any` context, so templates bind to the `retrieve` json
-  keys verbatim; output to stdout. Filters, one file per concern: `denote.go`
+- `internal/export` — renders the retrieved `[]*retrieve.NoteView` through one pongo2
+  template in a single pass (`export` cmd): views → JSON → context under the `notes`
+  key, so templates bind to the `retrieve` json array verbatim and can span notes;
+  output to stdout. Filters, one file per concern: `denote.go`
   (FILE_ID/PAGEID → denote id), `orgmode.go` (org-mode-only: `org` via pandoc
   shell-out, `nestorgheadings:N`), `markdown.go` (Markdown-only: `nestmdheadings:N`).
   External dep: `pongo2/v6`; PATH tool: `pandoc` (only for the `org` filter).
 - `internal/ingest` — orchestrator: `Source.Read` → render SVGs → `Archive.Write`.
 - `examples/emacs/snorg.el` — Emacs org/denote consumer (outside the Go tree): drives the CLI
-  (`list`/`retrieve`/`export`) to import notes as denote org files, adds the `snorg:`
+  (`list`/`query`/`retrieve`/`export`) to import notes as denote org files, adds the `snorg:`
   (page SVG) and `denote-snorg:` (page-jump) org links, and a dual-window review mode.
 
 ## Extension points

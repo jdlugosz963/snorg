@@ -24,14 +24,16 @@ Then archive a note and read it back:
 ```sh
 snorg -a ~/notes/archive ingest ~/supernote/Note/idea.note   # register (a dir works too)
 snorg -a ~/notes/archive list                                # FILE_IDs, one per line
-snorg -a ~/notes/archive retrieve <FILE_ID>                  # assembled note as JSON
+snorg -a ~/notes/archive query note <FILE_ID> | \
+  snorg -a ~/notes/archive retrieve                          # assembled notes as JSON
 
 # Optional AI pass: transcribe pages with a vision LLM (needs a provider config).
 snorg -a ~/notes/archive query all | \
   snorg -c config.yaml -a ~/notes/archive analyze            # skips unchanged pages
 
 # Export through a template (see examples/config.yaml).
-snorg -c examples/config.yaml -a ~/notes/archive export <FILE_ID>
+snorg -a ~/notes/archive query note <FILE_ID> | \
+  snorg -c examples/config.yaml -a ~/notes/archive export
 ```
 
 ## Usage
@@ -42,12 +44,17 @@ Global flags and the archive path come first, then the command; the config
 ```
 snorg -a <archive> ingest <file.note>    # register a note (dir works too)
 snorg -a <archive> list                  # list FILE_IDs
-snorg -a <archive> retrieve <FILE_ID>    # assembled note as JSON
 snorg -a <archive> query all             # PAGEIDs of matching pages
 snorg -a <archive> query all | \
+  snorg -a <archive> retrieve            # assembled notes as JSON (grouped per note)
+snorg -a <archive> query all | \
   snorg -c cfg.yaml -a <archive> analyze # LLM analysis (skips unchanged pages)
-snorg -c examples/config.yaml -a <archive> export <FILE_ID>  # render a template
+snorg -a <archive> query note <FILE_ID> | \
+  snorg -c examples/config.yaml -a <archive> export  # render a template per note
 ```
+
+`retrieve`, `analyze` and `export` take PAGEIDs as arguments or stdin lines, so
+`query` pipes into any of them.
 
 Archive layout: `<archive>/<FILE_ID>/{note.json,<PAGEID>.json,<PAGEID>.md,<PAGEID>.svg,backgrounds/}`.
 

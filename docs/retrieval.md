@@ -8,18 +8,29 @@ through the CLI process boundary and stable JSON below.
 ## Commands
 
 ```
-snorg -a <archive-path> list                # one FILE_ID per line
-snorg -a <archive-path> retrieve <FILE_ID>  # one assembled note as indented JSON
+snorg -a <archive-path> list                  # one FILE_ID per line
+snorg -a <archive-path> query <filter> [arg]  # one PAGEID per line
+snorg -a <archive-path> retrieve [PAGEID ...] # assembled notes as indented JSON
 ```
 
-`list` enumerates notes; `retrieve` returns a single `NoteView` — a denormalized
-join of `note.json` and every `<PAGEID>.json`, so the consumer never needs to know
-the on-disk file split.
+`list` enumerates notes; `query` enumerates pages (`all`, `note <FILE_ID>`,
+`unanalyzed`, `keyword <regexp>`, `starred`, `date <spec>` where the day is the
+PAGEID's leading 8 digits and spec is `today`/`yesterday`/`YYYY-MM-DD`/`FROM..TO`
+with open ends). `query` also reads PAGEIDs from stdin when piped, restricting its
+filter to that set, so filters intersect: `query keyword foo | query date today`.
+`retrieve` takes PAGEIDs — as
+arguments, or one-per-line on stdin when none are given, so `query` pipes
+straight into it — and returns a JSON **array of `NoteView`s**: the selected
+pages grouped per owning note (archive `list` order), each view carrying the
+full note metadata but only the requested pages, in placement order. A
+`NoteView` is a denormalized join of `note.json` and the selected `<PAGEID>.json`
+files, so the consumer never needs to know the on-disk file split. A whole note
+is `query note <FILE_ID> | retrieve`; an unknown PAGEID is an error.
 
 ## NoteView JSON
 
 ```json
-{
+[{
   "file_id": "F...", "signature": "...", "device": "...", "source": "note.note",
   "pages": [{
     "number": 1, "page_id": "P...", "starred": false,
@@ -32,7 +43,7 @@ the on-disk file split.
                   "analysis": {"name": "see also"}}],
     "analysis": {"content": "# Chapter 1\n\n...", "fields": {"description": "..."}}
   }]
-}
+}]
 ```
 
 - `pages` are in placement order (1-based `number`).
@@ -61,7 +72,7 @@ Pseudocode (illustrative; an org-mode generator, but nothing here is org-specifi
 
 ```
 for id in `snorg -a <archive> list`:
-    view = json(`snorg -a <archive> retrieve id`)
+    view = json(`snorg -a <archive> query note id | snorg -a <archive> retrieve`)[0]
     doc  = open_or_create(outdir/(id + ".ext"))
 
     root = find_managed_root(doc, key = id) or create_managed_root(doc, key = id,
@@ -77,6 +88,5 @@ for id in `snorg -a <archive> list`:
 
 ## Status
 
-The first consumer will be a separate repo (planned git submodule) holding an Elisp
-org-mode generator. It is intentionally not built yet — this interface is the
-prerequisite that unblocks it.
+The first consumer is `examples/emacs/snorg.el`, an Elisp org/denote generator
+built on exactly this pattern (`query note` + `retrieve` + `export` per note).

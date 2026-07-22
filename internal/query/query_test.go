@@ -138,3 +138,68 @@ func TestPagesNoMatch(t *testing.T) {
 		t.Errorf("expected no matches, got %v", pageIDs(ms))
 	}
 }
+
+// dateArchive: one note with pages dated across three days (PAGEID = "P" +
+// YYYYMMDDHHMMSS + tail) plus one id that carries no date.
+func dateArchive(t *testing.T) *archive.Archive {
+	t.Helper()
+	a := archive.New(t.TempDir())
+	writeNote(t, a, &snote.Note{
+		FileID: "F_D",
+		Pages: []snote.Page{
+			{ID: "P20260701090000AB", Number: 1},
+			{ID: "P20260715120000CD", Number: 2},
+			{ID: "P20260722080000EF", Number: 3},
+			{ID: "Pnodate", Number: 4},
+		},
+	})
+	return a
+}
+
+func TestDate(t *testing.T) {
+	a := dateArchive(t)
+	cases := []struct {
+		name     string
+		from, to string
+		want     []string
+	}{
+		{"exact day", "20260715", "20260715", []string{"P20260715120000CD"}},
+		{"range", "20260701", "20260715", []string{"P20260701090000AB", "P20260715120000CD"}},
+		{"open from", "", "20260715", []string{"P20260701090000AB", "P20260715120000CD"}},
+		{"open to", "20260715", "", []string{"P20260715120000CD", "P20260722080000EF"}},
+		{"no match", "20250101", "20250101", []string{}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ms, err := query.Pages(a, query.Date(tc.from, tc.to))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := pageIDs(ms); !reflect.DeepEqual(got, tc.want) {
+				t.Errorf("Date(%q,%q) = %v, want %v", tc.from, tc.to, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestInSetAnd(t *testing.T) {
+	a := seedArchive(t)
+	// InSet restricts to the given ids; And intersects with a filter.
+	pred := query.And(query.InSet([]string{"Pa", "Pc", "Pd"}), query.Starred)
+	ms, err := query.Pages(a, pred)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"Pa", "Pc"}; !reflect.DeepEqual(pageIDs(ms), want) {
+		t.Errorf("InSet∩Starred = %v, want %v", pageIDs(ms), want)
+	}
+
+	// Empty set matches nothing.
+	ms, err = query.Pages(a, query.InSet(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ms) != 0 {
+		t.Errorf("InSet(nil) = %v, want none", pageIDs(ms))
+	}
+}

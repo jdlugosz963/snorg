@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestConfigPaths(t *testing.T) {
@@ -41,6 +42,36 @@ func TestConfigPaths(t *testing.T) {
 	}
 	if got := configPaths(dir2, cli, false); !reflect.DeepEqual(got, cli) {
 		t.Errorf("config.yaml dir: got %v, want %v", got, cli)
+	}
+}
+
+func TestParseDateSpec(t *testing.T) {
+	today := time.Now().Format("20060102")
+	yesterday := time.Now().AddDate(0, 0, -1).Format("20060102")
+	cases := []struct {
+		spec     string
+		from, to string
+		wantErr  bool
+	}{
+		{"today", today, today, false},
+		{"yesterday", yesterday, yesterday, false},
+		{"2026-07-22", "20260722", "20260722", false},
+		{"2026-07-01..2026-07-22", "20260701", "20260722", false},
+		{"..2026-07-22", "", "20260722", false},
+		{"2026-07-01..", "20260701", "", false},
+		{"..", "", "", true},
+		{"2026-13-01", "", "", true},
+		{"not-a-date", "", "", true},
+	}
+	for _, tc := range cases {
+		from, to, err := parseDateSpec(tc.spec)
+		if (err != nil) != tc.wantErr {
+			t.Errorf("parseDateSpec(%q) err = %v, wantErr %v", tc.spec, err, tc.wantErr)
+			continue
+		}
+		if err == nil && (from != tc.from || to != tc.to) {
+			t.Errorf("parseDateSpec(%q) = (%q,%q), want (%q,%q)", tc.spec, from, to, tc.from, tc.to)
+		}
 	}
 }
 

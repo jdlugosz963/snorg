@@ -23,27 +23,29 @@ func newTemplateSet() *pongo2.TemplateSet {
 	return s
 }
 
-// Render executes template (pongo2 syntax) over view and returns the rendered text.
-// The context is view marshalled to JSON and back into a map[string]any, so templates
-// address fields by their json tags. Numbers are decoded as json.Number so integers
-// (page number, title level) render as "1" rather than "1.000000". pongo2 resolves
-// missing keys to empty, so pages without analysis render blank rather than erroring.
-func Render(view *retrieve.NoteView, template string) (string, error) {
-	b, err := json.Marshal(view)
+// Render executes template (pongo2 syntax) once over all views and returns the
+// rendered text. The context is the retrieve JSON array under the `notes` key
+// (pongo2 needs a map root): the views marshalled to JSON and back into []any,
+// so templates address fields by their json tags. Numbers are decoded as
+// json.Number so integers (page number, title level) render as "1" rather than
+// "1.000000". pongo2 resolves missing keys to empty, so pages without analysis
+// render blank rather than erroring.
+func Render(views []*retrieve.NoteView, template string) (string, error) {
+	b, err := json.Marshal(views)
 	if err != nil {
-		return "", fmt.Errorf("marshal note: %w", err)
+		return "", fmt.Errorf("marshal notes: %w", err)
 	}
 	dec := json.NewDecoder(bytes.NewReader(b))
 	dec.UseNumber()
-	var ctx map[string]any
-	if err := dec.Decode(&ctx); err != nil {
+	var notes []any
+	if err := dec.Decode(&notes); err != nil {
 		return "", fmt.Errorf("build context: %w", err)
 	}
 	tpl, err := templateSet.FromString(template)
 	if err != nil {
 		return "", fmt.Errorf("parse template: %w", err)
 	}
-	out, err := tpl.Execute(pongo2.Context(ctx))
+	out, err := tpl.Execute(pongo2.Context{"notes": notes})
 	if err != nil {
 		return "", fmt.Errorf("render template: %w", err)
 	}

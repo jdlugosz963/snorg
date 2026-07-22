@@ -68,8 +68,10 @@ ingest:
 
 export:
   template: |                               # single pongo2 (Jinja2-style) template
-    {% for page in pages %}* Page {{ page.number }}
+    {% for note in notes %}
+    {% for page in note.pages %}* Page {{ page.number }}
     {{ page.analysis.content }}
+    {% endfor %}
     {% endfor %}
 ```
 
@@ -88,16 +90,22 @@ white rectangle and `remove` deletes the background `<image>` entirely.
 
 ## Export template
 
-`snorg -a <archive> export <FILE_ID>` renders the assembled note through
-`export.template` to stdout. The template context **is** the `snorg retrieve`
-JSON — same keys, same nesting, no hidden enrichment. Iterate `pages`, then each
-page's `titles` / `keywords` / `links` / `analysis`:
+`snorg -a <archive> export [PAGEID ...]` (PAGEIDs as arguments or stdin lines,
+piped from `query`; a whole note is `query note <FILE_ID> | export`) groups the
+pages per owning note and renders `export.template` **once** over all of them to
+stdout. The template context **is** the `snorg retrieve` JSON array, under the
+`notes` key (a template context needs a map root) — same keys, same nesting, no
+hidden enrichment. One render sees every note, so a template can put pages from
+many notes under one shared root (see `examples/emacs/orgmode-query.yaml`).
+Iterate `notes`, then `note.pages`, then each page's `titles` / `keywords` /
+`links` / `analysis`:
 
 ```jinja
-{% for page in pages %}
+{% for note in notes %}
+{% for page in note.pages %}
 {{ page.analysis.content }}
 {% for t in page.titles %}- P{{ page.number }} L{{ t.level }} {{ t.analysis.name }}
-{% endfor %}{% endfor %}
+{% endfor %}{% endfor %}{% endfor %}
 ```
 
 Per-region transcriptions sit on the items themselves (`title.analysis.name`,

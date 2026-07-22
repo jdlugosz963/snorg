@@ -31,10 +31,10 @@ Read `docs/principles.md` (project rules), `docs/architecture.md` (modules/CLI),
 - CLI shape: `snorg -a <archive-path> [-c config.yaml ...] [--no-archive-config] <command> [command flags] [args]` — the archive is a **required global flag** (`-a`/`--archive`) and the config flags are global too, so all come **before** the command; the root's `Before` hook loads the merged config once (`<archive-path>/config.yaml` first if present, then `-c` files, later wins) and hands it to the command, which validates only the sections it uses
 - `go run ./cmd/snorg -a <archive-path> [-c ...] ingest [-j N] <file-or-dir>` — register a note (or all `*.note` under a dir) into the archive; `-j` caps concurrent notes (default NumCPU); config drives the SVG pipeline (`ingest.svg.{links,navigation,format}` bools default true; `background` mode `extract`(default)`|inline|blank|remove`; `colors` remaps the 4 default pen-shade fills). None of these change the analyze fingerprint (path geometry), so restyling never re-transcribes.
 - `go run ./cmd/snorg -a <archive-path> list` — list FILE_IDs (one per line)
-- `go run ./cmd/snorg -a <archive-path> retrieve <FILE_ID>` — assembled note as JSON (the read interface)
-- `go run ./cmd/snorg -a <archive-path> query <filter> [arg]` — print PAGEIDs of matching pages (one per line); one filter per call: `all`, `note <FILE_ID>`, `unanalyzed`, `keyword <regexp>` (matches `Keyword.Text`), `starred`
+- `go run ./cmd/snorg -a <archive-path> query <filter> [arg]` — print PAGEIDs of matching pages (one per line); one filter per call: `all`, `note <FILE_ID>`, `unanalyzed`, `keyword <regexp>` (matches `Keyword.Text`), `starred`, `date <spec>` (day from the PAGEID's leading 8 digits; spec = `today`/`yesterday`/`YYYY-MM-DD`/`FROM..TO` with open ends); pipes into `retrieve`/`analyze`/`export` (all three take PAGEIDs as args or stdin lines). `query` **itself** reads PAGEIDs from stdin when piped, restricting the filter to that set — so filters intersect: `query keyword foo | query date today` == foo ∩ today
+- `go run ./cmd/snorg -a <archive-path> retrieve [PAGEID ...]` — the read interface: assembles the selected pages into a JSON **array of NoteViews** grouped per owning note (full note metadata, only the requested pages, placement order); whole note = `query note <FILE_ID> | retrieve`; unknown PAGEID errors
 - `go run ./cmd/snorg -a <archive-path> [-c ...] analyze [--force] [PAGEID ...]` — incremental vision-LLM analysis; PAGEIDs from args or stdin (pipe from `query`); unchanged pages (path-geometry hash == `analysis.source_hash`; invariant under recolor/background/overlays) are skipped without an LLM call (no rasterize), changed ones re-transcribed through the update prompt + previous `<PAGEID>.md` (minimal diff); writes `<PAGEID>.md` (content) + `<PAGEID>.json` (per-title/link `analysis.name`, `analysis.{source_hash,fields}`); provider + prompts from the config (`docs/config.md`); `api_key` falls back to `api_key_command` stdout then `OPENAI_API_KEY`
-- `go run ./cmd/snorg -a <archive-path> [-c ...] export <FILE_ID>` — render the retrieved note JSON through the config's single `export.template` (pongo2/Jinja2) to stdout; template context is the `retrieve` JSON verbatim (snake_case keys: `pages[].titles/keywords/links/analysis.content`, `title.analysis.name`, `link.analysis.name`); filters: `denote` (FILE_ID/PAGEID → denote id), `org` (markdown→org via pandoc), `nestorgheadings:N` (demote org headings), `nestmdheadings:N` (demote Markdown headings); needs no `provider` creds; see `examples/config.yaml` (Markdown) and `examples/emacs/orgmode.yaml` (org)
+- `go run ./cmd/snorg -a <archive-path> [-c ...] export [PAGEID ...]` — PAGEIDs from args or stdin (pipe from `query`); groups pages per owning note like `retrieve` and renders the config's single `export.template` (pongo2/Jinja2) **once** over the whole result to stdout; template context is the `retrieve` JSON array under the `notes` key (snake_case: `notes[].pages[].titles/keywords/links/analysis.content`, `title.analysis.name`, `link.analysis.name`), so one template can span notes (`examples/emacs/orgmode-query.yaml` puts pages from many notes flat under one heading); filters: `denote` (FILE_ID/PAGEID → denote id), `org` (markdown→org via pandoc), `nestorgheadings:N` (demote org headings), `nestmdheadings:N` (demote Markdown headings); needs no `provider` creds; see `examples/config.yaml` (Markdown) and `examples/emacs/orgmode.yaml` (org)
 
 ## Architecture
 
@@ -54,10 +54,11 @@ Flow: `cmd/snorg` → `internal/ingest` orchestrates `snote.Source.Read` → ren
   before links so links win hit-testing — SVG picks the later element);
   `read.go` are layout-aware accessors (`List`/`ReadNote`/`ReadPage`/`ReadSVG`/`SVGRel`/`FindPage`)
   plus `WritePage` and `ReadAnalysisMD`/`WriteAnalysisMD` (the sidecar pair).
-- `internal/retrieve` — **platform-agnostic read contract** (docs/retrieval.md): assembles
-  `note.json` + `<PAGEID>.json` + `<PAGEID>.md` into one `NoteView` JSON (svg paths archive-relative)
-  that **mirrors the on-disk structure** (`title.analysis.name`, `link.analysis.name`,
-  `page.analysis.{content,fields}`). Consumers talk to snorg only via `list`/`retrieve`; read-only.
+- `internal/retrieve` — **platform-agnostic read contract** (docs/retrieval.md): `Get(a, pageIDs)`
+  assembles `note.json` + `<PAGEID>.json` + `<PAGEID>.md` into `[]*NoteView` grouped per owning
+  note (List order, pages in placement order, unknown PAGEID errors); svg paths archive-relative;
+  the view **mirrors the on-disk structure** (`title.analysis.name`, `link.analysis.name`,
+  `page.analysis.{content,fields}`). Consumers talk to snorg only via `list`/`query`/`retrieve`; read-only.
 - `internal/config` — loads merged YAML config (provider creds + analysis prompts incl.
   `content.update_prompt` + `ingest.svg` toggles + `export.template`; `docs/config.md`). `Load(paths)`
   deep-merges files (later wins), defaults unset prompts and nil toggles (to true). Provider key
@@ -70,10 +71,11 @@ Flow: `cmd/snorg` → `internal/ingest` orchestrates `snote.Source.Read` → ren
   loads once in the root's `Before` hook, and shares the result with the command via the `app`
   struct in `main.go` (the archive is the required global `-a`/`--archive` flag, so urfave's natural
   subcommand dispatch handles routing — no manual dispatch).
-- `internal/export` — generic exporter (`export` cmd): renders a `retrieve.NoteView` through one pongo2
-  template (`Render(view, template)`). Marshals the view to JSON then back into a `map[string]any`
-  (numbers via `UseNumber` so levels/page numbers render as ints) for the pongo2 context, so templates
-  bind to the `retrieve` json keys verbatim — no render-time enrichment. pongo2 is isolated here;
+- `internal/export` — generic exporter (`export` cmd): renders the retrieved `[]*retrieve.NoteView`
+  through one pongo2 template in a single pass (`Render(views, template)`). Marshals the views to JSON
+  then back (numbers via `UseNumber` so levels/page numbers render as ints) into the pongo2 context
+  under the `notes` key, so templates bind to the `retrieve` json array verbatim — no render-time
+  enrichment — and can span notes. pongo2 is isolated here;
   read-only, output to stdout. Renders via a package `TemplateSet` with
   `TrimBlocks`+`LStripBlocks` on (clean multi-line templates; note: a line must not end with a block
   tag, and space before a `{% %}` is stripped — see `docs/config.md`). Filters live one file per

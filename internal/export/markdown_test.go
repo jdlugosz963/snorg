@@ -16,7 +16,7 @@ func TestNestMDHeadings(t *testing.T) {
 			Analysis: &retrieve.PageAnalysisView{Content: "# H1\ntext with # inside\n## H2\n- list item"},
 		}},
 	}
-	got, err := Render(view, "{{ pages.0.analysis.content|nestmdheadings:2 }}")
+	got, err := Render([]*retrieve.NoteView{view}, "{{ notes.0.pages.0.analysis.content|nestmdheadings:2 }}")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -30,7 +30,7 @@ func TestNestMDHeadingsDefaultsToOne(t *testing.T) {
 	view := &retrieve.NoteView{
 		Pages: []retrieve.PageView{{Number: 1, Analysis: &retrieve.PageAnalysisView{Content: "# H"}}},
 	}
-	got, err := Render(view, "{{ pages.0.analysis.content|nestmdheadings }}")
+	got, err := Render([]*retrieve.NoteView{view}, "{{ notes.0.pages.0.analysis.content|nestmdheadings }}")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -77,7 +77,7 @@ func TestMarkdownExample(t *testing.T) {
 		},
 	}
 
-	got, err := Render(view, cfg.Export.Template)
+	got, err := Render([]*retrieve.NoteView{view}, cfg.Export.Template)
 	if err != nil {
 		t.Fatal(err)
 	}

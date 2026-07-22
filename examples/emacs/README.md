@@ -1,7 +1,8 @@
 # snorg.el — Emacs org/denote client
 
 `snorg.el` brings archived Supernote notes into Emacs. It shells out to the
-`snorg` CLI (`list` / `retrieve` / `export`) and imports notes as
+`snorg` CLI (`list` / `query` / `retrieve` / `export` — the page-oriented
+commands get their PAGEIDs from `query note`) and imports notes as
 [denote](https://protesilaos.com/emacs/denote) org files.
 
 ## Install
@@ -73,3 +74,15 @@ These are emitted by the shipped export template (`examples/emacs/orgmode.yaml`)
 which also stores the SVG path in each page's `:SNORG_SVGP:` property. Both link
 types support `C-c C-l` (`org-insert-link`) completion: pick an archived note,
 then one of its pages.
+
+## Cross-note query exports
+
+`orgmode-query.yaml` is a second template for ad-hoc query results spanning
+notes: every selected page — whichever note it comes from — sits flat at one
+level under a single root heading, with the same `:SNORG_PAGEID:`/`:SNORG_SVGP:`
+properties, so `snorg-view` cycles straight through the whole result set:
+
+```sh
+snorg -a <archive> query starred | \
+  snorg -c examples/emacs/orgmode-query.yaml -a <archive> export > starred.org
+```

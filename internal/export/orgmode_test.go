@@ -17,7 +17,7 @@ func TestNestOrgHeadings(t *testing.T) {
 			Analysis: &retrieve.PageAnalysisView{Content: "* H1\ntext with * inside\n** H2\n- list item"},
 		}},
 	}
-	got, err := Render(view, "{{ pages.0.analysis.content|nestorgheadings:2 }}")
+	got, err := Render([]*retrieve.NoteView{view}, "{{ notes.0.pages.0.analysis.content|nestorgheadings:2 }}")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -31,7 +31,7 @@ func TestNestOrgHeadingsDefaultsToOne(t *testing.T) {
 	view := &retrieve.NoteView{
 		Pages: []retrieve.PageView{{Number: 1, Analysis: &retrieve.PageAnalysisView{Content: "* H"}}},
 	}
-	got, err := Render(view, "{{ pages.0.analysis.content|nestorgheadings }}")
+	got, err := Render([]*retrieve.NoteView{view}, "{{ notes.0.pages.0.analysis.content|nestorgheadings }}")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -50,7 +50,7 @@ func TestOrgFilter(t *testing.T) {
 			Analysis: &retrieve.PageAnalysisView{Content: "# Heading\n\nsome **bold** text"},
 		}},
 	}
-	got, err := Render(view, "{{ pages.0.analysis.content|org|nestorgheadings:1 }}")
+	got, err := Render([]*retrieve.NoteView{view}, "{{ notes.0.pages.0.analysis.content|org|nestorgheadings:1 }}")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -108,15 +108,16 @@ func TestOrgmodeExample(t *testing.T) {
 		},
 	}
 
-	got, err := Render(view, cfg.Export.Template)
+	got, err := Render([]*retrieve.NoteView{view}, cfg.Export.Template)
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, want := range []string{
 		"** Neurony",
-		":PAGE_ID: P20260414171730000001aaaaaa",
+		":SNORG_PAGEID: P20260414171730000001aaaaaa",
+		":SNORG_SVGP: F20260414171729084889FDefCgWZgV3D/P20260414171730000001aaaaaa.svg",
 		":STARRED: t",
-		"[[snorg:F20260414171729084889FDefCgWZgV3D/P20260414171730000001aaaaaa.svg]]",
+		"[[snorg:F20260414171729084889FDefCgWZgV3D/P20260414171730000001aaaaaa.svg][page 1]]",
 		"*** Potencjał czynnościowy", // markdown # -> org * demoted 2 under the page heading
 		"- [[denote-snorg:20260629T154102::P20260629154103000001bbbbbb][biologia komórki]]",
 		"** Page 2",
@@ -130,11 +131,80 @@ func TestOrgmodeExample(t *testing.T) {
 	}
 }
 
+// TestOrgmodeQueryExample renders the shipped examples/emacs/orgmode-query.yaml over
+// pages spanning two notes: one shared root heading, every page flat at level 2
+// (title transcription or "source, page N" fallback) with the :SNORG_PAGEID:/
+// :SNORG_SVGP: properties snorg-view cycles on.
+func TestOrgmodeQueryExample(t *testing.T) {
+	if _, err := exec.LookPath("pandoc"); err != nil {
+		t.Skip("pandoc not found on PATH")
+	}
+	cfg, err := config.Load([]string{"../../examples/emacs/orgmode-query.yaml"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Export.Template == "" {
+		t.Fatal("examples/emacs/orgmode-query.yaml has no export.template")
+	}
+
+	views := []*retrieve.NoteView{
+		{
+			FileID: "F20260414171729084889FDefCgWZgV3D",
+			Source: "biofizyka.note",
+			Pages: []retrieve.PageView{{
+				Number:  2,
+				PageID:  "P20260414171730000001aaaaaa",
+				Starred: true,
+				SVG:     "F20260414171729084889FDefCgWZgV3D/P20260414171730000001aaaaaa.svg",
+				Titles:  []retrieve.TitleView{{Level: 1, Analysis: &archive.TitleAnalysis{Name: "Neurony"}}},
+				Analysis: &retrieve.PageAnalysisView{
+					Content: "# Potencjał czynnościowy\n\nnotatki z wykładu",
+				},
+			}},
+		},
+		{
+			FileID: "F20260629154102100593mO9IZI46DNYe",
+			Source: "komorki.note",
+			Pages: []retrieve.PageView{{
+				// Untitled page: heading falls back to the note source + number.
+				Number: 5,
+				PageID: "P20260629154103000001bbbbbb",
+				SVG:    "F20260629154102100593mO9IZI46DNYe/P20260629154103000001bbbbbb.svg",
+			}},
+		},
+	}
+
+	got, err := Render(views, cfg.Export.Template)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"** Neurony",
+		":SNORG_PAGEID: P20260414171730000001aaaaaa",
+		":SNORG_SVGP: F20260414171729084889FDefCgWZgV3D/P20260414171730000001aaaaaa.svg",
+		":STARRED: t",
+		"[[snorg:F20260414171729084889FDefCgWZgV3D/P20260414171730000001aaaaaa.svg][biofizyka, page 2]]",
+		"*** Potencjał czynnościowy",
+		"** komorki, page 5",
+		":SNORG_PAGEID: P20260629154103000001bbbbbb",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("output missing %q\n--- got ---\n%s", want, got)
+		}
+	}
+	if n := strings.Count(got, "* Generated"); n != 1 {
+		t.Errorf("root heading emitted %d times, want once:\n%s", n, got)
+	}
+	if strings.Contains(got, "\n\n\n") {
+		t.Errorf("output has runs of blank lines:\n%s", got)
+	}
+}
+
 // TestOrgFilterEmptyInput: unanalyzed pages flow "" through the filter and must
 // not invoke pandoc (the export then works on a pandoc-less machine too).
 func TestOrgFilterEmptyInput(t *testing.T) {
 	view := &retrieve.NoteView{Pages: []retrieve.PageView{{Number: 1}}}
-	got, err := Render(view, "<{{ pages.0.analysis.content|org }}>")
+	got, err := Render([]*retrieve.NoteView{view}, "<{{ notes.0.pages.0.analysis.content|org }}>")
 	if err != nil {
 		t.Fatal(err)
 	}
