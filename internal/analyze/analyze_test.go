@@ -2,12 +2,20 @@ package analyze
 
 import (
 	"context"
+	"os/exec"
 	"strings"
 	"testing"
 
 	"github.com/jdlugosz963/snorg/internal/archive"
 	"github.com/jdlugosz963/snorg/internal/snote"
 )
+
+func requireGit(t *testing.T) {
+	t.Helper()
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skipf("git not on PATH: %v", err)
+	}
+}
 
 // fakeTranscriber returns a canned reply per prompt prefix and records every
 // prompt it saw. It implements both Transcriber and Generator.
@@ -202,6 +210,134 @@ func TestPageForceReanalyzes(t *testing.T) {
 	}
 	if tr.calls == 0 {
 		t.Error("force did not re-analyze")
+	}
+}
+
+// TestPageMergePreservesUserEdits: a user edit (analyze-edit) must survive a
+// re-analysis — the LLM sees the AI base, never the user's text, and the 3-way
+// merge re-applies the edit onto the fresh transcription.
+func TestPageMergePreservesUserEdits(t *testing.T) {
+	requireGit(t)
+	a := archive.New(t.TempDir())
+	if err := a.Write(sampleNote(), map[string][]byte{"Pa": []byte(sampleSVG)}); err != nil {
+		t.Fatal(err)
+	}
+	tr := &fakeTranscriber{replies: sampleReplies()}
+	if _, err := Page(context.Background(), a, tr, tr, sampleSpec, "Pa", false); err != nil {
+		t.Fatal(err)
+	}
+
+	// The user renames the heading of the AI transcription ("# Heading\n\npage
+	// body text") — away from the body line the re-analysis will touch, so the
+	// merge stays clean — then the page changes on the device.
+	base := "# Heading\n\npage body text\n"
+	if err := a.WriteAnalysisEdit("F_A", "Pa", base, "# My own heading\n\npage body text\n"); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Write(sampleNote(), map[string][]byte{"Pa": []byte(editedSVG)}); err != nil {
+		t.Fatal(err)
+	}
+
+	tr.prompts = nil
+	outcome, err := Page(context.Background(), a, tr, tr, sampleSpec, "Pa", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outcome != Updated {
+		t.Errorf("outcome = %q, want %q", outcome, Updated)
+	}
+	// The update prompt carries the base, not the user's edit.
+	if !strings.Contains(tr.prompts[0], base) {
+		t.Errorf("update prompt lacks the AI base: %q", tr.prompts[0])
+	}
+	for _, p := range tr.prompts {
+		if strings.Contains(p, "My own heading") {
+			t.Fatalf("user edit leaked into an LLM prompt: %q", p)
+		}
+	}
+	md, err := a.ReadAnalysisMD("F_A", "Pa")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if md != "# My own heading\n\npage body text, edited\n" {
+		t.Errorf("merge result = %q, want the user heading over the updated body", md)
+	}
+}
+
+// TestPageMergeConflict: user edit and new analysis touching the same line
+// leave conflict markers and report the Conflicted outcome, not an error.
+func TestPageMergeConflict(t *testing.T) {
+	requireGit(t)
+	a := archive.New(t.TempDir())
+	if err := a.Write(sampleNote(), map[string][]byte{"Pa": []byte(sampleSVG)}); err != nil {
+		t.Fatal(err)
+	}
+	tr := &fakeTranscriber{replies: sampleReplies()}
+	if _, err := Page(context.Background(), a, tr, tr, sampleSpec, "Pa", false); err != nil {
+		t.Fatal(err)
+	}
+
+	// Both sides rewrite the body line: "page body text" → user version vs
+	// "page body text, edited" from the update reply.
+	base := "# Heading\n\npage body text\n"
+	if err := a.WriteAnalysisEdit("F_A", "Pa", base, "# Heading\n\npage body text, user version\n"); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Write(sampleNote(), map[string][]byte{"Pa": []byte(editedSVG)}); err != nil {
+		t.Fatal(err)
+	}
+
+	outcome, err := Page(context.Background(), a, tr, tr, sampleSpec, "Pa", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outcome != Conflicted {
+		t.Errorf("outcome = %q, want %q", outcome, Conflicted)
+	}
+	md, err := a.ReadAnalysisMD("F_A", "Pa")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(md, "<<<<<<< edited") || !strings.Contains(md, ">>>>>>> reanalyzed") {
+		t.Errorf("conflict markers missing:\n%s", md)
+	}
+}
+
+// TestPageHumanTranscriptionStaysOffLLM: a page transcribed by hand (empty AI
+// base) gets a fresh transcription — the human text is never sent to the LLM —
+// and the two sides land in a conflict for the user to resolve once.
+func TestPageHumanTranscriptionStaysOffLLM(t *testing.T) {
+	requireGit(t)
+	a := archive.New(t.TempDir())
+	if err := a.Write(sampleNote(), map[string][]byte{"Pa": []byte(sampleSVG)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.WriteAnalysisEdit("F_A", "Pa", "", "written by hand\n"); err != nil {
+		t.Fatal(err)
+	}
+
+	tr := &fakeTranscriber{replies: sampleReplies()}
+	outcome, err := Page(context.Background(), a, tr, tr, sampleSpec, "Pa", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outcome != Conflicted {
+		t.Errorf("outcome = %q, want %q", outcome, Conflicted)
+	}
+	if !strings.HasPrefix(tr.prompts[0], sampleSpec.Content) {
+		t.Errorf("expected the fresh Content prompt, got %q", tr.prompts[0])
+	}
+	for _, p := range tr.prompts {
+		if strings.Contains(p, "written by hand") {
+			t.Fatalf("human transcription leaked into an LLM prompt: %q", p)
+		}
+	}
+	md, err := a.ReadAnalysisMD("F_A", "Pa")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(md, "written by hand") || !strings.Contains(md, "page body text") {
+		t.Errorf("conflict lost a side:\n%s", md)
 	}
 }
 

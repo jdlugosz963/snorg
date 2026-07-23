@@ -9,11 +9,14 @@
 //	snorg -a <archive-path> query <filter> [arg]
 //	snorg -a <archive-path> retrieve [PAGEID ...]
 //	snorg -a <archive-path> analyze [--force] [PAGEID ...]
+//	snorg -a <archive-path> analyze-edit <PAGEID>
 //	snorg -a <archive-path> export [PAGEID ...]
 //
 // retrieve, analyze and export take PAGEIDs as arguments or stdin lines, so
 // query pipes into any of them. query itself also reads PAGEIDs from stdin when
 // they are piped in, restricting its filter to that set (query A | query B == A∩B).
+// analyze-edit takes exactly one PAGEID (it opens $VISUAL/$EDITOR on the page's
+// transcription, so it needs the terminal, not a pipe).
 package main
 
 import (
@@ -32,6 +35,7 @@ import (
 	"github.com/jdlugosz963/snorg/internal/analyze"
 	"github.com/jdlugosz963/snorg/internal/archive"
 	"github.com/jdlugosz963/snorg/internal/config"
+	"github.com/jdlugosz963/snorg/internal/edit"
 	"github.com/jdlugosz963/snorg/internal/export"
 	"github.com/jdlugosz963/snorg/internal/ingest"
 	"github.com/jdlugosz963/snorg/internal/query"
@@ -112,11 +116,12 @@ func commands(a *app) []*cli.Command {
 		retrieveCmd(a),
 		queryCmd(a),
 		analyzeCmd(a),
+		analyzeEditCmd(a),
 		exportCmd(a),
 	}
 }
 
-const commandNames = "ingest, list, retrieve, query, analyze, export"
+const commandNames = "ingest, list, retrieve, query, analyze, analyze-edit, export"
 
 // root registers the global flags and subcommands and loads the merged config
 // once in its Before hook, which urfave/cli runs as part of the command chain
@@ -434,7 +439,7 @@ func analyzeCmd(a *app) *cli.Command {
 
 			// Sequential on purpose (LLM rate limits); one failure never aborts
 			// the batch — analysis of the rest is still worth the wait.
-			failed := 0
+			failed, conflicted := 0, false
 			for _, pageID := range pageIDs {
 				outcome, err := analyze.Page(ctx, a.arch, tr, tr, spec, pageID, cmd.Bool("force"))
 				if err != nil {
@@ -442,11 +447,42 @@ func analyzeCmd(a *app) *cli.Command {
 					fmt.Fprintf(os.Stderr, "failed %s: %v\n", pageID, err)
 					continue
 				}
+				conflicted = conflicted || outcome == analyze.Conflicted
 				fmt.Printf("%s: %s\n", pageID, outcome)
+			}
+			if conflicted {
+				fmt.Fprintf(os.Stderr, "conflict markers written; resolve with: snorg -a %s analyze-edit <PAGEID>\n", a.path)
 			}
 			if failed > 0 {
 				return fmt.Errorf("%d of %d pages failed", failed, len(pageIDs))
 			}
+			return nil
+		},
+	}
+}
+
+func analyzeEditCmd(a *app) *cli.Command {
+	return &cli.Command{
+		Name:      "analyze-edit",
+		Usage:     "edit a page's transcription in $VISUAL/$EDITOR (edits survive re-analysis)",
+		ArgsUsage: "<PAGEID>",
+		Action: func(_ context.Context, cmd *cli.Command) error {
+			// Exactly one positional PAGEID, no stdin fallback: the editor
+			// needs the terminal, not a pipe. Needs no provider config —
+			// pages can be transcribed by hand without any LLM involved.
+			if cmd.Args().Len() != 1 {
+				return fmt.Errorf("usage: snorg -a <archive-path> analyze-edit <PAGEID>")
+			}
+			editor, err := edit.EditorFromEnv()
+			if err != nil {
+				return err
+			}
+			pageID := cmd.Args().Get(0)
+			outcome, err := edit.Page(a.arch, pageID, editor)
+			if err != nil {
+				return err
+			}
+			fmt.Printf("%s: %s\n", pageID, outcome)
 			return nil
 		},
 	}

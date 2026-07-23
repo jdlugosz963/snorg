@@ -52,13 +52,17 @@ is `query note <FILE_ID> | retrieve`; an unknown PAGEID is an error.
 - `internal` is derived: `target_file_id == file_id` (link stays within this note).
 - link `name` is the target note's human name, decoded from the `.note`'s `LINKFILE`
   (base64 device path → basename without extension); `""` when unknown.
-- everything `analyze` derives sits under `analysis` keys and is **absent until the
-  page is analyzed**: per-title/per-link `analysis.name` (region transcriptions) and
-  the page-level `analysis` — `content` (the Markdown transcription, assembled from
-  the `<PAGEID>.md` sidecar) and `fields` (custom configured outputs). The view
-  mirrors the on-disk structure, so export templates and external consumers see one
-  shape. Fields may be added freely over time — there is no backward-compatibility
-  guarantee, so consumers should ignore unknown fields rather than pin a shape.
+- derived data sits under `analysis` keys: per-title/per-link `analysis.name`
+  (region transcriptions) and the page-level `analysis` — `content` (the Markdown
+  transcription, assembled from the `<PAGEID>.md` sidecar) and `fields` (custom
+  configured outputs). `content` is present whenever the page has a transcription —
+  AI-produced, user-edited or written entirely by hand via `analyze-edit` — while
+  region names and `fields` exist only once the page was AI-analyzed; everything is
+  absent before that. After a conflicted re-analysis, `content` carries standard
+  merge conflict markers until the user resolves them. The view mirrors the on-disk
+  structure, so export templates and external consumers see one shape. Fields may be
+  added freely over time — there is no backward-compatibility guarantee, so consumers
+  should ignore unknown fields rather than pin a shape.
 
 ## Consuming it (intended pattern)
 

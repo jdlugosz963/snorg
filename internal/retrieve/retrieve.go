@@ -38,9 +38,11 @@ type PageView struct {
 	Analysis *PageAnalysisView `json:"analysis,omitempty"`
 }
 
-// PageAnalysisView is the page's derived AI output: the transcribed content
-// (assembled from the <PAGEID>.md sidecar) plus custom named fields. Internal
-// bookkeeping like the source hash is deliberately not exposed.
+// PageAnalysisView is the page's transcription — AI-produced, user-edited or
+// user-written via analyze-edit (assembled from the <PAGEID>.md sidecar) —
+// plus custom named fields once the page was AI-analyzed. Internal bookkeeping
+// like the source hash is deliberately not exposed. Content may carry conflict
+// markers until a merge conflict from analyze is resolved.
 type PageAnalysisView struct {
 	Content string            `json:"content"`
 	Fields  map[string]string `json:"fields,omitempty"`
@@ -133,15 +135,21 @@ func getPage(a *archive.Archive, fileID string, ref archive.NotePageRef) (PageVi
 	if err != nil {
 		return PageView{}, fmt.Errorf("page %s: %w", ref.ID, err)
 	}
+	content, err := a.ReadAnalysisMD(fileID, ref.ID)
+	if err != nil {
+		return PageView{}, fmt.Errorf("page %s: %w", ref.ID, err)
+	}
+	// The md sidecar is the page's transcription whether AI-produced,
+	// user-edited or user-written (analyze-edit), so it is exposed whenever
+	// present; fields exist only once the page was AI-analyzed.
 	var analysis *PageAnalysisView
-	if pd.Analysis != nil {
-		content, err := a.ReadAnalysisMD(fileID, ref.ID)
-		if err != nil {
-			return PageView{}, fmt.Errorf("page %s: %w", ref.ID, err)
-		}
+	if pd.Analysis != nil || content != "" {
 		// The sidecar ends in a newline (file hygiene); the view carries the
 		// content itself so templates control the surrounding whitespace.
-		analysis = &PageAnalysisView{Content: strings.TrimRight(content, "\n"), Fields: pd.Analysis.Fields}
+		analysis = &PageAnalysisView{Content: strings.TrimRight(content, "\n")}
+		if pd.Analysis != nil {
+			analysis.Fields = pd.Analysis.Fields
+		}
 	}
 	return pageView(fileID, ref, pd, a.SVGRel(fileID, ref.ID), analysis), nil
 }

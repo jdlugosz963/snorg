@@ -10,6 +10,7 @@ snorg -a <archive-path> list
 snorg -a <archive-path> query <filter> [arg]
 snorg -a <archive-path> retrieve [PAGEID ...]
 snorg -a <archive-path> analyze [--force] [PAGEID ...]
+snorg -a <archive-path> analyze-edit <PAGEID>
 snorg -a <archive-path> export [PAGEID ...]
 ```
 
@@ -47,6 +48,13 @@ never aborts the batch). Unchanged pages are skipped without an LLM call (see
 snorg -a <archive> query all | snorg -c cfg.yaml -a <archive> analyze
 ```
 
+`analyze-edit` opens the page's transcription in `$VISUAL`/`$EDITOR` (exactly one
+PAGEID, no stdin — the editor needs the terminal) and needs no provider config:
+a page can be transcribed entirely by hand, without any LLM involved. Manual
+edits survive re-analysis (see "User edits" below); `analyze` reports `conflict`
+where an edit and the new transcription overlap, resolved by another
+`analyze-edit`.
+
 ## Archive layout (plaintext contract)
 
 ```
@@ -54,7 +62,10 @@ snorg -a <archive> query all | snorg -c cfg.yaml -a <archive> analyze
     note.json          # file metadata + ordered page placement (id, number)
     <PAGEID>.json      # per page: starred, titles(rect,level,analysis), keywords(text),
                        # links(...,analysis), analysis{source_hash,fields}
-    <PAGEID>.md        # per page: the analyze'd content transcription (Markdown)
+    <PAGEID>.md        # per page: the content transcription (Markdown), AI-produced
+                       # and/or user-edited — always the effective content
+    <PAGEID>.md.diff   # only while user edits diverge from the AI transcription:
+                       # unified diff AI-base → md (analyze-edit)
     <PAGEID>.svg       # per page rendered vector (one <path>/command per line)
     backgrounds/
         <sha256>.png   # page backgrounds, content-addressed, deduped per note
@@ -104,6 +115,20 @@ navigation → links → format. With overlays off, `background: inline` and no
 `colors`, the renderer's SVG is stored byte-verbatim. None of these stages changes
 the analyze fingerprint (path geometry only). See [config.md](config.md).
 
+**User edits.** `analyze-edit` opens the transcription in the user's editor.
+`<PAGEID>.md` always holds the *effective* content — what `retrieve`/`export`
+show — while `<PAGEID>.md.diff` records how it diverges from the last
+AI-produced transcription (the *base*, reconstructed by reverse-applying the
+diff; the file exists iff they diverge). On re-analysis the LLM is prompted
+with the base — **user edits never reach the LLM** — and the fresh output is
+3-way merged (`git merge-file`: base, user's md, new transcription); the md
+becomes the merge result and the diff is rebased onto the new base. Overlaps
+leave standard conflict markers (`<<<<<<< edited` / `>>>>>>> reanalyzed`) in
+the md and the `conflict` outcome; resolving is another `analyze-edit`. A page
+never analyzed by AI has an empty base, so a hand-written transcription meets
+its first AI run as one conflict to resolve once. git is a PATH tool here
+(like supernote-tool and pandoc), isolated in `internal/textmerge`.
+
 **Incremental update.** Re-ingest does not rebuild the directory (that would discard
 expensive per-page LLM analyses). Instead `archive.Write` reconciles: pages dropped
 from the note have all their `<PAGEID>.*` files pruned (`.md` included); `note.json`
@@ -131,7 +156,8 @@ transcription and is re-transcribed by the next `analyze` run.
   SVG pipeline (background mode → `recolor` → `injectNav` → `injectLinks` → `formatSVG`,
   each configurable); `read.go` are the layout-aware accessors (`List`/`ReadNote`/`ReadPage`/
   `ReadSVG`/`SVGRel`/`FindPage`) plus `WritePage` and the `<PAGEID>.md` sidecar pair
-  `ReadAnalysisMD`/`WriteAnalysisMD`.
+  `ReadAnalysisMD`/`WriteAnalysisMD`; `editdiff.go` owns the `<PAGEID>.md.diff`
+  sidecar and its invariant (`ReadAnalysisBase`/`WriteAnalysisEdit`/`MergeAnalysis`).
 - `internal/retrieve` — platform-agnostic read contract: assembles `note.json` + each
   `<PAGEID>.json` + `<PAGEID>.md` into denormalized `NoteView`s (the stable JSON
   consumers depend on). `Get` takes PAGEIDs and groups them per owning note (archive
@@ -145,10 +171,18 @@ transcription and is re-transcribed by the next `analyze` run.
 - `internal/analyze` — incremental vision-LLM analysis of one page (by PAGEID): fingerprints
   the page by its path geometry (`pathHash`, `analysis.source_hash`) and skips unchanged
   pages without even rasterizing; otherwise rasterizes the SVG (`oksvg`/`rasterx`),
-  transcribes the page (through the update prompt + previous `<PAGEID>.md` when one exists),
-  crops title/link rects, runs the custom fields, and writes `<PAGEID>.md` + `<PAGEID>.json`.
+  transcribes the page (through the update prompt + the previous AI base when one exists —
+  never the user-edited text), 3-way merges the result with any user edits
+  (`archive.MergeAnalysis`; overlap → the `conflict` outcome), crops title/link rects, runs
+  the custom fields over the effective content, and writes `<PAGEID>.md` + `<PAGEID>.json`.
   The geometry hash is invariant under recolor/background/overlays, so restyling never
   re-triggers analysis. External deps: `openai-go`, `oksvg`/`rasterx`.
+- `internal/edit` — the `analyze-edit` command's orchestration: opens the page's
+  transcription in the user's editor (`sh -c`, terminal inherited, temp copy so an
+  aborted editor changes nothing) and stores the result via `archive.WriteAnalysisEdit`.
+- `internal/textmerge` — unified-diff/3-way-merge plumbing shelling out to `git`
+  (`Diff`/`Unapply`/`Merge`); pure text-in/text-out, the only place that executes git.
+  PATH tool: `git`.
 - `internal/export` — renders the retrieved `[]*retrieve.NoteView` through one pongo2
   template in a single pass (`export` cmd): views → JSON → context under the `notes`
   key, so templates bind to the `retrieve` json array verbatim and can span notes;

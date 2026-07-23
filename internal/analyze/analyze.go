@@ -60,13 +60,15 @@ type Spec struct {
 }
 
 // Outcome says what Page did: skipped an unchanged page, analyzed a fresh one,
-// or updated an existing analysis against the previous transcription.
+// updated an existing analysis against the previous transcription, or left
+// conflict markers where the new analysis and the user's edits overlap.
 type Outcome string
 
 const (
-	Skipped  Outcome = "skipped"
-	Analyzed Outcome = "analyzed"
-	Updated  Outcome = "updated"
+	Skipped    Outcome = "skipped"
+	Analyzed   Outcome = "analyzed"
+	Updated    Outcome = "updated"
+	Conflicted Outcome = "conflict" // resolve via analyze-edit
 )
 
 // Page locates the page owning pageID and analyzes it through t and g per spec:
@@ -74,7 +76,9 @@ const (
 // custom fields into <PAGEID>.json. A page whose rasterized pixels match the
 // stored analysis source hash is skipped without any LLM call unless force is
 // set; a changed page with a previous transcription is re-analyzed through the
-// update prompt so the new content diffs minimally against the old.
+// update prompt so the new content diffs minimally against the old. User edits
+// (analyze-edit) are 3-way merged back onto the new transcription; overlaps
+// leave conflict markers in the md and report the Conflicted outcome.
 func Page(ctx context.Context, a *archive.Archive, t Transcriber, g Generator, spec Spec, pageID string, force bool) (Outcome, error) {
 	fileID, err := a.FindPage(pageID)
 	if err != nil {
@@ -103,15 +107,19 @@ func Page(ctx context.Context, a *archive.Archive, t Transcriber, g Generator, s
 	if err != nil {
 		return "", err
 	}
+	// "Previous" is the AI base: the md with any user edit diff reverse-applied
+	// (see archive.ReadAnalysisBase). The LLM never sees the user's edits; they
+	// are re-applied by the 3-way merge below. A page with only user-written
+	// content has an empty base and gets a fresh transcription.
 	outcome := Analyzed
+	base, err := a.ReadAnalysisBase(fileID, pageID)
+	if err != nil {
+		return "", err
+	}
 	prompt := spec.Content
-	if pd.Analysis != nil {
-		if prev, err := a.ReadAnalysisMD(fileID, pageID); err != nil {
-			return "", err
-		} else if prev != "" {
-			outcome = Updated
-			prompt = spec.Update + "\n\n" + prev
-		}
+	if base != "" {
+		outcome = Updated
+		prompt = spec.Update + "\n\n" + base
 	}
 	content, err := t.Transcribe(ctx, prompt, page)
 	if err != nil {
@@ -134,9 +142,20 @@ func Page(ctx context.Context, a *archive.Archive, t Transcriber, g Generator, s
 		pd.Links[i].Analysis = &archive.LinkAnalysis{Name: name}
 	}
 
+	// The merge writes the md: theirs (the fresh transcription) reconciled with
+	// any user edits. Fields derive from the effective content — what the user
+	// actually sees — not the raw LLM output.
+	effective, conflicts, err := a.MergeAnalysis(fileID, pageID, content)
+	if err != nil {
+		return "", err
+	}
+	if conflicts {
+		outcome = Conflicted
+	}
+
 	analysis := &archive.PageAnalysis{SourceHash: hash}
 	for _, f := range spec.Fields {
-		out, err := g.Generate(ctx, f.Prompt, content)
+		out, err := g.Generate(ctx, f.Prompt, effective)
 		if err != nil {
 			return "", fmt.Errorf("field %s: %w", f.Name, err)
 		}
@@ -146,9 +165,6 @@ func Page(ctx context.Context, a *archive.Archive, t Transcriber, g Generator, s
 		analysis.Fields[f.Name] = strings.TrimSpace(out)
 	}
 
-	if err := a.WriteAnalysisMD(fileID, pageID, content); err != nil {
-		return "", err
-	}
 	pd.Analysis = analysis
 	if err := a.WritePage(fileID, pd); err != nil {
 		return "", err

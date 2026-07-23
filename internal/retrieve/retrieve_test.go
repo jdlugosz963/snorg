@@ -172,6 +172,33 @@ func TestGetAssemblesAnalysis(t *testing.T) {
 	}
 }
 
+// TestGetExposesHumanTranscription: a page never AI-analyzed but transcribed
+// by hand (analyze-edit) still surfaces its md as analysis.content — without
+// fields, which exist only once the page was AI-analyzed.
+func TestGetExposesHumanTranscription(t *testing.T) {
+	a := archive.New(t.TempDir())
+	n := &snote.Note{FileID: "F_TEST", Pages: []snote.Page{{ID: "Pa", Number: 1}, {ID: "Pb", Number: 2}}}
+	writeNote(t, a, n, map[string]string{"Pa": "<svg/>", "Pb": "<svg/>"})
+	if err := a.WriteAnalysisMD("F_TEST", "Pa", "written by hand"); err != nil {
+		t.Fatal(err)
+	}
+
+	views, err := retrieve.Get(a, []string{"Pa", "Pb"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pa, pb := views[0].Pages[0], views[0].Pages[1]
+	if pa.Analysis == nil || pa.Analysis.Content != "written by hand" {
+		t.Errorf("analysis = %+v, want the hand-written content", pa.Analysis)
+	}
+	if pa.Analysis != nil && pa.Analysis.Fields != nil {
+		t.Errorf("fields = %+v, want none without AI analysis", pa.Analysis.Fields)
+	}
+	if pb.Analysis != nil {
+		t.Errorf("page without md or analysis got %+v, want nil", pb.Analysis)
+	}
+}
+
 func TestListEnumeratesNotes(t *testing.T) {
 	root := t.TempDir()
 	a := archive.New(root)

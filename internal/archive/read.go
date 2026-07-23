@@ -97,10 +97,14 @@ func (a *Archive) WritePage(fileID string, pd PageDoc) error {
 	return writeJSONIfChanged(filepath.Join(a.Root, fileID, pd.PageID+".json"), pd)
 }
 
+func (a *Archive) analysisMDPath(fileID, pageID string) string {
+	return filepath.Join(a.Root, fileID, pageID+".md")
+}
+
 // ReadAnalysisMD returns the page's transcribed content from <fileID>/<pageID>.md.
 // A missing sidecar means the page was never analyzed and reads as ("", nil).
 func (a *Archive) ReadAnalysisMD(fileID, pageID string) (string, error) {
-	b, err := os.ReadFile(filepath.Join(a.Root, fileID, pageID+".md"))
+	b, err := os.ReadFile(a.analysisMDPath(fileID, pageID))
 	if os.IsNotExist(err) {
 		return "", nil
 	}
@@ -111,10 +115,20 @@ func (a *Archive) ReadAnalysisMD(fileID, pageID string) (string, error) {
 }
 
 // WriteAnalysisMD writes the page's transcribed content (markdown) to the
-// <fileID>/<pageID>.md sidecar, normalized to exactly one trailing newline.
+// <fileID>/<pageID>.md sidecar in NormMD form.
 func (a *Archive) WriteAnalysisMD(fileID, pageID, content string) error {
-	content = strings.TrimRight(content, "\n") + "\n"
-	return writeFileIfChanged(filepath.Join(a.Root, fileID, pageID+".md"), []byte(content))
+	return writeFileIfChanged(a.analysisMDPath(fileID, pageID), []byte(NormMD(content)))
+}
+
+// NormMD normalizes transcription content to its stored form: exactly one
+// trailing newline, with newline-only content collapsing to empty. Edit diffs
+// are computed and compared in this form so they match the bytes on disk.
+func NormMD(s string) string {
+	s = strings.TrimRight(s, "\n")
+	if s == "" {
+		return ""
+	}
+	return s + "\n"
 }
 
 func readJSON(path string, v any) error {

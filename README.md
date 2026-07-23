@@ -5,12 +5,14 @@ machine-readable, VCS-friendly archive for later retrieval, analysis and export.
 
 The `.note` binary format is handled by shelling out to
 [`supernote-tool`](https://github.com/jya-dev/supernote-tool) (must be on `PATH`);
-the org-mode export filter shells out to `pandoc`. Written in Go.
+the org-mode export filter shells out to `pandoc`, and `analyze-edit` uses `git`
+for its diff/merge plumbing. Written in Go.
 
 ## Quick start
 
 Prerequisites: [`supernote-tool`](https://github.com/jya-dev/supernote-tool) on
-`PATH` (required for ingest); `pandoc` only if you export to org-mode.
+`PATH` (required for ingest); `pandoc` only if you export to org-mode; `git`
+only if you edit transcriptions with `analyze-edit`.
 
 Install the CLI (puts `snorg` on your `PATH` via `$GOBIN`/`$GOPATH/bin`):
 
@@ -31,6 +33,10 @@ snorg -a ~/notes/archive query note <FILE_ID> | \
 snorg -a ~/notes/archive query all | \
   snorg -c config.yaml -a ~/notes/archive analyze            # skips unchanged pages
 
+# Fix a transcription by hand — or write one without any LLM at all.
+# Edits are stored as a diff and survive re-analysis via a 3-way merge.
+snorg -a ~/notes/archive analyze-edit <PAGEID>               # opens $VISUAL/$EDITOR
+
 # Export through a template (see examples/config.yaml).
 snorg -a ~/notes/archive query note <FILE_ID> | \
   snorg -c examples/config.yaml -a ~/notes/archive export
@@ -49,14 +55,17 @@ snorg -a <archive> query all | \
   snorg -a <archive> retrieve            # assembled notes as JSON (grouped per note)
 snorg -a <archive> query all | \
   snorg -c cfg.yaml -a <archive> analyze # LLM analysis (skips unchanged pages)
+snorg -a <archive> analyze-edit <PAGEID> # edit a transcription in $VISUAL/$EDITOR
 snorg -a <archive> query note <FILE_ID> | \
   snorg -c examples/config.yaml -a <archive> export  # render a template per note
 ```
 
 `retrieve`, `analyze` and `export` take PAGEIDs as arguments or stdin lines, so
-`query` pipes into any of them.
+`query` pipes into any of them. `analyze-edit` takes exactly one PAGEID (the
+editor needs the terminal); manual edits survive re-analysis — overlaps surface
+as merge conflict markers to resolve with another `analyze-edit`.
 
-Archive layout: `<archive>/<FILE_ID>/{note.json,<PAGEID>.json,<PAGEID>.md,<PAGEID>.svg,backgrounds/}`.
+Archive layout: `<archive>/<FILE_ID>/{note.json,<PAGEID>.json,<PAGEID>.md[.diff],<PAGEID>.svg,backgrounds/}`.
 
 ## Shell completion
 
