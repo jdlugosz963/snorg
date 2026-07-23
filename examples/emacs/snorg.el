@@ -29,6 +29,12 @@
 ;;   against older/newer revisions, and `q' quits (restoring the folding).
 ;;   The page SVG is read from the heading's :SNORG_SVGP: property.
 ;;
+;; - `snorg-analyze-edit' -- edit the transcription of the page heading at
+;;   point (its :SNORG_PAGEID:) via the CLI's `analyze-edit', opening it in
+;;   this Emacs through emacsclient (finish with `C-x #').  Edits survive
+;;   re-analysis, and the note's subtree is refreshed in place.  Also bound
+;;   to `e' in `snorg-view-mode'.
+;;
 ;; - `snorg-command-map' -- an (unbound) prefix keymap gathering the interactive
 ;;   commands; bind it to a prefix key of your choice.
 ;;
@@ -42,6 +48,10 @@
 (require 'json)
 (require 'subr-x)
 (require 'cl-lib)
+
+;; `server' is loaded lazily by `snorg--emacsclient-editor' (only that command
+;; needs it), so declare its function to keep the byte-compiler quiet.
+(declare-function server-running-p "server")
 
 ;;;; Configuration
 
@@ -283,6 +293,108 @@ errors are collected and reported at the end rather than aborting the run."
                  (mapconcat #'car (reverse failures) ", "))
       (message "snorg: imported %d note(s)" total))))
 
+;;;; Analyze-edit (transcription editing)
+
+(defvar snorg-analyze-edit-editor nil
+  "Editor command line passed to `snorg analyze-edit' as $VISUAL/$EDITOR.
+When nil, an `emacsclient' invocation for the current Emacs server is
+derived automatically, so the transcription opens in this Emacs (finish
+with \\[server-edit], `C-x #').  Set this to override, e.g. for a
+terminal Emacs, or a TCP/named server emacsclient cannot reach by default.")
+
+(defvar snorg-analyze-edit-refresh t
+  "When non-nil, re-import the owning note after a content-changing edit,
+so the new transcription appears in the org buffer immediately.")
+
+(defun snorg--page-id-at-point ()
+  "Return the PAGEID of the page heading at point, or nil.
+Read from the `SNORG_PAGEID' property set by the export template, the
+same page identity `snorg-view' navigates by."
+  (let ((id (org-entry-get nil "SNORG_PAGEID")))
+    (and id (not (string-empty-p id)) id)))
+
+(defun snorg--emacsclient-editor ()
+  "Return an `emacsclient' command line for the running Emacs server.
+Start the server when needed, and append `-s SERVER-NAME' for a
+non-default server name so emacsclient reaches this Emacs."
+  (require 'server)
+  (unless (server-running-p)
+    (server-start))
+  (if (and (boundp 'server-name) server-name
+           (not (equal server-name "server")))
+      (concat "emacsclient -s " (shell-quote-argument server-name))
+    "emacsclient"))
+
+(defun snorg--analyze-edit-refresh (pageid origin view-p)
+  "Refresh the note owning PAGEID after an edit and restore the view.
+ORIGIN is the buffer point was in when the edit started; VIEW-P says
+whether `snorg-view-mode' was active there.  Reuses `snorg--import' to
+regenerate the note's subtree from the freshly written transcription."
+  (snorg-reset-cache)
+  (let* ((json-object-type 'alist)
+         (json-array-type 'list)
+         (json-key-type 'symbol)
+         (view (car (json-read-from-string (snorg--call "retrieve" pageid))))
+         (file-id (alist-get 'file_id view)))
+    (when file-id
+      (snorg--import file-id)
+      (when (buffer-live-p origin)
+        (with-current-buffer origin
+          (let ((pos (org-find-property "SNORG_PAGEID" pageid)))
+            (when pos
+              (goto-char pos)
+              (if view-p
+                  (snorg--show-page)
+                (org-fold-show-entry)))))))))
+
+;;;###autoload
+(defun snorg-analyze-edit ()
+  "Edit the transcription of the page heading at point.
+Grab the page's PAGEID (its :SNORG_PAGEID: property, as `snorg-view'
+does) and run `snorg analyze-edit', opening the transcription in this
+Emacs via emacsclient; finish editing with \\[server-edit] (`C-x #').
+The edit is stored so it survives re-analysis, and the note's org subtree
+is refreshed in place (see `snorg-analyze-edit-refresh').  Works on a
+never-analyzed page too: the buffer opens empty and the text you save
+becomes a hand transcription."
+  (interactive)
+  (let ((pageid (snorg--page-id-at-point)))
+    (unless pageid
+      (user-error "Point is not on a heading with a :SNORG_PAGEID: property"))
+    (let* ((editor (or snorg-analyze-edit-editor (snorg--emacsclient-editor)))
+           (origin (current-buffer))
+           (view-p (bound-and-true-p snorg-view-mode))
+           ;; The CLI opens the temp .md through $VISUAL/$EDITOR; point both
+           ;; at emacsclient so the edit lands in this Emacs.  The process must
+           ;; be async: a blocking call would deadlock (the CLI waits on
+           ;; emacsclient, which waits on this Emacs).
+           (process-environment
+            (append (list (concat "VISUAL=" editor)
+                          (concat "EDITOR=" editor))
+                    process-environment))
+           (proc (make-process
+                  :name "snorg-analyze-edit"
+                  :buffer (generate-new-buffer " *snorg-analyze-edit*")
+                  :noquery t
+                  :command (append (list snorg-executable)
+                                   (snorg--global-args)
+                                   (list "analyze-edit" pageid)))))
+      (set-process-sentinel
+       proc
+       (lambda (p _event)
+         (when (memq (process-status p) '(exit signal))
+           (let ((out (with-current-buffer (process-buffer p)
+                        (string-trim (buffer-string)))))
+             (kill-buffer (process-buffer p))
+             (if (not (eq (process-exit-status p) 0))
+                 (message "snorg analyze-edit failed: %s"
+                          (if (string-empty-p out) "(no output)" out))
+               (message "snorg: %s" out)
+               (when (and snorg-analyze-edit-refresh
+                          (string-match "\\(edited\\|reverted\\)\\'" out))
+                 (snorg--analyze-edit-refresh pageid origin view-p)))))))
+      (message "snorg: editing %s -- finish with C-x #" pageid))))
+
 ;;;; Org link types
 
 (defun snorg--follow-svg (path _)
@@ -371,6 +483,7 @@ Computed lazily and cleared when the reviewed page changes.")
     (define-key map (kbd "M-n") #'snorg-view-next)
     (define-key map (kbd "M-p") #'snorg-view-prev)
     (define-key map (kbd "o")   #'snorg-view-open-external)
+    (define-key map (kbd "e")   #'snorg-analyze-edit)
     (define-key map (kbd "M-P") #'snorg-view-diff-older)
     (define-key map (kbd "M-N") #'snorg-view-diff-newer)
     (define-key map (kbd "q")   #'snorg-view-quit)
@@ -430,8 +543,9 @@ Reset the diff overlay state so page navigation drops back to the plain SVG."
   "Open a dual-window review for the page heading at point.
 The note stays on the left; the page SVG shows on the right.  Use
 `M-n'/`M-p' to move between pages, `o' to open the SVG in the system
-viewer, `M-P'/`M-N' to step a git diff overlay against older/newer
-revisions, and `q' to quit."
+viewer, `e' to edit the current page's transcription (`snorg-analyze-edit'),
+`M-P'/`M-N' to step a git diff overlay against older/newer revisions, and
+`q' to quit."
   (interactive)
   (unless (org-entry-get nil "SNORG_SVGP")
     (user-error "Point is not on a heading with a :SNORG_SVGP: property"))
@@ -668,6 +782,7 @@ unchanged strokes come through from the current SVG unaltered."
     (define-key map "i" #'snorg-import)
     (define-key map "I" #'snorg-import-all)
     (define-key map "v" #'snorg-view)
+    (define-key map "e" #'snorg-analyze-edit)
     (define-key map "r" #'snorg-reset-cache)
     map)
   "Prefix keymap gathering the interactive snorg commands.
