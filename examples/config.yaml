@@ -38,7 +38,8 @@ ingest:
 # note.pages -> titles/keywords/links/analysis; same keys, same nesting. Rendered with
 # trim_blocks + lstrip_blocks: keep {% %} tags on their own lines; never END an output
 # line with one. Filters beyond the pongo2 built-ins (docs/config.md): denote, org,
-# nestorgheadings:N, nestmdheadings:N (demote Markdown '#' headings by N).
+# html (markdown->HTML via pandoc; see examples/web/), nestorgheadings:N,
+# nestmdheadings:N (demote Markdown '#' headings by N).
 export:
   template: |
     {% for note in notes %}

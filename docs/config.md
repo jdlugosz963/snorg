@@ -157,6 +157,10 @@ Beyond the pongo2 built-ins (registered by `internal/export`):
   org-mode by shelling out to `pandoc` (must be on PATH; empty input renders empty
   without invoking it): `{{ page.analysis.content|org }}`.
 
+- **`html`** *(HTML only)* — converts Markdown to an HTML fragment via `pandoc`
+  (same PATH/empty-input rules as `org`); the result is marked safe so it is
+  emitted unescaped: `{{ page.analysis.content|html }}` (see `examples/web/`).
+
 - **`nestorgheadings:N`** *(org-mode only)* — demotes org headings by N stars (every
   line starting with `*` gains N), so page content nests under the template's own
   headings: `{{ page.analysis.content|org|nestorgheadings:2 }}`. N defaults to 1.

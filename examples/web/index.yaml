@@ -1,0 +1,31 @@
+# examples/web/index.yaml — the listing page for the static HTML site export.
+# Used by examples/web/export.sh as the config for index.html: it renders ALL the
+# retrieved notes into one <ul>, each linking to its own <FILE_ID>.html page (see
+# the note.yaml sibling for the per-note template, README.md for the workflow).
+export:
+  template: |
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Notes</title>
+    <style>
+    body { font-family: system-ui, sans-serif; max-width: 48rem; margin: 2rem auto; padding: 0 1rem; line-height: 1.5; }
+    h1 { border-bottom: 2px solid #ddd; padding-bottom: .3rem; }
+    ul { list-style: none; padding: 0; }
+    li { margin: .4rem 0; }
+    a { text-decoration: none; color: #06c; }
+    a:hover { text-decoration: underline; }
+    .count { color: #888; font-size: .9em; }
+    </style>
+    </head>
+    <body>
+    <h1>Notes</h1>
+    <ul>
+    {% for note in notes %}
+    <li><a href="{{ note.file_id }}.html">{{ note.source|cut:".note" }}</a> <span class="count">{{ note.pages|length }} page(s)</span></li>
+    {% endfor %}
+    </ul>
+    </body>
+    </html>

@@ -1,0 +1,87 @@
+# examples/web/note.yaml — the per-note page for the static HTML site export.
+# Used by examples/web/export.sh as the config for each <FILE_ID>.html. The script
+# feeds it a single note's pages at a time, but the template loops notes/pages
+# defensively. Per page it shows the SVG inline (page.svg is archive-relative —
+# export.sh copies the SVGs alongside the HTML so the src resolves), renders the
+# analysis Markdown to HTML with the `html` filter (pandoc), and links internal
+# note links to their own <FILE_ID>.html#<target_page_id>. Each page section is
+# anchored by its stable page id (#P…, the canonical anchor the heading link and
+# incoming links use) and also by number (#pageN, for readable/manual URLs); both
+# are listed in a table of contents at the top. The "Page N" heading is itself a
+# link to its #P… anchor, so clicking it drops that anchor into the URL bar (to
+# copy/share) with no JavaScript. The transcription is collapsed by default behind
+# a <details> toggle (also native, no JavaScript).
+export:
+  template: |
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    {% for note in notes %}
+    <title>{{ note.source|cut:".note" }}</title>
+    {% endfor %}
+    <style>
+    body { font-family: system-ui, sans-serif; max-width: 60rem; margin: 2rem auto; padding: 0 1rem; line-height: 1.5; }
+    h1 { border-bottom: 2px solid #ddd; padding-bottom: .3rem; }
+    nav a { color: #06c; text-decoration: none; }
+    .toc { margin: 1.5rem 0; }
+    .toc ul { list-style: none; padding-left: 0; }
+    .toc li { margin: .2rem 0; }
+    .page { margin: 2rem 0; padding-top: 1rem; border-top: 1px solid #eee; scroll-margin-top: 1rem; }
+    .page h2 a { color: inherit; text-decoration: none; }
+    .page h2 a:hover { text-decoration: underline; }
+    .anchor { display: block; position: relative; visibility: hidden; scroll-margin-top: 1rem; }
+    .page img { max-width: 100%; height: auto; border: 1px solid #ddd; }
+    .kw code { background: #f2f2f2; padding: .05rem .3rem; border-radius: 3px; margin-right: .3rem; }
+    details.analysis { margin-top: 1rem; }
+    details.analysis > summary { cursor: pointer; display: inline-block; padding: .3rem .7rem; background: #f2f2f2; border-radius: 4px; color: #06c; user-select: none; }
+    details.analysis[open] > summary { margin-bottom: .5rem; }
+    .links a { color: #06c; }
+    </style>
+    </head>
+    <body>
+    <nav><a href="index.html">← index</a></nav>
+    {% for note in notes %}
+    <h1>{{ note.source|cut:".note" }}</h1>
+    <nav class="toc">
+    <h2>Contents</h2>
+    <ul>
+    {% for page in note.pages %}
+    <li><a href="#page{{ page.number }}">{% if page.starred %}⭐{% endif %} Page {{ page.number }}</a></li>
+    {% endfor %}
+    </ul>
+    </nav>
+    {% for page in note.pages %}
+    <section class="page" id="{{ page.page_id }}">
+    <span class="anchor" id="page{{ page.number }}"></span>
+    {% if page.starred %}
+    <h2><a class="page-anchor" href="#{{ page.page_id }}">⭐ Page {{ page.number }}</a></h2>
+    {% else %}
+    <h2><a class="page-anchor" href="#{{ page.page_id }}">Page {{ page.number }}</a></h2>
+    {% endif %}
+    {% if page.keywords %}
+    <p class="kw">{% for kw in page.keywords %}<code>{{ kw.text }}</code>{% endfor %}</p>
+    {% endif %}
+    <img src="{{ page.svg }}" alt="Page {{ page.number }}">
+    {% if page.analysis.content %}
+    <details class="analysis">
+    <summary>Transcription</summary>
+    <div class="analysis-body">{{ page.analysis.content|html }}</div>
+    </details>
+    {% endif %}
+    {% if page.links %}
+    <div class="links">
+    <h3>Links</h3>
+    <ul>
+    {% for link in page.links %}
+    <li><a href="{{ link.target_file_id }}.html#{{ link.target_page_id }}">{{ link.analysis.name|default:link.name|cut:".note" }}</a></li>
+    {% endfor %}
+    </ul>
+    </div>
+    {% endif %}
+    </section>
+    {% endfor %}
+    {% endfor %}
+    </body>
+    </html>
