@@ -15,6 +15,8 @@
 // retrieve, analyze and export take PAGEIDs as arguments or stdin lines, so
 // query pipes into any of them. query itself also reads PAGEIDs from stdin when
 // they are piped in, restricting its filter to that set (query A | query B == A∩B).
+// A "not" prefix inverts any filter (query not starred == the non-starred pages),
+// so query A | query not B == A minus B.
 // analyze-edit takes exactly one PAGEID (it opens $VISUAL/$EDITOR on the page's
 // transcription, so it needs the terminal, not a pipe).
 package main
@@ -276,7 +278,7 @@ func pageIDArgs(cmd *cli.Command) ([]string, error) {
 	return pageIDs, nil
 }
 
-const queryFilters = "all, note <FILE_ID>, unanalyzed, keyword <regexp>, starred, date <spec>"
+const queryFilters = "all, note <FILE_ID>, unanalyzed, keyword <regexp>, starred, date <spec>, not <filter> (inverse)"
 
 func queryCmd(a *app) *cli.Command {
 	return &cli.Command{
@@ -319,6 +321,18 @@ func queryPredicate(filter string, args []string) (query.Predicate, error) {
 			return fmt.Errorf("usage: snorg -a <archive-path> query %s", usage)
 		}
 		return nil
+	}
+	// "not" is a prefix that inverts any filter: it recurses on the rest (so the
+	// inner filter's own arg parsing/arity apply verbatim) and negates the result.
+	if filter == "not" {
+		if len(args) < 1 {
+			return nil, fmt.Errorf("usage: snorg -a <archive-path> query not <filter> [arg]\n  filters: %s", queryFilters)
+		}
+		inner, err := queryPredicate(args[0], args[1:])
+		if err != nil {
+			return nil, err
+		}
+		return query.Not(inner), nil
 	}
 	switch filter {
 	case "all":

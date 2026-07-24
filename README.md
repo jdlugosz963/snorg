@@ -94,6 +94,31 @@ pairs an org-mode export template (`examples/emacs/orgmode.yaml`) with `snorg.el
 which drives the `snorg` CLI to import notes as denote org files and adds org links
 that open a page's SVG or jump between notes. See `examples/emacs/README.md`.
 
+## Example: static HTML site
+
+[`examples/web/`](examples/web/) turns a selection of pages into a servable,
+static HTML site: `export.sh` reads PAGEIDs on stdin, renders one listing page
+(`index.html`) and one page per note over the pages you picked, and copies each
+page's SVG so the `<img>` references resolve. Nothing to host but files.
+
+```sh
+# Select pages, then build + serve the site.
+sort -u \
+  <(snorg -a ~/notes/sn query starred) \
+  <(snorg -a ~/notes/sn query keyword 'TODO') \
+  | snorg -a ~/notes/sn query date 2026-07-01.. \
+  | ./examples/web/export.sh -y ~/notes/sn /tmp/snorg-web-export/
+
+python -m http.server -d /tmp/snorg-web-export/   # then open http://localhost:8000
+```
+
+The selection is plain set algebra over PAGEID lists — this pipeline builds
+**(is starred OR has keyword `TODO`) AND is newer than 2026-07-01**:
+
+Because every step is just lines of PAGEIDs, you compose selections with ordinary
+shell tools (`sort -u`, `comm`, `grep`) and feed the result to `export.sh`,
+`retrieve`, `analyze`, or `export`. See `examples/web/README.md`.
+
 ## More
 
 See `docs/` for principles, architecture, the `.note` format, configuration and

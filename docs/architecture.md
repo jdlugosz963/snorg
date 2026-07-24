@@ -29,7 +29,8 @@ note's directory in place (see Archive layout); it is the update path.
 `list`, `query` and `retrieve` are the read side — the platform-agnostic interface
 external tools build on (see [retrieval.md](retrieval.md)). `query` takes one
 filter per call — `all`, `note <FILE_ID>`, `unanalyzed`, `keyword <regexp>`
-(matched against `Keyword.Text`), `starred` — and prints the PAGEID of each
+(matched against `Keyword.Text`), `starred`, `date <spec>`, and a `not <filter>`
+prefix that inverts any of them — and prints the PAGEID of each
 matching page, one per line. `retrieve`, `analyze` and `export` all take PAGEIDs
 as arguments, or read them one-per-line from stdin when none are given, so
 `query` pipes into any of them.

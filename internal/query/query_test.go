@@ -182,6 +182,29 @@ func TestDate(t *testing.T) {
 	}
 }
 
+func TestNot(t *testing.T) {
+	a := seedArchive(t)
+
+	// Not inverts a filter: the non-starred pages are Pb, Pd.
+	ms, err := query.Pages(a, query.Not(query.Starred))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"Pb", "Pd"}; !reflect.DeepEqual(pageIDs(ms), want) {
+		t.Errorf("not starred = %v, want %v", pageIDs(ms), want)
+	}
+
+	// Under piping (And ∩ InSet) it means "candidates minus matched".
+	pred := query.And(query.InSet([]string{"Pa", "Pb", "Pc"}), query.Not(query.Starred))
+	ms, err = query.Pages(a, pred)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"Pb"}; !reflect.DeepEqual(pageIDs(ms), want) {
+		t.Errorf("InSet∩not starred = %v, want %v", pageIDs(ms), want)
+	}
+}
+
 func TestInSetAnd(t *testing.T) {
 	a := seedArchive(t)
 	// InSet restricts to the given ids; And intersects with a filter.

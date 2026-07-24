@@ -61,6 +61,12 @@ func And(preds ...Predicate) Predicate {
 	}
 }
 
+// Not matches exactly the pages pred does not (the inverse of a filter). Under
+// piping it combines via And, so query A | query not B == A minus B.
+func Not(pred Predicate) Predicate {
+	return func(fileID string, pd archive.PageDoc) bool { return !pred(fileID, pd) }
+}
+
 // InSet matches pages whose PAGEID is in ids (an empty set matches nothing). This
 // is the restriction applied when PAGEIDs are piped into query on stdin.
 func InSet(ids []string) Predicate {
