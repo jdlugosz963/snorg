@@ -1,39 +1,60 @@
-;;; snorg.el --- Org/denote client for the snorg archive -*- lexical-binding: t; -*-
+;;; snorg.el --- Org client for the snorg archive -*- lexical-binding: t; -*-
 
 ;; Author: Jakub Dlugosz
 ;; Keywords: outlines, convenience
-;; Package-Requires: ((emacs "28.1") (denote "3.0") (org "9.6"))
+;; Package-Requires: ((emacs "28.1") (org "9.6"))
 
 ;;; Commentary:
 
 ;; Emacs client for `snorg' (supernote-organizer).  It talks to the snorg
 ;; CLI (`list', `query', `retrieve', `export') and brings archived Supernote
-;; notes into Emacs as denote org notes.  `retrieve' and `export' are
+;; notes into Emacs as org notes.  `retrieve' and `export' are
 ;; page-oriented (they take PAGEIDs), so the per-note helpers here first ask
 ;; `query note' for the note's pages.
+;;
+;; Where imported notes live is a pluggable *backend*: this file holds the
+;; generic interface (`snorg-backend-find'/`snorg-backend-create', dispatched
+;; on `snorg-backend'), and a backend file implements it for a note-taking
+;; package -- (require 'snorg-denote) for denote, (require 'snorg-org-roam)
+;; for org-roam.  Loading a backend selects it when none is set yet.  The
+;; identity core hands a backend is the raw snorg FILE_ID; each backend owns
+;; the translation to and from its own note id (both directions).
 ;;
 ;; Features:
 ;;
 ;; - `snorg-import' -- pick an archived note by its `source' name and import
-;;   it into a denote note (created fresh, or its generated subtree refreshed
+;;   it into a backend note (created fresh, or its generated subtree refreshed
 ;;   in place on re-import).  `snorg-import-all' imports every archived note.
 ;;
-;; - Two org link types, both with `C-c C-l' completion: `snorg:' opens a page
-;;   SVG from the archive, and `denote-snorg:IDENTIFIER::PAGEID' jumps to a
-;;   denote note and moves point to the heading whose :SNORG_PAGEID: matches PAGEID.
+;; - Org link types with `C-c C-l' completion (both defined here): `snorg:'
+;;   opens a page SVG from the archive; `snorg-note:FILE_ID::PAGEID' resolves
+;;   the raw snorg FILE_ID through the active backend, jumps to that note and
+;;   moves point to the heading whose :SNORG_PAGEID: matches PAGEID.
 ;;
 ;; - `snorg-view' -- a dual-window review mode: the note buffer on the left,
 ;;   the current page SVG on the right; the left buffer folds to just the page
-;;   under review.  `M-n'/`M-p' cycle pages, `o' opens the SVG in the system
-;;   viewer (xdg-open), `M-P'/`M-N' step a git diff overlay of the current page
-;;   against older/newer revisions, and `q' quits (restoring the folding).
-;;   The page SVG is read from the heading's :SNORG_SVGP: property.
+;;   under review.  Entry finds the page from anywhere in the note: the
+;;   heading at point, else the nearest ancestor with :SNORG_SVGP:, else the
+;;   first page heading in the file.  The mode is strict -- the buffer goes
+;;   read-only and printable keys are review commands, not self-insert:
+;;   `n'/`p' cycle pages, `o' opens the SVG in the system viewer (xdg-open),
+;;   `P'/`N' step a git diff overlay of the current page against older/newer
+;;   revisions (a numeric prefix steps several at once),
+;;   `h' lists the keys, and `q' quits, restoring the
+;;   folding, the window layout and point from before entry.  A header line
+;;   summarizes the keys.  The page SVG is read from the heading's
+;;   :SNORG_SVGP: property.
 ;;
 ;; - `snorg-analyze-edit' -- edit the transcription of the page heading at
 ;;   point (its :SNORG_PAGEID:) via the CLI's `analyze-edit', opening it in
 ;;   this Emacs through emacsclient (finish with `C-x #').  Edits survive
 ;;   re-analysis, and the note's subtree is refreshed in place.  Also bound
 ;;   to `e' in `snorg-view-mode'.
+;;
+;; - `snorg-analyze' -- (re-)transcribe the page heading at point (its
+;;   :SNORG_PAGEID:) via the CLI's `analyze', after a `yes-or-no-p' guard
+;;   (it may spend an LLM call).  Runs asynchronously and refreshes the
+;;   note's subtree in place.  Also bound to `a' in `snorg-view-mode'.
 ;;
 ;; - `snorg-command-map' -- an (unbound) prefix keymap gathering the interactive
 ;;   commands; bind it to a prefix key of your choice.
@@ -44,7 +65,6 @@
 ;;; Code:
 
 (require 'org)
-(require 'denote)
 (require 'json)
 (require 'subr-x)
 (require 'cl-lib)
@@ -56,7 +76,7 @@
 ;;;; Configuration
 
 (defgroup snorg nil
-  "Org/denote client for the snorg archive."
+  "Org client for the snorg archive."
   :group 'org
   :prefix "snorg-")
 
@@ -71,10 +91,10 @@ Must be set before any command is used.")
   "List of snorg config files, each passed to the CLI as `-c'.
 At least one must define `export.template' for `snorg-import' to work.")
 
-(defvar snorg-denote-directory nil
+(defvar snorg-import-directory nil
   "Destination for imported notes.
 A string is used directly.  A list of strings prompts for one on
-creation.  When nil, `denote-directory' is used.")
+creation.  When nil, the backend's default directory is used.")
 
 (defvar snorg-generated-heading "Generated"
   "Headline of the export root heading.
@@ -82,7 +102,7 @@ On re-import the top-level heading with this text is replaced.
 Keep in sync with the export template's root heading.")
 
 (defvar snorg-default-keywords '("snorg")
-  "Denote keywords added to every imported note.
+  "Keywords added to every imported note.
 Prepended to the note's own page keywords on `snorg-import'.")
 
 ;;;; CLI / process layer
@@ -162,33 +182,40 @@ pages yields a single-element array, whose sole NoteView is returned."
     (or (cdr (assoc key choices))
         (user-error "Unknown note: %s" key))))
 
+;;;; Backend interface
+
+(defvar snorg-backend nil
+  "Symbol naming the note backend used for import and note links.
+A backend file ((require \\='snorg-denote), (require \\='snorg-org-roam))
+implements the `snorg-backend-*' generics for its symbol and sets this
+variable when it is still nil; set it explicitly to choose between
+several loaded backends.")
+
+(defun snorg--backend ()
+  "Return the active backend symbol, or signal a `user-error'."
+  (or snorg-backend
+      (user-error
+       "No snorg backend; (require 'snorg-denote) or (require 'snorg-org-roam)")))
+
+;; The identity snorg hands a backend is the raw snorg FILE_ID (as the CLI
+;; emits it) -- the generic, format-neutral id.  Each backend is the *only*
+;; place that translates it to and from its own note id (denote's
+;; YYYYMMDDTHHMMSS, an org-roam ROAM_REF, ...); core never speaks a backend's
+;; dialect.
+
+(cl-defgeneric snorg-backend-find (backend file-id)
+  "Return the path of BACKEND's note for snorg FILE-ID, or nil.
+FILE-ID is the raw snorg FILE_ID; the backend maps it to its own note id.")
+
+(cl-defgeneric snorg-backend-create (backend file-id title keywords directory)
+  "Create a BACKEND note for snorg FILE-ID, with TITLE and KEYWORDS.
+FILE-ID is the raw snorg FILE_ID; the backend mints its own note id from
+it and records enough to map back on the next `snorg-backend-find'.
+DIRECTORY is the resolved `snorg-import-directory' (nil means the
+backend's default).  Return the new note's path; the note may still
+live in an unsaved buffer rather than on disk.")
+
 ;;;; Import
-
-(defun snorg--denote-id (id)
-  "Convert a snorg FILE_ID or PAGEID into a denote identifier.
-Port of the CLI `denote' filter: strip a leading F/P, then format the
-first 14 digits as YYYYMMDDTHHMMSS.  Return ID unchanged if too short."
-  (let ((s (if (and (> (length id) 0) (memq (aref id 0) '(?F ?P)))
-               (substring id 1)
-             id)))
-    (let ((n 0))
-      (while (and (< n (length s)) (<= ?0 (aref s n) ?9))
-        (setq n (1+ n)))
-      (if (< n 14)
-          id
-        (concat (substring s 0 8) "T" (substring s 8 14))))))
-
-(defun snorg--id-time (id)
-  "Return an Emacs time value decoded from FILE_ID/PAGEID digits in ID."
-  (let ((d (snorg--denote-id id)))
-    ;; d is YYYYMMDDTHHMMSS
-    (encode-time
-     (string-to-number (substring d 13 15))  ; ss
-     (string-to-number (substring d 11 13))  ; mm
-     (string-to-number (substring d 9 11))   ; HH
-     (string-to-number (substring d 6 8))    ; DD
-     (string-to-number (substring d 4 6))    ; MM
-     (string-to-number (substring d 0 4))))) ; YYYY
 
 (defun snorg--title (view)
   "Return the note title from retrieve alist VIEW (source without .note)."
@@ -210,50 +237,48 @@ first 14 digits as YYYYMMDDTHHMMSS.  Return ID unchanged if too short."
 
 (defun snorg--destination-directory ()
   "Resolve the destination directory for a new imported note.
-Return nil to let denote pick its default."
+Return nil to let the backend pick its default."
   (cond
-   ((stringp snorg-denote-directory) snorg-denote-directory)
-   ((consp snorg-denote-directory)
-    (completing-read "Denote directory: " snorg-denote-directory nil t))
+   ((stringp snorg-import-directory) snorg-import-directory)
+   ((consp snorg-import-directory)
+    (completing-read "Import directory: " snorg-import-directory nil t))
    (t nil)))
 
 (defun snorg--replace-generated (body)
   "Replace the `snorg-generated-heading' subtree in the current buffer with BODY.
 Insert BODY at end of buffer when no such heading exists.  BODY is the
-export text (a single top-level heading subtree)."
-  (org-with-wide-buffer
-   (goto-char (point-min))
-   (if (re-search-forward
-        (format "^\\*[ \t]+%s[ \t]*$" (regexp-quote snorg-generated-heading))
-        nil t)
-       (progn
-         (org-back-to-heading t)
-         (delete-region (point) (org-end-of-subtree t t)))
-     (goto-char (point-max))
-     (unless (bolp) (insert "\n")))
-   (insert (string-trim-right body) "\n")))
+export text (a single top-level heading subtree).  Writes through
+read-only: `snorg-view-mode' keeps the note buffer read-only, and the
+analyze/edit refresh replaces the subtree while the review is open."
+  (let ((inhibit-read-only t))
+    (org-with-wide-buffer
+     (goto-char (point-min))
+     (if (re-search-forward
+          (format "^\\*[ \t]+%s[ \t]*$" (regexp-quote snorg-generated-heading))
+          nil t)
+         (progn
+           (org-back-to-heading t)
+           (delete-region (point) (org-end-of-subtree t t)))
+       (goto-char (point-max))
+       (unless (bolp) (insert "\n")))
+     (insert (string-trim-right body) "\n"))))
 
 (defun snorg--import (file-id)
-  "Import archived note FILE-ID into a denote note and return its path.
+  "Import archived note FILE-ID into a backend note and return its path.
 Create it fresh, or refresh its generated subtree if it already exists.
 Does not display the buffer."
-  (let* ((view (snorg--retrieve-cached file-id))
-         (id (snorg--denote-id file-id))
+  (let* ((backend (snorg--backend))
+         (view (snorg--retrieve-cached file-id))
          (title (snorg--title view))
          (keywords (snorg--keywords view))
          (body (snorg-export file-id))
-         (existing (denote-get-path-by-id id))
+         (existing (snorg-backend-find backend file-id))
          (path
           (or existing
-              ;; `denote' returns the new note's path directly.  Do not
-              ;; re-derive it via `denote-get-path-by-id': the fresh note
-              ;; lives in an unsaved buffer and is not yet on disk, so that
-              ;; disk scan returns nil and the import fails on first run.
-              (denote title keywords 'org
-                      (snorg--destination-directory)
-                      (snorg--id-time file-id)))))
+              (snorg-backend-create backend file-id title keywords
+                                    (snorg--destination-directory)))))
     (unless path
-      (error "Failed to locate or create denote note for %s" file-id))
+      (error "Failed to locate or create a note for %s" file-id))
     (with-current-buffer (find-file-noselect path)
       (snorg--replace-generated body)
       (save-buffer))
@@ -262,14 +287,14 @@ Does not display the buffer."
 
 ;;;###autoload
 (defun snorg-import (file-id)
-  "Import archived note FILE-ID into a denote note and display it.
+  "Import archived note FILE-ID into a backend note and display it.
 Create it fresh, or refresh its generated subtree if it already exists."
   (interactive (list (snorg-read-file-id)))
   (pop-to-buffer (find-file-noselect (snorg--import file-id))))
 
 ;;;###autoload
 (defun snorg-import-all ()
-  "Import every archived note into a denote note.
+  "Import every archived note into a backend note.
 Create each fresh, or refresh its generated subtree if it already exists.
 The destination directory is resolved once for the whole batch, and per-note
 errors are collected and reported at the end rather than aborting the run."
@@ -278,7 +303,7 @@ errors are collected and reported at the end rather than aborting the run."
          (total (length ids))
          ;; Resolve (and possibly prompt for) the destination once, so the
          ;; batch does not prompt per note.
-         (snorg-denote-directory (snorg--destination-directory))
+         (snorg-import-directory (snorg--destination-directory))
          (n 0)
          (failures nil))
     (dolist (id ids)
@@ -395,6 +420,49 @@ becomes a hand transcription."
                  (snorg--analyze-edit-refresh pageid origin view-p)))))))
       (message "snorg: editing %s -- finish with C-x #" pageid))))
 
+;;;; Analyze (re-transcription)
+
+;;;###autoload
+(defun snorg-analyze (&optional force)
+  "(Re-)transcribe the page heading at point via the CLI `analyze'.
+Grab the page's PAGEID (its :SNORG_PAGEID: property, as `snorg-view'
+does) and, after a `yes-or-no-p' confirmation -- since analysis may spend
+an LLM call -- run `snorg analyze' on it.  With a prefix argument FORCE,
+pass `--force' to re-transcribe even a page whose geometry is unchanged.
+The call runs asynchronously so Emacs is not blocked; on success the
+note's org subtree is refreshed in place (see `snorg-analyze-edit-refresh')."
+  (interactive "P")
+  (let ((pageid (snorg--page-id-at-point)))
+    (unless pageid
+      (user-error "Point is not on a heading with a :SNORG_PAGEID: property"))
+    (unless (yes-or-no-p (format "Analyze page %s? " pageid))
+      (user-error "Aborted"))
+    (let* ((origin (current-buffer))
+           (view-p (bound-and-true-p snorg-view-mode))
+           (proc (make-process
+                  :name "snorg-analyze"
+                  :buffer (generate-new-buffer " *snorg-analyze*")
+                  :noquery t
+                  :command (append (list snorg-executable)
+                                   (snorg--global-args)
+                                   (list "analyze")
+                                   (and force (list "--force"))
+                                   (list pageid)))))
+      (set-process-sentinel
+       proc
+       (lambda (p _event)
+         (when (memq (process-status p) '(exit signal))
+           (let ((out (with-current-buffer (process-buffer p)
+                        (string-trim (buffer-string)))))
+             (kill-buffer (process-buffer p))
+             (if (not (eq (process-exit-status p) 0))
+                 (message "snorg analyze failed: %s"
+                          (if (string-empty-p out) "(no output)" out))
+               (message "snorg: %s" out)
+               (when snorg-analyze-edit-refresh
+                 (snorg--analyze-edit-refresh pageid origin view-p)))))))
+      (message "snorg: analyzing %s..." pageid))))
+
 ;;;; Org link types
 
 (defun snorg--follow-svg (path _)
@@ -403,15 +471,17 @@ becomes a hand transcription."
     (user-error "`snorg-archive' is not set"))
   (find-file (expand-file-name path (expand-file-name snorg-archive))))
 
-(defun snorg--follow-denote-page (path _)
-  "Follow a `denote-snorg:' link PATH of the form IDENTIFIER::PAGEID.
-Open the denote note and move point to the heading whose :SNORG_PAGEID: matches."
+(defun snorg--follow-note-page (backend path)
+  "Follow a BACKEND note-page link PATH of the form FILE_ID::PAGEID.
+FILE_ID is the raw snorg FILE_ID; BACKEND maps it to its own note.  Open
+that note and move point to the heading whose :SNORG_PAGEID: matches.
+Core registers the generic `snorg-note:' org link type on top of this."
   (let* ((parts (split-string path "::"))
-         (id (car parts))
+         (file-id (car parts))
          (pageid (cadr parts))
-         (file (denote-get-path-by-id id)))
+         (file (snorg-backend-find backend file-id)))
     (unless file
-      (user-error "No denote note with identifier %s" id))
+      (user-error "No %s note for snorg %s" backend file-id))
     (find-file file)
     (widen)
     (goto-char (point-min))
@@ -420,7 +490,7 @@ Open the denote note and move point to the heading whose :SNORG_PAGEID: matches.
           (goto-char (org-find-property "SNORG_PAGEID" pageid))
           (org-fold-show-entry))
       (when pageid
-        (message "snorg: page %s not found in %s" pageid id)))))
+        (message "snorg: page %s not found in %s" pageid file-id)))))
 
 (defun snorg--read-page (view prompt key)
   "Prompt with PROMPT for a page of retrieve alist VIEW; return its KEY value."
@@ -438,19 +508,26 @@ Open the denote note and move point to the heading whose :SNORG_PAGEID: matches.
   (let ((view (snorg--retrieve-cached (snorg-read-file-id))))
     (concat "snorg:" (snorg--read-page view "Page: " 'svg))))
 
-(defun snorg--complete-denote-page ()
-  "Completion for `denote-snorg:' links: pick a note, then a page."
+(defun snorg--complete-note-page ()
+  "Completion for `snorg-note:' links: pick a note, then a page.
+The link carries the raw snorg FILE_ID and PAGEID; the active backend
+translates the FILE_ID to its own note when the link is followed."
   (let* ((file-id (snorg-read-file-id))
          (view (snorg--retrieve-cached file-id)))
-    (concat "denote-snorg:" (snorg--denote-id file-id)
+    (concat "snorg-note:" file-id
             "::" (snorg--read-page view "Page: " 'page_id))))
 
 (org-link-set-parameters "snorg"
                          :follow #'snorg--follow-svg
                          :complete #'snorg--complete-svg)
-(org-link-set-parameters "denote-snorg"
-                         :follow #'snorg--follow-denote-page
-                         :complete #'snorg--complete-denote-page)
+
+;; One backend-agnostic note-page link type.  The link stores the raw snorg
+;; FILE_ID (not any backend's id), so it resolves through whichever backend is
+;; active -- backends no longer register their own link type.
+(org-link-set-parameters
+ "snorg-note"
+ :follow (lambda (path _) (snorg--follow-note-page (snorg--backend) path))
+ :complete #'snorg--complete-note-page)
 
 ;;;; Interactive review mode
 
@@ -460,6 +537,20 @@ Open the denote note and move point to the heading whose :SNORG_PAGEID: matches.
 (defvar-local snorg-view--saved-folds nil
   "Snapshot of the buffer's fold state saved on entering `snorg-view-mode'.
 Restored on quit so review folding does not clobber the user's outline.")
+
+(defvar-local snorg-view--return-config nil
+  "Window configuration from before entering `snorg-view-mode'.
+Restored on quit.")
+
+(defvar-local snorg-view--return-point nil
+  "Marker at point from before entering `snorg-view-mode'.
+Restored on quit.")
+
+(defvar-local snorg-view--was-read-only nil
+  "`buffer-read-only' value from before entering `snorg-view-mode'.")
+
+(defvar-local snorg-view--saved-header nil
+  "`header-line-format' value from before entering `snorg-view-mode'.")
 
 (defvar-local snorg-view--svg nil
   "Absolute path of the page SVG currently under review.")
@@ -480,20 +571,42 @@ Computed lazily and cleared when the reviewed page changes.")
 
 (defvar snorg-view-mode-map
   (let ((map (make-sparse-keymap)))
-    (define-key map (kbd "M-n") #'snorg-view-next)
-    (define-key map (kbd "M-p") #'snorg-view-prev)
+    (suppress-keymap map t)
+    (define-key map (kbd "n")   #'snorg-view-next)
+    (define-key map (kbd "p")   #'snorg-view-prev)
     (define-key map (kbd "o")   #'snorg-view-open-external)
     (define-key map (kbd "e")   #'snorg-analyze-edit)
-    (define-key map (kbd "M-P") #'snorg-view-diff-older)
-    (define-key map (kbd "M-N") #'snorg-view-diff-newer)
+    (define-key map (kbd "a")   #'snorg-analyze)
+    (define-key map (kbd "P")   #'snorg-view-diff-older)
+    (define-key map (kbd "N")   #'snorg-view-diff-newer)
+    (define-key map (kbd "h")   #'snorg-view-help)
+    (define-key map (kbd "?")   #'snorg-view-help)
     (define-key map (kbd "q")   #'snorg-view-quit)
     map)
-  "Keymap for `snorg-view-mode'.")
+  "Keymap for `snorg-view-mode'.
+Printable keys are suppressed (`suppress-keymap'): the review is
+strictly a snorg interaction mode, nothing self-inserts.")
+
+(defvar snorg-view-header-line
+  "snorg-view:  n/p page   e edit   a analyze   o open   P/N diff   h help   q quit"
+  "Header line shown in the note buffer while `snorg-view-mode' is on.")
 
 (define-minor-mode snorg-view-mode
-  "Minor mode for the snorg dual-window page review."
+  "Minor mode for the snorg dual-window page review.
+Strict interaction mode: while it is on the buffer is read-only, a
+header line summarizes the keys, and printable keys run review commands
+instead of self-inserting (`h' lists them all)."
   :lighter " SnView"
-  :keymap snorg-view-mode-map)
+  :keymap snorg-view-mode-map
+  (if snorg-view-mode
+      (setq snorg-view--was-read-only buffer-read-only
+            buffer-read-only t
+            snorg-view--saved-header header-line-format
+            header-line-format snorg-view-header-line)
+    (setq buffer-read-only snorg-view--was-read-only
+          header-line-format snorg-view--saved-header
+          snorg-view--was-read-only nil
+          snorg-view--saved-header nil)))
 
 (defun snorg--page-svg-at-point ()
   "Return the absolute SVG path of the page heading at point, or nil.
@@ -538,17 +651,37 @@ Reset the diff overlay state so page navigation drops back to the plain SVG."
      ((not (file-exists-p svg)) (message "snorg: missing SVG %s" svg))
      (t (set-window-buffer snorg-view--window (find-file-noselect svg))))))
 
+(defun snorg-view--locate-page ()
+  "Move point to the page heading `snorg-view' should start on.
+Try the heading at point, then its ancestors up to the top level, then
+the first heading in the buffer with a :SNORG_SVGP: property.  Signal a
+`user-error' when the buffer has none."
+  (let ((pos (or (save-excursion
+                   (when (ignore-errors (org-back-to-heading t) t)
+                     (catch 'found
+                       (while t
+                         (when (org-entry-get nil "SNORG_SVGP")
+                           (throw 'found (point)))
+                         (unless (org-up-heading-safe)
+                           (throw 'found nil))))))
+                 (org-find-property "SNORG_SVGP"))))
+    (unless pos
+      (user-error "No heading with a :SNORG_SVGP: property in this buffer"))
+    (goto-char pos)))
+
 ;;;###autoload
 (defun snorg-view ()
-  "Open a dual-window review for the page heading at point.
-The note stays on the left; the page SVG shows on the right.  Use
-`M-n'/`M-p' to move between pages, `o' to open the SVG in the system
-viewer, `e' to edit the current page's transcription (`snorg-analyze-edit'),
-`M-P'/`M-N' to step a git diff overlay against older/newer revisions, and
-`q' to quit."
+  "Open a dual-window review of the page around point.
+The page heading is found from anywhere in the note: the heading at
+point, else its nearest ancestor carrying :SNORG_SVGP:, else the first
+page heading in the file.  The note stays on the left, folded down to
+the page under review; its SVG shows on the right.  The buffer goes
+read-only and plain keys drive the review -- `h' lists them; `q' quits,
+restoring the folding, the window layout and point from before entry."
   (interactive)
-  (unless (org-entry-get nil "SNORG_SVGP")
-    (user-error "Point is not on a heading with a :SNORG_SVGP: property"))
+  (setq snorg-view--return-config (current-window-configuration)
+        snorg-view--return-point (point-marker))
+  (snorg-view--locate-page)
   (setq snorg-view--saved-folds
         (org-fold-core-get-regions :with-markers t))
   (delete-other-windows)
@@ -571,16 +704,43 @@ viewer, `e' to edit the current page's transcription (`snorg-analyze-edit'),
     (message "snorg: no previous page")))
 
 (defun snorg-view-quit ()
-  "Leave `snorg-view-mode' and restore a single window."
+  "Leave `snorg-view-mode', restoring folds, windows and point from entry."
   (interactive)
   (snorg-view-mode -1)
-  (when (window-live-p snorg-view--window)
-    (delete-window snorg-view--window))
   (setq snorg-view--window nil)
   (when snorg-view--saved-folds
     (org-fold-show-all)
     (org-fold-core-regions snorg-view--saved-folds :override t :clean-markers t)
-    (setq snorg-view--saved-folds nil)))
+    (setq snorg-view--saved-folds nil))
+  ;; Grab the return state before the window configuration swaps buffers
+  ;; around: the vars are buffer-local to this note buffer.
+  (let ((config snorg-view--return-config)
+        (pos snorg-view--return-point))
+    (setq snorg-view--return-config nil
+          snorg-view--return-point nil)
+    (when config
+      (set-window-configuration config))
+    (when pos
+      (when (eq (current-buffer) (marker-buffer pos))
+        (goto-char pos))
+      (set-marker pos nil))))
+
+(defun snorg-view-help ()
+  "Show the `snorg-view-mode' keys in the echo area."
+  (interactive)
+  (message "%s"
+           (concat
+            "snorg-view keys:\n"
+            "  n          next page          p          previous page\n"
+            "  e          edit the page's transcription (snorg-analyze-edit)\n"
+            "  a          (re-)transcribe the page via the LLM (snorg-analyze);\n"
+            "             a prefix arg (C-u a) forces re-transcription (--force)\n"
+            "  o          open the page SVG in the system viewer\n"
+            "  P / N      diff overlay against an older / newer git revision\n"
+            "             (a numeric prefix, e.g. C-3 P, steps that many\n"
+            "             revisions at once)\n"
+            "  h / ?      this help\n"
+            "  q          quit, restoring windows, point and folding")))
 
 ;;;; Open externally
 
@@ -750,28 +910,37 @@ unchanged strokes come through from the current SVG unaltered."
                snorg-view--diff-depth (1- (length revs))
                (snorg-view--rev-label file rev))))))
 
-(defun snorg-view-diff-older ()
-  "Compare the current SVG against an older git revision (deeper each call)."
-  (interactive)
+(defun snorg-view-diff-older (&optional count)
+  "Compare the current SVG against an older git revision (deeper each call).
+With a numeric prefix argument COUNT, step that many revisions deeper at
+once (clamped to the oldest revision)."
+  (interactive "p")
+  (setq count (max 1 (or count 1)))
   (unless (and snorg-view--svg (file-exists-p snorg-view--svg))
     (user-error "snorg: no SVG to diff"))
   (if (not (snorg-view--git-tracked-p snorg-view--svg))
       (message "snorg: %s is not under version control"
                (file-name-nondirectory snorg-view--svg))
-    (let ((revs (snorg-view--revisions snorg-view--svg)))
-      (if (< (length revs) 2)
-          (message "snorg: no earlier version to compare")
-        (if (>= snorg-view--diff-depth (1- (length revs)))
-            (message "snorg: already at the oldest version")
-          (setq snorg-view--diff-depth (1+ snorg-view--diff-depth))
-          (snorg-view--refresh-diff))))))
+    (let* ((revs (snorg-view--revisions snorg-view--svg))
+           (max-depth (1- (length revs))))
+      (cond
+       ((< (length revs) 2)
+        (message "snorg: no earlier version to compare"))
+       ((>= snorg-view--diff-depth max-depth)
+        (message "snorg: already at the oldest version"))
+       (t
+        (setq snorg-view--diff-depth (min max-depth (+ snorg-view--diff-depth count)))
+        (snorg-view--refresh-diff))))))
 
-(defun snorg-view-diff-newer ()
-  "Step the diff comparison back toward the current version."
-  (interactive)
+(defun snorg-view-diff-newer (&optional count)
+  "Step the diff comparison back toward the current version.
+With a numeric prefix argument COUNT, step that many revisions back at
+once (clamped to the current version)."
+  (interactive "p")
+  (setq count (max 1 (or count 1)))
   (if (<= snorg-view--diff-depth 0)
       (message "snorg: already at the current version")
-    (setq snorg-view--diff-depth (1- snorg-view--diff-depth))
+    (setq snorg-view--diff-depth (max 0 (- snorg-view--diff-depth count)))
     (snorg-view--refresh-diff)))
 
 ;;;; Command keymap
@@ -783,6 +952,7 @@ unchanged strokes come through from the current SVG unaltered."
     (define-key map "I" #'snorg-import-all)
     (define-key map "v" #'snorg-view)
     (define-key map "e" #'snorg-analyze-edit)
+    (define-key map "a" #'snorg-analyze)
     (define-key map "r" #'snorg-reset-cache)
     map)
   "Prefix keymap gathering the interactive snorg commands.

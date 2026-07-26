@@ -96,7 +96,7 @@ pages per owning note and renders `export.template` **once** over all of them to
 stdout. The template context **is** the `snorg retrieve` JSON array, under the
 `notes` key (a template context needs a map root) — same keys, same nesting, no
 hidden enrichment. One render sees every note, so a template can put pages from
-many notes under one shared root (see `examples/emacs/orgmode-query.yaml`).
+many notes under one shared root.
 Iterate `notes`, then `note.pages`, then each page's `titles` / `keywords` /
 `links` / `analysis`:
 

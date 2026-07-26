@@ -24,7 +24,7 @@ export:
     {% if page.links %}
     *** Links
     {% for link in page.links %}
-    - [[denote-snorg:{{ link.target_file_id|denote }}::{{ link.target_page_id }}][{{ link.analysis.name|default:link.name|cut:".note" }}]]
+    - [[snorg-note:{{ link.target_file_id }}::{{ link.target_page_id }}][{{ link.analysis.name|default:link.name|cut:".note" }}]]
     {% endfor %}
 
     {% endif %}

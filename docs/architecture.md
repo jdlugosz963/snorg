@@ -192,9 +192,10 @@ transcription and is re-transcribed by the next `analyze` run.
   shell-out, `nestorgheadings:N`), `markdown.go` (Markdown-only: `nestmdheadings:N`).
   External dep: `pongo2/v6`; PATH tool: `pandoc` (only for the `org` filter).
 - `internal/ingest` — orchestrator: `Source.Read` → render SVGs → `Archive.Write`.
-- `examples/emacs/snorg.el` — Emacs org/denote consumer (outside the Go tree): drives the CLI
-  (`list`/`query`/`retrieve`/`export`) to import notes as denote org files, adds the `snorg:`
-  (page SVG) and `denote-snorg:` (page-jump) org links, and a dual-window review mode.
+- `examples/emacs/snorg.el` — Emacs org consumer (outside the Go tree): drives the CLI
+  (`list`/`query`/`retrieve`/`export`) to import notes into a pluggable backend (denote or
+  org-roam; the backend owns the FILE_ID→note-id translation), adds the `snorg:` (page SVG)
+  and backend-agnostic `snorg-note:` (page-jump) org links, and a dual-window review mode.
 
 ## Extension points
 
