@@ -49,11 +49,18 @@ type PageAnalysisView struct {
 }
 
 // TitleView is a title region, with its transcription (if analyzed) nested
-// under analysis — the same shape the archive stores on disk.
+// under analysis. NameAnalysisView deliberately exposes only the name, not the
+// on-disk Edited override flag — that is edit-preservation bookkeeping.
 type TitleView struct {
-	Rect     snote.Rect             `json:"rect"`
-	Level    int                    `json:"level"`
-	Analysis *archive.TitleAnalysis `json:"analysis,omitempty"`
+	Rect     snote.Rect        `json:"rect"`
+	Level    int               `json:"level"`
+	Analysis *NameAnalysisView `json:"analysis,omitempty"`
+}
+
+// NameAnalysisView is the consumer-facing transcription of a title or link
+// region: just its name.
+type NameAnalysisView struct {
+	Name string `json:"name"`
 }
 
 type KeywordView struct {
@@ -64,12 +71,12 @@ type KeywordView struct {
 // iff TargetFileID equals the note's FileID. TargetPageID is the destination page's
 // stable id (resolve a heading by page_id rather than a shifting page number).
 type LinkView struct {
-	Rect         snote.Rect            `json:"rect"`
-	TargetPageID string                `json:"target_page_id"`
-	TargetFileID string                `json:"target_file_id"`
-	Name         string                `json:"name"`
-	Internal     bool                  `json:"internal"`
-	Analysis     *archive.LinkAnalysis `json:"analysis,omitempty"`
+	Rect         snote.Rect        `json:"rect"`
+	TargetPageID string            `json:"target_page_id"`
+	TargetFileID string            `json:"target_file_id"`
+	Name         string            `json:"name"`
+	Internal     bool              `json:"internal"`
+	Analysis     *NameAnalysisView `json:"analysis,omitempty"`
 }
 
 // List returns the FILE_IDs available in the archive.
@@ -157,7 +164,11 @@ func getPage(a *archive.Archive, fileID string, ref archive.NotePageRef) (PageVi
 func pageView(fileID string, ref archive.NotePageRef, pd archive.PageDoc, svg string, analysis *PageAnalysisView) PageView {
 	titles := make([]TitleView, 0, len(pd.Titles))
 	for _, t := range pd.Titles {
-		titles = append(titles, TitleView{Rect: t.Rect, Level: t.Level, Analysis: t.Analysis})
+		var an *NameAnalysisView
+		if t.Analysis != nil {
+			an = &NameAnalysisView{Name: t.Analysis.Name}
+		}
+		titles = append(titles, TitleView{Rect: t.Rect, Level: t.Level, Analysis: an})
 	}
 	keywords := make([]KeywordView, 0, len(pd.Keywords))
 	for _, k := range pd.Keywords {
@@ -165,13 +176,17 @@ func pageView(fileID string, ref archive.NotePageRef, pd archive.PageDoc, svg st
 	}
 	links := make([]LinkView, 0, len(pd.Links))
 	for _, l := range pd.Links {
+		var an *NameAnalysisView
+		if l.Analysis != nil {
+			an = &NameAnalysisView{Name: l.Analysis.Name}
+		}
 		links = append(links, LinkView{
 			Rect:         l.Rect,
 			TargetPageID: l.TargetPageID,
 			TargetFileID: l.TargetFileID,
 			Name:         l.Name,
 			Internal:     l.TargetFileID == fileID,
-			Analysis:     l.Analysis,
+			Analysis:     an,
 		})
 	}
 	return PageView{

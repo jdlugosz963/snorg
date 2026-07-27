@@ -4,7 +4,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jdlugosz963/snorg/internal/archive"
 	"github.com/jdlugosz963/snorg/internal/retrieve"
 )
 
@@ -16,13 +15,13 @@ func TestRender(t *testing.T) {
 				Number:   1,
 				PageID:   "Pa",
 				SVG:      "F_TEST/Pa.svg",
-				Titles:   []retrieve.TitleView{{Level: 1, Analysis: &archive.TitleAnalysis{Name: "Chapter 1"}}},
+				Titles:   []retrieve.TitleView{{Level: 1, Analysis: &retrieve.NameAnalysisView{Name: "Chapter 1"}}},
 				Keywords: []retrieve.KeywordView{{Text: "alpha"}},
 				Links: []retrieve.LinkView{{
 					Name:         "biofizyka",
 					TargetFileID: "F20260414171729084889FDefCgWZgV3D",
 					Internal:     true,
-					Analysis:     &archive.LinkAnalysis{Name: "potencjał czynnościowy"},
+					Analysis:     &retrieve.NameAnalysisView{Name: "potencjał czynnościowy"},
 				}},
 				Analysis: &retrieve.PageAnalysisView{Content: "first page text"},
 			},

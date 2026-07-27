@@ -18,7 +18,8 @@
 // A "not" prefix inverts any filter (query not starred == the non-starred pages),
 // so query A | query not B == A minus B.
 // analyze-edit takes exactly one PAGEID (it opens $VISUAL/$EDITOR on the page's
-// transcription, so it needs the terminal, not a pipe).
+// transcription — content plus the title/link names — so it needs the terminal,
+// not a pipe).
 package main
 
 import (
@@ -478,7 +479,7 @@ func analyzeCmd(a *app) *cli.Command {
 func analyzeEditCmd(a *app) *cli.Command {
 	return &cli.Command{
 		Name:      "analyze-edit",
-		Usage:     "edit a page's transcription in $VISUAL/$EDITOR (edits survive re-analysis)",
+		Usage:     "edit a page's transcription and title/link names in $VISUAL/$EDITOR (edits survive re-analysis)",
 		ArgsUsage: "<PAGEID>",
 		Action: func(_ context.Context, cmd *cli.Command) error {
 			// Exactly one positional PAGEID, no stdin fallback: the editor
@@ -492,11 +493,15 @@ func analyzeEditCmd(a *app) *cli.Command {
 				return err
 			}
 			pageID := cmd.Args().Get(0)
-			outcome, err := edit.Page(a.arch, pageID, editor)
+			outcome, namesChanged, err := edit.Page(a.arch, pageID, editor)
 			if err != nil {
 				return err
 			}
-			fmt.Printf("%s: %s\n", pageID, outcome)
+			if namesChanged > 0 {
+				fmt.Printf("%s: %s, %d name(s) updated\n", pageID, outcome, namesChanged)
+			} else {
+				fmt.Printf("%s: %s\n", pageID, outcome)
+			}
 			return nil
 		},
 	}

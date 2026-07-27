@@ -5,7 +5,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jdlugosz963/snorg/internal/archive"
 	"github.com/jdlugosz963/snorg/internal/config"
 	"github.com/jdlugosz963/snorg/internal/retrieve"
 )
@@ -88,12 +87,12 @@ func TestOrgmodeExample(t *testing.T) {
 				PageID:  "P20260414171730000001aaaaaa",
 				Starred: true,
 				SVG:     "F20260414171729084889FDefCgWZgV3D/P20260414171730000001aaaaaa.svg",
-				Titles:  []retrieve.TitleView{{Level: 1, Analysis: &archive.TitleAnalysis{Name: "Neurony"}}},
+				Titles:  []retrieve.TitleView{{Level: 1, Analysis: &retrieve.NameAnalysisView{Name: "Neurony"}}},
 				Links: []retrieve.LinkView{{
 					Name:         "komorki.note",
 					TargetFileID: "F20260629154102100593mO9IZI46DNYe",
 					TargetPageID: "P20260629154103000001bbbbbb",
-					Analysis:     &archive.LinkAnalysis{Name: "biologia komórki"},
+					Analysis:     &retrieve.NameAnalysisView{Name: "biologia komórki"},
 				}},
 				Analysis: &retrieve.PageAnalysisView{
 					Content: "# Potencjał czynnościowy\n\nnotatki z wykładu",

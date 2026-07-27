@@ -48,7 +48,7 @@ func TestPageEditCreatesDiffAndKeepsBase(t *testing.T) {
 	}
 
 	editor := fakeEditor(t, `printf '# ai output\n\nbody, edited by hand\n' > "$1"`)
-	outcome, err := Page(a, "Pa", editor)
+	outcome, _, err := Page(a, "Pa", editor)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -70,7 +70,7 @@ func TestPageUnchangedWritesNothing(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	outcome, err := Page(a, "Pa", fakeEditor(t, "true"))
+	outcome, _, err := Page(a, "Pa", fakeEditor(t, "true"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -86,11 +86,11 @@ func TestPageRevertRemovesDiff(t *testing.T) {
 	if err := a.WriteAnalysisMD("F_TEST", "Pa", base); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Page(a, "Pa", fakeEditor(t, `printf 'edited\n' > "$1"`)); err != nil {
+	if _, _, err := Page(a, "Pa", fakeEditor(t, `printf 'edited\n' > "$1"`)); err != nil {
 		t.Fatal(err)
 	}
 
-	outcome, err := Page(a, "Pa", fakeEditor(t, `printf '# ai output\n' > "$1"`))
+	outcome, _, err := Page(a, "Pa", fakeEditor(t, `printf '# ai output\n' > "$1"`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -109,7 +109,7 @@ func TestPageEditorFailureLeavesPageUntouched(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := Page(a, "Pa", fakeEditor(t, `printf 'half-finished\n' > "$1"; exit 1`)); err == nil {
+	if _, _, err := Page(a, "Pa", fakeEditor(t, `printf 'half-finished\n' > "$1"; exit 1`)); err == nil {
 		t.Fatal("expected error from a failing editor")
 	}
 	if md, err := a.ReadAnalysisMD("F_TEST", "Pa"); err != nil || md != "# ai output\n" {
@@ -124,7 +124,7 @@ func TestPageHumanTranscription(t *testing.T) {
 	// Never analyzed: the editor opens empty and the saved text becomes the
 	// page's transcription, with an empty AI base behind it.
 	editor := fakeEditor(t, `if [ -s "$1" ]; then exit 1; fi; printf 'written by hand\n' > "$1"`)
-	outcome, err := Page(a, "Pa", editor)
+	outcome, _, err := Page(a, "Pa", editor)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -145,7 +145,7 @@ func TestPageEmptySaveOnEmptyPage(t *testing.T) {
 
 	// Editors like vim save an "empty" buffer as a single newline; that must
 	// still count as no content and create no files.
-	outcome, err := Page(a, "Pa", fakeEditor(t, `printf '\n' > "$1"`))
+	outcome, _, err := Page(a, "Pa", fakeEditor(t, `printf '\n' > "$1"`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -160,13 +160,13 @@ func TestPageEmptySaveOnEmptyPage(t *testing.T) {
 func TestPageClearingHumanTranscriptionRemovesFiles(t *testing.T) {
 	requireGit(t)
 	a := editArchive(t)
-	if _, err := Page(a, "Pa", fakeEditor(t, `printf 'written by hand\n' > "$1"`)); err != nil {
+	if _, _, err := Page(a, "Pa", fakeEditor(t, `printf 'written by hand\n' > "$1"`)); err != nil {
 		t.Fatal(err)
 	}
 
 	// Emptying a page that has no AI base removes the transcription entirely:
 	// no empty sidecars left behind.
-	outcome, err := Page(a, "Pa", fakeEditor(t, `printf '' > "$1"`))
+	outcome, _, err := Page(a, "Pa", fakeEditor(t, `printf '' > "$1"`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -183,8 +183,102 @@ func TestPageClearingHumanTranscriptionRemovesFiles(t *testing.T) {
 func TestPageUnknownPageID(t *testing.T) {
 	requireGit(t)
 	a := editArchive(t)
-	if _, err := Page(a, "Pmissing", fakeEditor(t, "true")); err == nil {
+	if _, _, err := Page(a, "Pmissing", fakeEditor(t, "true")); err == nil {
 		t.Fatal("expected error for unknown PAGEID")
+	}
+}
+
+// regionArchive builds an archive whose page Pa has one title and one link, so
+// the analyze-edit buffer carries a name header.
+func regionArchive(t *testing.T) *archive.Archive {
+	t.Helper()
+	a := archive.New(t.TempDir())
+	n := &snote.Note{FileID: "F_TEST", Pages: []snote.Page{{
+		ID:     "Pa",
+		Number: 1,
+		Titles: []snote.Title{{Rect: snote.Rect{X: 1, Y: 2, W: 3, H: 4}, Level: 1}},
+		Links:  []snote.Link{{Rect: snote.Rect{X: 5, Y: 6, W: 7, H: 8}, Name: "NoteB", TargetPageID: "P2", TargetFileID: "F_OTHER"}},
+	}}}
+	if err := a.Write(n, map[string][]byte{"Pa": []byte("<svg/>")}); err != nil {
+		t.Fatal(err)
+	}
+	return a
+}
+
+func TestPageEditsNames(t *testing.T) {
+	requireGit(t)
+	a := regionArchive(t)
+
+	// The content section carries a blank line, which must survive verbatim.
+	editor := fakeEditor(t, `printf '<!-- title 1 -->\nFixed Title\n<!-- link 1 -->\nFixed Link\n\n<!-- content -->\n# heading\n\nbody text\n' > "$1"`)
+	outcome, namesChanged, err := Page(a, "Pa", editor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outcome != Edited {
+		t.Errorf("outcome = %q, want %q", outcome, Edited)
+	}
+	if namesChanged != 2 {
+		t.Errorf("namesChanged = %d, want 2", namesChanged)
+	}
+
+	pd, err := a.ReadPage("F_TEST", "Pa")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pd.Titles[0].Analysis == nil || pd.Titles[0].Analysis.Name != "Fixed Title" || !pd.Titles[0].Analysis.Edited {
+		t.Errorf("title analysis = %+v, want name override marked Edited", pd.Titles[0].Analysis)
+	}
+	if pd.Links[0].Analysis == nil || pd.Links[0].Analysis.Name != "Fixed Link" || !pd.Links[0].Analysis.Edited {
+		t.Errorf("link analysis = %+v, want name override marked Edited", pd.Links[0].Analysis)
+	}
+	if md, err := a.ReadAnalysisMD("F_TEST", "Pa"); err != nil || md != "# heading\n\nbody text\n" {
+		t.Errorf("md = %q, %v", md, err)
+	}
+}
+
+func TestPageNameOnlyEditKeepsContent(t *testing.T) {
+	requireGit(t)
+	a := regionArchive(t)
+	if err := a.WriteAnalysisMD("F_TEST", "Pa", "the body\n"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Change only the title name; leave the content section as serialized.
+	editor := fakeEditor(t, `printf '<!-- title 1 -->\nRenamed\n<!-- link 1 -->\n\n<!-- content -->\nthe body\n' > "$1"`)
+	outcome, namesChanged, err := Page(a, "Pa", editor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outcome != Unchanged {
+		t.Errorf("content outcome = %q, want %q", outcome, Unchanged)
+	}
+	if namesChanged != 1 {
+		t.Errorf("namesChanged = %d, want 1", namesChanged)
+	}
+	if md, err := a.ReadAnalysisMD("F_TEST", "Pa"); err != nil || md != "the body\n" {
+		t.Errorf("content changed: md = %q, %v", md, err)
+	}
+}
+
+func TestPageBadHeaderSavesNothing(t *testing.T) {
+	requireGit(t)
+	a := regionArchive(t)
+
+	// Drop the required title marker: parse must fail and nothing is written.
+	editor := fakeEditor(t, `printf '<!-- link 1 -->\nX\n<!-- content -->\nbody\n' > "$1"`)
+	if _, _, err := Page(a, "Pa", editor); err == nil {
+		t.Fatal("expected a parse error for a malformed header")
+	}
+	if _, err := os.Stat(filepath.Join(a.Root, "F_TEST", "Pa.md")); !os.IsNotExist(err) {
+		t.Errorf("md written despite malformed header: %v", err)
+	}
+	pd, err := a.ReadPage("F_TEST", "Pa")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pd.Titles[0].Analysis != nil || pd.Links[0].Analysis != nil {
+		t.Errorf("names written despite malformed header: %+v %+v", pd.Titles[0].Analysis, pd.Links[0].Analysis)
 	}
 }
 

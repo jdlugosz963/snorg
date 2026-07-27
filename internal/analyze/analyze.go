@@ -127,7 +127,14 @@ func Page(ctx context.Context, a *archive.Archive, t Transcriber, g Generator, s
 	}
 	content = strings.TrimSpace(content)
 
+	// A user-overridden name (analyze-edit set Edited) is kept as-is and its
+	// region is not re-transcribed — the override wins over re-analysis, and it
+	// saves an LLM call. --force does not change this: force only bypasses the
+	// source-hash skip, never discards user edits (as with the content merge).
 	for i, title := range pd.Titles {
+		if title.Analysis != nil && title.Analysis.Edited {
+			continue
+		}
 		name, err := transcribeRegion(ctx, t, img, title.Rect, spec.Title)
 		if err != nil {
 			return "", fmt.Errorf("title %d: %w", i, err)
@@ -135,6 +142,9 @@ func Page(ctx context.Context, a *archive.Archive, t Transcriber, g Generator, s
 		pd.Titles[i].Analysis = &archive.TitleAnalysis{Name: name}
 	}
 	for i, link := range pd.Links {
+		if link.Analysis != nil && link.Analysis.Edited {
+			continue
+		}
 		name, err := transcribeRegion(ctx, t, img, link.Rect, spec.Link)
 		if err != nil {
 			return "", fmt.Errorf("link %d: %w", i, err)

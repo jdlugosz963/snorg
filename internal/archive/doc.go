@@ -42,12 +42,20 @@ type PageAnalysis struct {
 	Fields     map[string]string `json:"fields,omitempty"`
 }
 
+// TitleAnalysis is a title region's transcription. Edited marks Name as a
+// user override (set via analyze-edit): analyze then leaves it untouched and
+// re-transcribes only non-edited regions. It is edit-preservation bookkeeping,
+// not part of the retrieve read contract.
 type TitleAnalysis struct {
-	Name string `json:"name"`
+	Name   string `json:"name"`
+	Edited bool   `json:"edited,omitempty"`
 }
 
+// LinkAnalysis is a link region's transcription. Edited behaves as in
+// TitleAnalysis.
 type LinkAnalysis struct {
-	Name string `json:"name"`
+	Name   string `json:"name"`
+	Edited bool   `json:"edited,omitempty"`
 }
 
 type TitleDoc struct {

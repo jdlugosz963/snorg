@@ -143,8 +143,8 @@ func TestGetAssemblesAnalysis(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	pd.Titles[0].Analysis = &archive.TitleAnalysis{Name: "Chapter"}
-	pd.Links[0].Analysis = &archive.LinkAnalysis{Name: "see also"}
+	pd.Titles[0].Analysis = &archive.TitleAnalysis{Name: "Chapter", Edited: true}
+	pd.Links[0].Analysis = &archive.LinkAnalysis{Name: "see also", Edited: true}
 	pd.Analysis = &archive.PageAnalysis{SourceHash: "abc", Fields: map[string]string{"description": "short"}}
 	if err := a.WritePage("F_TEST", pd); err != nil {
 		t.Fatal(err)

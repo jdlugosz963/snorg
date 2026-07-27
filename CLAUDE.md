@@ -34,8 +34,8 @@ Read `docs/principles.md` (project rules), `docs/architecture.md` (modules/CLI),
 - `go run ./cmd/snorg -a <archive-path> list` — list FILE_IDs (one per line)
 - `go run ./cmd/snorg -a <archive-path> query <filter> [arg]` — print PAGEIDs of matching pages (one per line); one filter per call: `all`, `note <FILE_ID>`, `unanalyzed`, `keyword <regexp>` (matches `Keyword.Text`), `starred`, `date <spec>` (day from the PAGEID's leading 8 digits; spec = `today`/`yesterday`/`YYYY-MM-DD`/`FROM..TO` with open ends); a `not <filter>` **prefix** inverts any filter (`query not starred` == the non-starred pages), so under piping `query A | query not B` == A minus B; pipes into `retrieve`/`analyze`/`export` (all three take PAGEIDs as args or stdin lines). `query` **itself** reads PAGEIDs from stdin when piped, restricting the filter to that set — so filters intersect: `query keyword foo | query date today` == foo ∩ today
 - `go run ./cmd/snorg -a <archive-path> retrieve [PAGEID ...]` — the read interface: assembles the selected pages into a JSON **array of NoteViews** grouped per owning note (full note metadata, only the requested pages, placement order); whole note = `query note <FILE_ID> | retrieve`; unknown PAGEID errors
-- `go run ./cmd/snorg -a <archive-path> [-c ...] analyze [--force] [PAGEID ...]` — incremental vision-LLM analysis; PAGEIDs from args or stdin (pipe from `query`); unchanged pages (path-geometry hash == `analysis.source_hash`; invariant under recolor/background/overlays) are skipped without an LLM call (no rasterize), changed ones re-transcribed through the update prompt + the previous **AI base** (`<PAGEID>.md` with the user's edit diff reverse-applied — user edits never reach the LLM; minimal diff), then 3-way merged with any user edits (overlap → outcome `conflict`, markers in the md, resolve via `analyze-edit`); writes `<PAGEID>.md` (effective content) + `<PAGEID>.json` (per-title/link `analysis.name`, `analysis.{source_hash,fields}`; fields generated from the effective content); provider + prompts from the config (`docs/config.md`); `api_key` falls back to `api_key_command` stdout then `OPENAI_API_KEY`
-- `go run ./cmd/snorg -a <archive-path> analyze-edit <PAGEID>` — open the page's transcription in `$VISUAL`/`$EDITOR` (exactly one PAGEID, no stdin — the editor needs the terminal; no provider config needed): `<PAGEID>.md` stays the effective content, the divergence from the AI base is stored as `<PAGEID>.md.diff` (unified diff base→md, exists iff they diverge), so edits survive re-analysis; works on never-analyzed pages too (empty buffer → hand-written transcription, empty base ⇒ first `analyze` conflicts once); needs `git` on PATH
+- `go run ./cmd/snorg -a <archive-path> [-c ...] analyze [--force] [PAGEID ...]` — incremental vision-LLM analysis; PAGEIDs from args or stdin (pipe from `query`); unchanged pages (path-geometry hash == `analysis.source_hash`; invariant under recolor/background/overlays) are skipped without an LLM call (no rasterize), changed ones re-transcribed through the update prompt + the previous **AI base** (`<PAGEID>.md` with the user's edit diff reverse-applied — user edits never reach the LLM; minimal diff), then 3-way merged with any user edits (overlap → outcome `conflict`, markers in the md, resolve via `analyze-edit`); writes `<PAGEID>.md` (effective content) + `<PAGEID>.json` (per-title/link `analysis.name`, `analysis.{source_hash,fields}`; fields generated from the effective content); a title/link name marked `analysis.edited` (a user override from `analyze-edit`) is kept as-is and its region is **not** re-transcribed, even under `--force`; provider + prompts from the config (`docs/config.md`); `api_key` falls back to `api_key_command` stdout then `OPENAI_API_KEY`
+- `go run ./cmd/snorg -a <archive-path> analyze-edit <PAGEID>` — open the page's transcription in `$VISUAL`/`$EDITOR` (exactly one PAGEID, no stdin — the editor needs the terminal; no provider config needed). The buffer is content **plus** the title/link names: when the page has any title/link the editor opens a header of `<!-- title N (h..) -->` / `<!-- link N → target -->` markers (context after the index is informational — snorg keys off kind+index only) with each name below, then a `<!-- content -->` marker and the content (a page with no regions opens as bare content, as before). On save the content section flows through the usual sidecars — `<PAGEID>.md` stays the effective content, the divergence from the AI base is stored as `<PAGEID>.md.diff` (unified diff base→md, exists iff they diverge) — and each changed name becomes a **user override** (`analysis.edited`) in `<PAGEID>.json` that `analyze` keeps (and skips re-transcribing) until the region's rect changes. Works on never-analyzed pages too (empty content → hand-written transcription, empty base ⇒ first `analyze` conflicts once); needs `git` on PATH
 - `go run ./cmd/snorg -a <archive-path> [-c ...] export [PAGEID ...]` — PAGEIDs from args or stdin (pipe from `query`); groups pages per owning note like `retrieve` and renders the config's single `export.template` (pongo2/Jinja2) **once** over the whole result to stdout; template context is the `retrieve` JSON array under the `notes` key (snake_case: `notes[].pages[].titles/keywords/links/analysis.content`, `title.analysis.name`, `link.analysis.name`), so one template can span notes; filters: `denote` (FILE_ID/PAGEID → denote id), `org` (markdown→org via pandoc), `html` (markdown→HTML via pandoc), `nestorgheadings:N` (demote org headings), `nestmdheadings:N` (demote Markdown headings); needs no `provider` creds; see `examples/config.yaml` (Markdown), `examples/emacs/orgmode.yaml` (org), and `examples/web/` (static HTML site: `export.sh` runs `index.yaml` + per-note `note.yaml` over piped PAGEIDs, copies the pages' SVGs)
 
 ## Architecture
@@ -49,8 +49,9 @@ Flow: `cmd/snorg` → `internal/ingest` orchestrates `snote.Source.Read` → ren
   `footer.go` is the risky part (page association, see gotchas).
 - `internal/archive` — owns the on-disk layout `<archive>/<FILE_ID>/{note.json,<PAGEID>.json,<PAGEID>.md[.diff],<PAGEID>.svg}`;
   `doc.go` is the JSON serialization boundary (the stable plaintext contract; add fields freely —
-  per-title/per-link `analysis` is nested on the items, page `analysis` holds `source_hash`+`fields`,
-  the content transcription lives in the `<PAGEID>.md` sidecar); `Write` runs the config-driven
+  per-title/per-link `analysis` is nested on the items (`name` + `edited` = user-override flag), page
+  `analysis` holds `source_hash`+`fields`, the content transcription lives in the `<PAGEID>.md`
+  sidecar); `Write` runs the config-driven
   SVG pipeline (background mode `extract`/`inline`/`blank`/`remove` → `recolor` pen-shade fills →
   `injectNav` prev/next half-page zones → `injectLinks` note links → `formatSVG`; nav is emitted
   before links so links win hit-testing — SVG picks the later element);
@@ -66,7 +67,8 @@ Flow: `cmd/snorg` → `internal/ingest` orchestrates `snote.Source.Read` → ren
   assembles `note.json` + `<PAGEID>.json` + `<PAGEID>.md` into `[]*NoteView` grouped per owning
   note (List order, pages in placement order, unknown PAGEID errors); svg paths archive-relative;
   the view **mirrors the on-disk structure** (`title.analysis.name`, `link.analysis.name`,
-  `page.analysis.{content,fields}`); `analysis.content` is exposed whenever the md exists (AI or
+  `page.analysis.{content,fields}`) via its own view types — the internal `edited` override flag is
+  **not** exposed; `analysis.content` is exposed whenever the md exists (AI or
   hand-written), fields only once AI-analyzed. Consumers talk to snorg only via
   `list`/`query`/`retrieve`; read-only.
 - `internal/config` — loads merged YAML config (provider creds + analysis prompts incl.
@@ -106,10 +108,15 @@ Flow: `cmd/snorg` → `internal/ingest` orchestrates `snote.Source.Read` → ren
   Both seams are one openai-go client (endpoint/model/key from config). Writes `<PAGEID>.md` +
   `<PAGEID>.json`; returns `skipped|analyzed|updated|conflict` (conflict ≠ error; the batch continues).
   Has external deps; the seams keep it testable without a network.
-- `internal/edit` — `analyze-edit` orchestration: opens the transcription in the editor (`sh -c`
-  so `$EDITOR` may carry args, terminal inherited, temp copy — an aborted editor changes nothing),
-  then `archive.WriteAnalysisEdit`; outcomes `unchanged|edited|reverted`. Checks git availability
-  **before** launching the editor.
+- `internal/edit` — `analyze-edit` orchestration: `buffer.go` serializes the page to one editable
+  document (per-region name header + `<!-- content -->` + content; parses back keying regions by
+  marker kind+index, ignoring the informational context, content taken verbatim after the first
+  content marker) and opens it in the editor (`sh -c` so `$EDITOR` may carry args, terminal inherited,
+  temp copy — an aborted editor changes nothing); the content flows through `archive.WriteAnalysisEdit`
+  and each changed name becomes an `Edited` override via `archive.WritePage`. Returns the content
+  outcome (`unchanged|edited|reverted`) plus the count of changed names; a malformed header (wrong
+  marker count, missing content marker) errors and writes nothing. Checks git availability **before**
+  launching the editor.
 - `internal/textmerge` — the only place that executes `git` (`Diff`/`Unapply`/`Merge` +
   `Available`); pure text-in/text-out plumbing, byte-faithful (normalization is the archive's job),
   user/system git config disabled. Tests (here and in dependents) skip when git is absent.

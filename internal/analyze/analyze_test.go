@@ -341,6 +341,53 @@ func TestPageHumanTranscriptionStaysOffLLM(t *testing.T) {
 	}
 }
 
+// TestPageKeepsEditedRegionNames: a user override on a title/link name (Edited)
+// survives re-analysis untouched and its region is not re-transcribed, even
+// under --force.
+func TestPageKeepsEditedRegionNames(t *testing.T) {
+	requireGit(t)
+	a := archive.New(t.TempDir())
+	if err := a.Write(sampleNote(), map[string][]byte{"Pa": []byte(sampleSVG)}); err != nil {
+		t.Fatal(err)
+	}
+	tr := &fakeTranscriber{replies: sampleReplies()}
+	if _, err := Page(context.Background(), a, tr, tr, sampleSpec, "Pa", false); err != nil {
+		t.Fatal(err)
+	}
+
+	// The user fixes the mis-transcribed title/link names (as analyze-edit does).
+	pd, err := a.ReadPage("F_A", "Pa")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pd.Titles[0].Analysis = &archive.TitleAnalysis{Name: "My title", Edited: true}
+	pd.Links[0].Analysis = &archive.LinkAnalysis{Name: "My link", Edited: true}
+	if err := a.WritePage("F_A", pd); err != nil {
+		t.Fatal(err)
+	}
+
+	// Re-analyze under force: overrides stay and their regions are not re-sent.
+	tr.prompts = nil
+	if _, err := Page(context.Background(), a, tr, tr, sampleSpec, "Pa", true); err != nil {
+		t.Fatal(err)
+	}
+	pd, err = a.ReadPage("F_A", "Pa")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pd.Titles[0].Analysis == nil || pd.Titles[0].Analysis.Name != "My title" || !pd.Titles[0].Analysis.Edited {
+		t.Errorf("title override lost: %+v", pd.Titles[0].Analysis)
+	}
+	if pd.Links[0].Analysis == nil || pd.Links[0].Analysis.Name != "My link" || !pd.Links[0].Analysis.Edited {
+		t.Errorf("link override lost: %+v", pd.Links[0].Analysis)
+	}
+	for _, p := range tr.prompts {
+		if strings.HasPrefix(p, sampleSpec.Title) || strings.HasPrefix(p, sampleSpec.Link) {
+			t.Errorf("edited region was re-transcribed: %q", p)
+		}
+	}
+}
+
 func TestPageNotFound(t *testing.T) {
 	a := archive.New(t.TempDir())
 	fake := &fakeTranscriber{}

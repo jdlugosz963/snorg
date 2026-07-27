@@ -415,8 +415,11 @@ becomes a hand transcription."
                  (message "snorg analyze-edit failed: %s"
                           (if (string-empty-p out) "(no output)" out))
                (message "snorg: %s" out)
+               ;; Refresh when anything actually changed: content (edited/
+               ;; reverted) or one or more title/link names ("N name(s)
+               ;; updated"), but not a plain "unchanged".
                (when (and snorg-analyze-edit-refresh
-                          (string-match "\\(edited\\|reverted\\)\\'" out))
+                          (string-match "\\(edited\\|reverted\\|name(s) updated\\)" out))
                  (snorg--analyze-edit-refresh pageid origin view-p)))))))
       (message "snorg: editing %s -- finish with C-x #" pageid))))
 

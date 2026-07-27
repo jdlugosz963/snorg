@@ -4,7 +4,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jdlugosz963/snorg/internal/archive"
 	"github.com/jdlugosz963/snorg/internal/config"
 	"github.com/jdlugosz963/snorg/internal/retrieve"
 )
@@ -64,7 +63,7 @@ func TestMarkdownExample(t *testing.T) {
 				Links: []retrieve.LinkView{{
 					Name:         "komorki.note",
 					TargetPageID: "P20260629154103000001bbbbbb",
-					Analysis:     &archive.LinkAnalysis{Name: "biologia komórki"},
+					Analysis:     &retrieve.NameAnalysisView{Name: "biologia komórki"},
 				}},
 				Analysis: &retrieve.PageAnalysisView{Content: "# Potencjał czynnościowy\n\nnotatki z wykładu"},
 			},
