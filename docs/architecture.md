@@ -12,6 +12,7 @@ snorg -a <archive-path> retrieve [PAGEID ...]
 snorg -a <archive-path> analyze [--force] [PAGEID ...]
 snorg -a <archive-path> analyze-edit <PAGEID>
 snorg -a <archive-path> export [PAGEID ...]
+snorg -a <archive-path> serve [-l ADDR] [PAGEID ...]
 ```
 
 The archive path is a required global flag (`-a`/`--archive`, never hardcoded) and
@@ -55,6 +56,14 @@ a page can be transcribed entirely by hand, without any LLM involved. Manual
 edits survive re-analysis (see "User edits" below); `analyze` reports `conflict`
 where an edit and the new transcription overlap, resolved by another
 `analyze-edit`.
+
+`serve` is the built-in, zero-setup viewer: it assembles the selected pages
+(`retrieve.Get`) and stands up a local HTTP site (`-l`/`--listen`, default
+`127.0.0.1:8080`) — a gallery of notes (name + first-page thumbnail), each opening
+a gallery of that note's pages with a click-to-enlarge lightbox (←/→ pages, Esc).
+No PAGEIDs and no pipe means the whole archive. Everything is in-memory: the views
+are computed once and the page SVGs are streamed straight from the archive, nothing
+copied to disk. Needs no provider config.
 
 ## Archive layout (plaintext contract)
 
@@ -191,6 +200,11 @@ transcription and is re-transcribed by the next `analyze` run.
   (FILE_ID/PAGEID → denote id), `orgmode.go` (org-mode-only: `org` via pandoc
   shell-out, `nestorgheadings:N`), `markdown.go` (Markdown-only: `nestmdheadings:N`).
   External dep: `pongo2/v6`; PATH tool: `pandoc` (only for the `org` filter).
+- `internal/serve` — the built-in HTTP viewer (`serve` cmd): `Handler(a, views)` builds
+  a `net/http.ServeMux` over the assembled `[]*retrieve.NoteView` — `/` (note gallery),
+  `/note/{fid}` (page gallery + lightbox), `/svg/{fid}/{name}` (page SVG streamed from the
+  archive, only for pages in the served set). Self-contained HTML/CSS/JS via `html/template`,
+  no external deps. Read-only.
 - `internal/ingest` — orchestrator: `Source.Read` → render SVGs → `Archive.Write`.
 - `examples/emacs/snorg.el` — Emacs org consumer (outside the Go tree): drives the CLI
   (`list`/`query`/`retrieve`/`export`) to import notes into a pluggable backend (denote or

@@ -11,6 +11,7 @@
 //	snorg -a <archive-path> analyze [--force] [PAGEID ...]
 //	snorg -a <archive-path> analyze-edit <PAGEID>
 //	snorg -a <archive-path> export [PAGEID ...]
+//	snorg -a <archive-path> serve [-l ADDR] [PAGEID ...]
 //
 // retrieve, analyze and export take PAGEIDs as arguments or stdin lines, so
 // query pipes into any of them. query itself also reads PAGEIDs from stdin when
@@ -27,6 +28,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -43,6 +45,7 @@ import (
 	"github.com/jdlugosz963/snorg/internal/ingest"
 	"github.com/jdlugosz963/snorg/internal/query"
 	"github.com/jdlugosz963/snorg/internal/retrieve"
+	"github.com/jdlugosz963/snorg/internal/serve"
 	"github.com/jdlugosz963/snorg/internal/snote/sntool"
 )
 
@@ -121,10 +124,11 @@ func commands(a *app) []*cli.Command {
 		analyzeCmd(a),
 		analyzeEditCmd(a),
 		exportCmd(a),
+		serveCmd(a),
 	}
 }
 
-const commandNames = "ingest, list, retrieve, query, analyze, analyze-edit, export"
+const commandNames = "ingest, list, retrieve, query, analyze, analyze-edit, export, serve"
 
 // root registers the global flags and subcommands and loads the merged config
 // once in its Before hook, which urfave/cli runs as part of the command chain
@@ -544,4 +548,54 @@ func exportCmd(a *app) *cli.Command {
 			return nil
 		},
 	}
+}
+
+func serveCmd(a *app) *cli.Command {
+	return &cli.Command{
+		Name:      "serve",
+		Usage:     "serve a local HTML viewer for the pages (no PAGEIDs and no pipe = the whole archive)",
+		ArgsUsage: "[PAGEID ...]",
+		Flags: []cli.Flag{
+			&cli.StringFlag{
+				Name:    "listen",
+				Aliases: []string{"l"},
+				Usage:   "`ADDR` to listen on",
+				Value:   "127.0.0.1:8080",
+			},
+		},
+		Action: func(_ context.Context, cmd *cli.Command) error {
+			pageIDs, err := servePageIDs(a, cmd)
+			if err != nil {
+				return err
+			}
+			views, err := retrieve.Get(a.arch, pageIDs)
+			if err != nil {
+				return err
+			}
+			addr := cmd.String("listen")
+			fmt.Fprintf(os.Stderr, "snorg: serving %d note(s) on http://%s/\n", len(views), addr)
+			return http.ListenAndServe(addr, serve.Handler(a.arch, views))
+		},
+	}
+}
+
+// servePageIDs is serve's PAGEID selection: positional arguments, or piped stdin
+// lines, or — with neither (a terminal stdin) — every page in the archive, so a
+// bare `serve` opens the whole archive.
+func servePageIDs(a *app, cmd *cli.Command) ([]string, error) {
+	if cmd.Args().Len() > 0 {
+		return cmd.Args().Slice(), nil
+	}
+	if stdinPiped() {
+		return readLines(os.Stdin)
+	}
+	matches, err := query.Pages(a.arch, query.All)
+	if err != nil {
+		return nil, err
+	}
+	ids := make([]string, len(matches))
+	for i, m := range matches {
+		ids[i] = m.PageID
+	}
+	return ids, nil
 }
