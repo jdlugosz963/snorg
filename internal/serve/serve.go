@@ -39,10 +39,12 @@ func Handler(a *archive.Archive, views []*retrieve.NoteView) http.Handler {
 		}
 	}
 
-	// Thumbnails are rasterized once per page and cached for the session — the
-	// SVG bytes never change while serving, so a plain memo under a mutex is enough.
-	var thumbMu sync.Mutex
+	// Thumbnails (rasterized PNG) and viewer SVGs (links rewritten to viewer routes)
+	// are derived once per page and cached for the session — the archive SVG never
+	// changes while serving, so a plain memo under a mutex is enough.
+	var memoMu sync.Mutex
 	thumbs := make(map[string][]byte)
+	svgs := make(map[string][]byte)
 
 	mux := http.NewServeMux()
 
@@ -79,14 +81,27 @@ func Handler(a *archive.Archive, views []*retrieve.NoteView) http.Handler {
 	// and strip it.
 	mux.HandleFunc("GET /svg/{fid}/{name}", func(w http.ResponseWriter, r *http.Request) {
 		fid, pid := r.PathValue("fid"), strings.TrimSuffix(r.PathValue("name"), ".svg")
-		if !allowed[fid+"/"+pid] {
+		key := fid + "/" + pid
+		if !allowed[key] {
 			http.NotFound(w, r)
 			return
 		}
-		b, err := a.ReadSVG(fid, pid)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusNotFound)
-			return
+		memoMu.Lock()
+		b, ok := svgs[key]
+		memoMu.Unlock()
+		if !ok {
+			raw, err := a.ReadSVG(fid, pid)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusNotFound)
+				return
+			}
+			// Retarget baked links so a tap in the enlarged view opens the note
+			// and enlarges the target page, and make the root scale to the
+			// <object> box instead of rendering at native size and clipping.
+			b = responsiveSVGRoot(rewriteViewerLinks(raw, fid))
+			memoMu.Lock()
+			svgs[key] = b
+			memoMu.Unlock()
 		}
 		writeAsset(w, r, b, "image/svg+xml")
 	})
@@ -98,9 +113,9 @@ func Handler(a *archive.Archive, views []*retrieve.NoteView) http.Handler {
 			http.NotFound(w, r)
 			return
 		}
-		thumbMu.Lock()
+		memoMu.Lock()
 		png, ok := thumbs[key]
-		thumbMu.Unlock()
+		memoMu.Unlock()
 		if !ok {
 			svg, err := a.ReadSVG(fid, pid)
 			if err != nil {
@@ -111,9 +126,9 @@ func Handler(a *archive.Archive, views []*retrieve.NoteView) http.Handler {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
 			}
-			thumbMu.Lock()
+			memoMu.Lock()
 			thumbs[key] = png
-			thumbMu.Unlock()
+			memoMu.Unlock()
 		}
 		writeAsset(w, r, png, "image/png")
 	})
@@ -201,7 +216,8 @@ const shell = `<!doctype html>
   #lb.open { display: flex; }
   .lbinner { display: flex; flex-direction: column; align-items: center;
         max-width: 96vw; max-height: 96vh; overflow: auto; gap: .75rem; }
-  .lbinner img { max-width: 92vw; max-height: 70vh; background: #fff; }
+  .lbinner object { height: 78vh; aspect-ratio: 3 / 4; max-width: 94vw;
+        background: #fff; }
   #lbtext { white-space: pre-wrap; word-break: break-word; max-width: 900px;
         width: 92vw; color: #eee; background: #1c1c1ccc; padding: .75rem 1rem;
         border-radius: 6px; font-size: .92rem; }
@@ -215,7 +231,7 @@ const shell = `<!doctype html>
 <div id="lb" role="dialog" aria-modal="true">
   <button class="prev" aria-label="previous">&#8249;</button>
   <div class="lbinner">
-    <img alt="">
+    <object type="image/svg+xml"></object>
     <div id="lbtext" hidden></div>
   </div>
   <button class="next" aria-label="next">&#8250;</button>
@@ -224,14 +240,17 @@ const shell = `<!doctype html>
 (function () {
   var thumbs = Array.prototype.slice.call(document.querySelectorAll('.thumb'));
   if (!thumbs.length) return;
-  var lb = document.getElementById('lb'), img = lb.querySelector('img'),
+  var lb = document.getElementById('lb'), obj = lb.querySelector('object'),
       txt = document.getElementById('lbtext'), i = 0;
+  // The enlarged page is an <object> (a live SVG document), so its baked links —
+  // retargeted to /note/{fid}?page={pid} with target="_top" — are clickable and
+  // navigate the whole viewer; an <img> would render the SVG inertly.
   function show(n) { i = (n + thumbs.length) % thumbs.length;
-    img.src = thumbs[i].dataset.full;
+    obj.data = thumbs[i].dataset.full;
     var el = thumbs[i].querySelector('.txt'), t = el ? el.textContent : '';
     txt.textContent = t; txt.hidden = (t.trim() === ''); }
   function open(n) { show(n); lb.classList.add('open'); }
-  function close() { lb.classList.remove('open'); img.src = ''; }
+  function close() { lb.classList.remove('open'); obj.removeAttribute('data'); }
   thumbs.forEach(function (t, n) {
     t.addEventListener('click', function () { open(n); });
   });
@@ -246,6 +265,13 @@ const shell = `<!doctype html>
     else if (e.key === 'ArrowLeft') show(i - 1);
     else if (e.key === 'ArrowRight') show(i + 1);
   });
+  // Following an in-SVG link lands on /note/{fid}?page={pid}: open the lightbox
+  // on that page so the tap "enlarges" the target.
+  var want = new URLSearchParams(location.search).get('page');
+  if (want) {
+    var idx = thumbs.findIndex(function (t) { return t.dataset.pid === want; });
+    if (idx >= 0) open(idx);
+  }
 })();
 </script>
 </html>
@@ -274,7 +300,7 @@ var noteTmpl = mustShell(`
 {{define "body"}}
 <div class="grid">
   {{range $n, $p := .Pages}}
-  <button class="thumb" data-full="/svg/{{$.FileID}}/{{$p.PageID}}.svg" aria-label="page {{$n}}">
+  <button class="thumb" data-full="/svg/{{$.FileID}}/{{$p.PageID}}.svg" data-pid="{{$p.PageID}}" aria-label="page {{$n}}">
     <img src="/thumb/{{$.FileID}}/{{$p.PageID}}.png" alt="" loading="lazy" decoding="async">
     <span class="txt" hidden>{{$p.Content}}</span>
   </button>

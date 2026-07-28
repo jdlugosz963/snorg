@@ -22,7 +22,12 @@ func fixture(t *testing.T) *httptest.Server {
 		FileID: "F_TEST",
 		Source: "My Meeting.note",
 		Pages: []snote.Page{
-			{ID: "Pa", Number: 1},
+			{
+				ID: "Pa", Number: 1,
+				// An internal link to page Pb so archive.Write bakes an <a xlink:href="Pb.svg">
+				// overlay we can assert the viewer rewrites.
+				Links: []snote.Link{{Rect: snote.Rect{X: 10, Y: 20, W: 30, H: 40}, TargetFileID: "F_TEST", TargetPageID: "Pb"}},
+			},
 			{ID: "Pb", Number: 2},
 		},
 	}
@@ -83,11 +88,13 @@ func TestNoteListsPages(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d", resp.StatusCode)
 	}
-	// Thumbnails point at /thumb PNGs; the lightbox opens the full SVG (data-full).
+	// Thumbnails point at /thumb PNGs; the lightbox embeds the full SVG (data-full)
+	// in an <object> so its links are clickable, and data-pid lets ?page= reopen it.
 	for _, want := range []string{
-		`class="thumb"`,
+		`class="thumb"`, `<object`,
 		`/thumb/F_TEST/Pa.png`, `/thumb/F_TEST/Pb.png`,
 		`data-full="/svg/F_TEST/Pa.svg"`, `data-full="/svg/F_TEST/Pb.svg"`,
+		`data-pid="Pa"`, `data-pid="Pb"`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("note page missing %q:\n%s", want, body)
@@ -163,6 +170,14 @@ func TestSVGServedForSelectedPage(t *testing.T) {
 	}
 	if !strings.Contains(body, "<svg") {
 		t.Errorf("body is not svg: %q", body)
+	}
+	// The baked internal link (Pa → Pb) is retargeted to a viewer route that opens
+	// the note and enlarges Pb, breaking out of the <object> via target="_top".
+	if !strings.Contains(body, `target="_top" xlink:href="/note/F_TEST?page=Pb"`) {
+		t.Errorf("svg link not rewritten to a viewer route:\n%s", body)
+	}
+	if strings.Contains(body, `xlink:href="Pb.svg"`) {
+		t.Errorf("svg still carries the raw archive-relative link:\n%s", body)
 	}
 }
 

@@ -61,10 +61,13 @@ where an edit and the new transcription overlap, resolved by another
 (`retrieve.Get`) and stands up a local HTTP site (`-l`/`--listen`, default
 `127.0.0.1:8080`) — a gallery of notes (name + first-page thumbnail), each opening
 a gallery of that note's pages with a click-to-enlarge lightbox that also shows the
-page's transcription under the enlarged page (←/→ pages, Esc). Thumbnails are small
-rasterized PNGs (the SVG rendered at ~400px, so far fewer bytes than the vector) and
-both the thumbnail and full-SVG routes carry `ETag`/`Cache-Control` for browser
-caching. No PAGEIDs and no pipe means the whole archive. Everything is in-memory: the
+page's transcription under the enlarged page (←/→ pages, Esc). The enlarged page is an
+`<object>` (a live SVG document) so its baked links stay clickable; the `/svg` route
+retargets them to `/note/{fid}?page={pid}` (with `target="_top"`) so a tap opens that
+note and enlarges the page, and makes the SVG root responsive so it scales to fit
+instead of clipping. Thumbnails are small rasterized PNGs (the SVG rendered at ~400px,
+so far fewer bytes than the vector) and both the thumbnail and full-SVG routes carry
+`ETag`/`Cache-Control` for browser caching. No PAGEIDs and no pipe means the whole archive. Everything is in-memory: the
 views are computed once, thumbnails are memoized, and the page SVGs are streamed
 straight from the archive, nothing copied to disk. Needs no provider config.
 
@@ -205,9 +208,10 @@ transcription and is re-transcribed by the next `analyze` run.
   External dep: `pongo2/v6`; PATH tool: `pandoc` (only for the `org` filter).
 - `internal/serve` — the built-in HTTP viewer (`serve` cmd): `Handler(a, views)` builds
   a `net/http.ServeMux` over the assembled `[]*retrieve.NoteView` — `/` (note gallery),
-  `/note/{fid}` (page gallery + lightbox with the page transcription), `/thumb/{fid}/{name}`
-  (small rasterized-PNG thumbnail via `thumb.go`/`oksvg`/`rasterx`, memoized in-memory) and
-  `/svg/{fid}/{name}` (full page SVG streamed from the archive). Both image routes carry
+  `/note/{fid}` (page gallery + `<object>` lightbox with the page transcription),
+  `/thumb/{fid}/{name}` (small rasterized-PNG thumbnail via `thumb.go`/`oksvg`/`rasterx`,
+  memoized in-memory) and `/svg/{fid}/{name}` (full page SVG; `svglinks.go` retargets baked links
+  to viewer routes and makes the root responsive, memoized). Both image routes carry
   `ETag`/`Cache-Control` (`writeAsset`) and serve only pages in the served set. Self-contained
   HTML/CSS/JS via `html/template`. Read-only. Deps: `oksvg`/`rasterx`.
 - `internal/ingest` — orchestrator: `Source.Read` → render SVGs → `Archive.Write`.

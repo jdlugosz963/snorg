@@ -81,8 +81,14 @@ Flow: `cmd/snorg` → `internal/ingest` orchestrates `snote.Source.Read` → ren
   rasterized-PNG thumbnail — `thumb.go` renders the SVG at ~400px via `oksvg`/`rasterx`, so it's
   handwriting-on-white and far fewer bytes than the vector SVG; memoized in-memory for the
   session) and `/svg/{fid}/{name}` (full page SVG via `archive.ReadSVG`, used for the enlarged
-  view). Both image routes carry `ETag` + `Cache-Control` (`writeAsset`, 304 on re-request) and
-  are gated to pages in the served set so the viewer never exposes the whole archive.
+  view — the lightbox embeds it in an `<object>` so its links stay clickable, unlike an `<img>`).
+  For the enlarged view `svglinks.go` transforms the served SVG: `rewriteViewerLinks` retargets
+  each baked page link `xlink:href="…PID.svg"` → `target="_top" xlink:href="/note/{fid}?page={pid}"`
+  (a tap opens that note and, via the note page's `?page=` reader, enlarges the target page), and
+  `responsiveSVGRoot` gives the root a viewBox + `width/height="100%"` so it scales to the object
+  box instead of rendering at native 1920x2560 and clipping (memoized). Both image routes carry
+  `ETag` + `Cache-Control` (`writeAsset`, 304 on re-request) and are gated to pages in the served
+  set so the viewer never exposes the whole archive.
   Self-contained HTML/CSS/JS via `html/template`, no other deps; read-only, nothing written to
   disk. Testable via `httptest` (no network). Package deps: `oksvg`/`rasterx` (thumbnail raster).
 - `internal/config` — loads merged YAML config (provider creds + analysis prompts incl.
