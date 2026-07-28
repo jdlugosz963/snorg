@@ -15,16 +15,20 @@
 package serve
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"html/template"
 	"net/http"
 	"strings"
+	"sync"
 
 	"github.com/jdlugosz963/snorg/internal/archive"
 	"github.com/jdlugosz963/snorg/internal/retrieve"
 )
 
 // Handler builds the viewer over the given views. The archive is used only to
-// stream page SVGs on demand; views carry everything else.
+// stream page SVGs (and rasterize thumbnails) on demand; views carry everything
+// else.
 func Handler(a *archive.Archive, views []*retrieve.NoteView) http.Handler {
 	byID := make(map[string]*retrieve.NoteView, len(views))
 	allowed := make(map[string]bool) // "fid/pid" pairs this viewer may serve
@@ -34,6 +38,11 @@ func Handler(a *archive.Archive, views []*retrieve.NoteView) http.Handler {
 			allowed[v.FileID+"/"+p.PageID] = true
 		}
 	}
+
+	// Thumbnails are rasterized once per page and cached for the session — the
+	// SVG bytes never change while serving, so a plain memo under a mutex is enough.
+	var thumbMu sync.Mutex
+	thumbs := make(map[string][]byte)
 
 	mux := http.NewServeMux()
 
@@ -54,15 +63,20 @@ func Handler(a *archive.Archive, views []*retrieve.NoteView) http.Handler {
 			http.NotFound(w, r)
 			return
 		}
-		pages := make([]string, 0, len(v.Pages))
+		pages := make([]notePage, 0, len(v.Pages))
 		for _, p := range v.Pages {
-			pages = append(pages, p.PageID)
+			var content string
+			if p.Analysis != nil {
+				content = p.Analysis.Content
+			}
+			pages = append(pages, notePage{PageID: p.PageID, Content: content})
 		}
-		render(w, noteTmpl, noteData{FileID: v.FileID, Name: noteName(v), PageIDs: pages})
+		render(w, noteTmpl, noteData{FileID: v.FileID, Name: noteName(v), Pages: pages})
 	})
 
-	// The .svg suffix stays in the URL for clarity but is not a routable wildcard
-	// segment (Go's mux forbids {pid}.svg), so match the whole filename and strip.
+	// The .svg/.png suffix stays in the URL for clarity but is not a routable
+	// wildcard segment (Go's mux forbids {pid}.svg), so match the whole filename
+	// and strip it.
 	mux.HandleFunc("GET /svg/{fid}/{name}", func(w http.ResponseWriter, r *http.Request) {
 		fid, pid := r.PathValue("fid"), strings.TrimSuffix(r.PathValue("name"), ".svg")
 		if !allowed[fid+"/"+pid] {
@@ -74,11 +88,54 @@ func Handler(a *archive.Archive, views []*retrieve.NoteView) http.Handler {
 			http.Error(w, err.Error(), http.StatusNotFound)
 			return
 		}
-		w.Header().Set("Content-Type", "image/svg+xml")
-		w.Write(b)
+		writeAsset(w, r, b, "image/svg+xml")
+	})
+
+	mux.HandleFunc("GET /thumb/{fid}/{name}", func(w http.ResponseWriter, r *http.Request) {
+		fid, pid := r.PathValue("fid"), strings.TrimSuffix(r.PathValue("name"), ".png")
+		key := fid + "/" + pid
+		if !allowed[key] {
+			http.NotFound(w, r)
+			return
+		}
+		thumbMu.Lock()
+		png, ok := thumbs[key]
+		thumbMu.Unlock()
+		if !ok {
+			svg, err := a.ReadSVG(fid, pid)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusNotFound)
+				return
+			}
+			if png, err = thumbnailPNG(svg); err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			thumbMu.Lock()
+			thumbs[key] = png
+			thumbMu.Unlock()
+		}
+		writeAsset(w, r, png, "image/png")
 	})
 
 	return mux
+}
+
+// writeAsset serves an immutable-for-the-session binary asset with an ETag and a
+// cache window, so a browser revisiting a page reuses it (304) instead of
+// re-downloading. The ETag is the content hash, so it also invalidates correctly
+// if the bytes ever differ.
+func writeAsset(w http.ResponseWriter, r *http.Request, b []byte, contentType string) {
+	sum := sha256.Sum256(b)
+	etag := `"` + hex.EncodeToString(sum[:8]) + `"`
+	w.Header().Set("ETag", etag)
+	w.Header().Set("Cache-Control", "public, max-age=3600")
+	w.Header().Set("Content-Type", contentType)
+	if r.Header.Get("If-None-Match") == etag {
+		w.WriteHeader(http.StatusNotModified)
+		return
+	}
+	w.Write(b)
 }
 
 // noteName is the human label for a note: the original .note filename without
@@ -107,9 +164,14 @@ type noteCard struct {
 }
 
 type noteData struct {
-	FileID  string
-	Name    string
-	PageIDs []string
+	FileID string
+	Name   string
+	Pages  []notePage
+}
+
+type notePage struct {
+	PageID  string
+	Content string // transcription markdown, shown under the enlarged page
 }
 
 // shell wraps a page body in a minimal, dependency-free HTML document. The
@@ -137,7 +199,12 @@ const shell = `<!doctype html>
   #lb { position: fixed; inset: 0; background: #000d; display: none;
         align-items: center; justify-content: center; }
   #lb.open { display: flex; }
-  #lb img { max-width: 96vw; max-height: 96vh; background: #fff; }
+  .lbinner { display: flex; flex-direction: column; align-items: center;
+        max-width: 96vw; max-height: 96vh; overflow: auto; gap: .75rem; }
+  .lbinner img { max-width: 92vw; max-height: 70vh; background: #fff; }
+  #lbtext { white-space: pre-wrap; word-break: break-word; max-width: 900px;
+        width: 92vw; color: #eee; background: #1c1c1ccc; padding: .75rem 1rem;
+        border-radius: 6px; font-size: .92rem; }
   #lb button { position: fixed; top: 50%; transform: translateY(-50%);
         font-size: 2.5rem; color: #fff; background: none; border: 0;
         cursor: pointer; padding: 0 1rem; }
@@ -147,16 +214,22 @@ const shell = `<!doctype html>
 {{template "body" .}}
 <div id="lb" role="dialog" aria-modal="true">
   <button class="prev" aria-label="previous">&#8249;</button>
-  <img alt="">
+  <div class="lbinner">
+    <img alt="">
+    <div id="lbtext" hidden></div>
+  </div>
   <button class="next" aria-label="next">&#8250;</button>
 </div>
 <script>
 (function () {
   var thumbs = Array.prototype.slice.call(document.querySelectorAll('.thumb'));
   if (!thumbs.length) return;
-  var lb = document.getElementById('lb'), img = lb.querySelector('img'), i = 0;
+  var lb = document.getElementById('lb'), img = lb.querySelector('img'),
+      txt = document.getElementById('lbtext'), i = 0;
   function show(n) { i = (n + thumbs.length) % thumbs.length;
-    img.src = thumbs[i].dataset.src; }
+    img.src = thumbs[i].dataset.full;
+    var el = thumbs[i].querySelector('.txt'), t = el ? el.textContent : '';
+    txt.textContent = t; txt.hidden = (t.trim() === ''); }
   function open(n) { show(n); lb.classList.add('open'); }
   function close() { lb.classList.remove('open'); img.src = ''; }
   thumbs.forEach(function (t, n) {
@@ -185,7 +258,7 @@ var indexTmpl = mustShell(`
 <div class="grid">
   {{range .Notes}}
   <a class="card" href="/note/{{.FileID}}">
-    <img src="/svg/{{.FileID}}/{{.FirstPageID}}.svg" alt="" loading="lazy">
+    <img src="/thumb/{{.FileID}}/{{.FirstPageID}}.png" alt="" loading="lazy" decoding="async">
     <div class="cap">{{.Name}}</div>
   </a>
   {{else}}
@@ -200,9 +273,10 @@ var noteTmpl = mustShell(`
 {{define "head"}}<a href="/">&#8592; Notes</a><h1>{{.Name}}</h1>{{end}}
 {{define "body"}}
 <div class="grid">
-  {{range $n, $pid := .PageIDs}}
-  <button class="thumb" data-src="/svg/{{$.FileID}}/{{$pid}}.svg" aria-label="page {{$n}}">
-    <img src="/svg/{{$.FileID}}/{{$pid}}.svg" alt="" loading="lazy">
+  {{range $n, $p := .Pages}}
+  <button class="thumb" data-full="/svg/{{$.FileID}}/{{$p.PageID}}.svg" aria-label="page {{$n}}">
+    <img src="/thumb/{{$.FileID}}/{{$p.PageID}}.png" alt="" loading="lazy" decoding="async">
+    <span class="txt" hidden>{{$p.Content}}</span>
   </button>
   {{else}}
   <p>No pages.</p>

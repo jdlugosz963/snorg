@@ -60,10 +60,13 @@ where an edit and the new transcription overlap, resolved by another
 `serve` is the built-in, zero-setup viewer: it assembles the selected pages
 (`retrieve.Get`) and stands up a local HTTP site (`-l`/`--listen`, default
 `127.0.0.1:8080`) — a gallery of notes (name + first-page thumbnail), each opening
-a gallery of that note's pages with a click-to-enlarge lightbox (←/→ pages, Esc).
-No PAGEIDs and no pipe means the whole archive. Everything is in-memory: the views
-are computed once and the page SVGs are streamed straight from the archive, nothing
-copied to disk. Needs no provider config.
+a gallery of that note's pages with a click-to-enlarge lightbox that also shows the
+page's transcription under the enlarged page (←/→ pages, Esc). Thumbnails are small
+rasterized PNGs (the SVG rendered at ~400px, so far fewer bytes than the vector) and
+both the thumbnail and full-SVG routes carry `ETag`/`Cache-Control` for browser
+caching. No PAGEIDs and no pipe means the whole archive. Everything is in-memory: the
+views are computed once, thumbnails are memoized, and the page SVGs are streamed
+straight from the archive, nothing copied to disk. Needs no provider config.
 
 ## Archive layout (plaintext contract)
 
@@ -202,9 +205,11 @@ transcription and is re-transcribed by the next `analyze` run.
   External dep: `pongo2/v6`; PATH tool: `pandoc` (only for the `org` filter).
 - `internal/serve` — the built-in HTTP viewer (`serve` cmd): `Handler(a, views)` builds
   a `net/http.ServeMux` over the assembled `[]*retrieve.NoteView` — `/` (note gallery),
-  `/note/{fid}` (page gallery + lightbox), `/svg/{fid}/{name}` (page SVG streamed from the
-  archive, only for pages in the served set). Self-contained HTML/CSS/JS via `html/template`,
-  no external deps. Read-only.
+  `/note/{fid}` (page gallery + lightbox with the page transcription), `/thumb/{fid}/{name}`
+  (small rasterized-PNG thumbnail via `thumb.go`/`oksvg`/`rasterx`, memoized in-memory) and
+  `/svg/{fid}/{name}` (full page SVG streamed from the archive). Both image routes carry
+  `ETag`/`Cache-Control` (`writeAsset`) and serve only pages in the served set. Self-contained
+  HTML/CSS/JS via `html/template`. Read-only. Deps: `oksvg`/`rasterx`.
 - `internal/ingest` — orchestrator: `Source.Read` → render SVGs → `Archive.Write`.
 - `examples/emacs/snorg.el` — Emacs org consumer (outside the Go tree): drives the CLI
   (`list`/`query`/`retrieve`/`export`) to import notes into a pluggable backend (denote or

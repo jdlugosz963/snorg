@@ -11,8 +11,10 @@ Read `docs/principles.md` (project rules), `docs/architecture.md` (modules/CLI),
 
 ## Project rules
 
-- Go. External deps by package: `internal/analyze` uses `openai-go` (LLM client)
-  and `oksvg`/`rasterx` (SVG rasterization); `internal/config` uses
+- Go. External deps by package: `internal/analyze` and `internal/serve` use
+  `oksvg`/`rasterx` (SVG rasterization — analyze for the vision prompt, serve for
+  gallery thumbnails); `internal/analyze` also uses `openai-go` (LLM client);
+  `internal/config` uses
   `gopkg.in/yaml.v3` (config parsing); `internal/export` uses `pongo2/v6`
   (Jinja2-style templating); `cmd/snorg` uses `urfave/cli/v3` (CLI framework).
   PATH tools (not go.mod deps): the `.note` binary format is handled by shelling
@@ -74,10 +76,15 @@ Flow: `cmd/snorg` → `internal/ingest` orchestrates `snote.Source.Read` → ren
   `list`/`query`/`retrieve`; read-only.
 - `internal/serve` — the built-in HTTP viewer (`serve` cmd): `Handler(a, views)` builds a
   `net/http.ServeMux` over the assembled `[]*retrieve.NoteView` — `/` (note gallery: name +
-  first-page thumbnail), `/note/{fid}` (that note's page gallery + a vanilla-JS lightbox), and
-  `/svg/{fid}/{name}` (page SVG streamed via `archive.ReadSVG`, gated to pages in the served set
-  so the viewer never exposes the whole archive). Self-contained HTML/CSS/JS via `html/template`,
-  no external deps; read-only, nothing written to disk. Testable via `httptest` (no network).
+  first-page thumbnail), `/note/{fid}` (that note's page gallery + a vanilla-JS lightbox that
+  shows the page's transcription under the enlarged page), `/thumb/{fid}/{name}` (small
+  rasterized-PNG thumbnail — `thumb.go` renders the SVG at ~400px via `oksvg`/`rasterx`, so it's
+  handwriting-on-white and far fewer bytes than the vector SVG; memoized in-memory for the
+  session) and `/svg/{fid}/{name}` (full page SVG via `archive.ReadSVG`, used for the enlarged
+  view). Both image routes carry `ETag` + `Cache-Control` (`writeAsset`, 304 on re-request) and
+  are gated to pages in the served set so the viewer never exposes the whole archive.
+  Self-contained HTML/CSS/JS via `html/template`, no other deps; read-only, nothing written to
+  disk. Testable via `httptest` (no network). Package deps: `oksvg`/`rasterx` (thumbnail raster).
 - `internal/config` — loads merged YAML config (provider creds + analysis prompts incl.
   `content.update_prompt` + `ingest.svg` toggles + `export.template`; `docs/config.md`). `Load(paths)`
   deep-merges files (later wins), defaults unset prompts and nil toggles (to true). Provider key

@@ -26,7 +26,12 @@ func fixture(t *testing.T) *httptest.Server {
 			{ID: "Pb", Number: 2},
 		},
 	}
-	if err := a.Write(n, map[string][]byte{"Pa": []byte("<svg>a</svg>"), "Pb": []byte("<svg>b</svg>")}); err != nil {
+	svg := `<svg xmlns="http://www.w3.org/2000/svg" width="1920" height="2560"><path d="M10 10 L100 100" stroke="#000"/></svg>`
+	if err := a.Write(n, map[string][]byte{"Pa": []byte(svg), "Pb": []byte(svg)}); err != nil {
+		t.Fatal(err)
+	}
+	// A transcription on the first page so the lightbox has content to show.
+	if err := a.WriteAnalysisMD("F_TEST", "Pa", "# Heading\nsome notes"); err != nil {
 		t.Fatal(err)
 	}
 	views, err := retrieve.Get(a, []string{"Pa", "Pb"})
@@ -66,7 +71,8 @@ func TestIndexListsNotes(t *testing.T) {
 	if !strings.Contains(body, `href="/note/F_TEST"`) {
 		t.Errorf("index missing note link:\n%s", body)
 	}
-	if !strings.Contains(body, `/svg/F_TEST/Pa.svg`) {
+	// The card thumbnail is the lightweight rasterized PNG, not the SVG.
+	if !strings.Contains(body, `/thumb/F_TEST/Pa.png`) {
 		t.Errorf("index missing first-page thumbnail:\n%s", body)
 	}
 }
@@ -77,10 +83,65 @@ func TestNoteListsPages(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d", resp.StatusCode)
 	}
-	for _, want := range []string{"/svg/F_TEST/Pa.svg", "/svg/F_TEST/Pb.svg", `class="thumb"`} {
+	// Thumbnails point at /thumb PNGs; the lightbox opens the full SVG (data-full).
+	for _, want := range []string{
+		`class="thumb"`,
+		`/thumb/F_TEST/Pa.png`, `/thumb/F_TEST/Pb.png`,
+		`data-full="/svg/F_TEST/Pa.svg"`, `data-full="/svg/F_TEST/Pb.svg"`,
+	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("note page missing %q:\n%s", want, body)
 		}
+	}
+	// The first page's transcription rides along in the hidden .txt span so the
+	// lightbox can show it under the enlarged page.
+	if !strings.Contains(body, `class="txt"`) || !strings.Contains(body, "some notes") {
+		t.Errorf("note page missing transcription span:\n%s", body)
+	}
+}
+
+func TestThumbnailServedAsPNGWithCaching(t *testing.T) {
+	srv := fixture(t)
+	resp, body := get(t, srv, "/thumb/F_TEST/Pa.png")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d", resp.StatusCode)
+	}
+	if ct := resp.Header.Get("Content-Type"); ct != "image/png" {
+		t.Errorf("content-type = %q", ct)
+	}
+	if !strings.HasPrefix(body, "\x89PNG") {
+		t.Errorf("body is not a PNG (first bytes %q)", body[:min(8, len(body))])
+	}
+	etag := resp.Header.Get("ETag")
+	if etag == "" || resp.Header.Get("Cache-Control") == "" {
+		t.Fatalf("missing cache headers: etag=%q cc=%q", etag, resp.Header.Get("Cache-Control"))
+	}
+	// A conditional re-request with the ETag gets 304, not the bytes again.
+	req, _ := http.NewRequest("GET", srv.URL+"/thumb/F_TEST/Pa.png", nil)
+	req.Header.Set("If-None-Match", etag)
+	resp2, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp2.Body.Close()
+	if resp2.StatusCode != http.StatusNotModified {
+		t.Errorf("conditional GET status = %d want 304", resp2.StatusCode)
+	}
+}
+
+func TestSVGCarriesETag(t *testing.T) {
+	srv := fixture(t)
+	resp, _ := get(t, srv, "/svg/F_TEST/Pa.svg")
+	if resp.Header.Get("ETag") == "" || resp.Header.Get("Cache-Control") == "" {
+		t.Errorf("svg missing cache headers: etag=%q cc=%q",
+			resp.Header.Get("ETag"), resp.Header.Get("Cache-Control"))
+	}
+}
+
+func TestThumbForUnservedPageIs404(t *testing.T) {
+	srv := fixture(t)
+	if resp, _ := get(t, srv, "/thumb/F_TEST/Pzzz.png"); resp.StatusCode != http.StatusNotFound {
+		t.Errorf("unserved thumb status = %d want 404", resp.StatusCode)
 	}
 }
 
