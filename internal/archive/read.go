@@ -2,12 +2,30 @@ package archive
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 )
+
+// ErrSchemaVersion is the sentinel wrapped by ReadNote/ReadPage when an on-disk
+// file's schema_version differs from CurrentSchemaVersion. Callers distinguish it
+// from a missing file (os.ErrNotExist) to fail loudly instead of clobbering a
+// stale file; the future `migrate` command is the only reader that bypasses it.
+var ErrSchemaVersion = errors.New("incompatible schema version")
+
+// verifySchema gates a parsed doc: a version other than CurrentSchemaVersion is a
+// stale (or future) grammar this binary must not touch, so it errors with a
+// recovery hint rather than misinterpreting the bytes.
+func verifySchema(kind, id string, got int) error {
+	if got != CurrentSchemaVersion {
+		return fmt.Errorf("%s %s: %w %d, expected %d — run `snorg migrate`",
+			kind, id, ErrSchemaVersion, got, CurrentSchemaVersion)
+	}
+	return nil
+}
 
 // The read side of the archive: layout-aware accessors that turn the on-disk
 // files back into Doc values. Retrieval/export commands build on these instead
@@ -40,6 +58,9 @@ func (a *Archive) ReadNote(fileID string) (NoteDoc, error) {
 	if err := readJSON(filepath.Join(a.Root, fileID, "note.json"), &nd); err != nil {
 		return NoteDoc{}, err
 	}
+	if err := verifySchema("note", fileID, nd.SchemaVersion); err != nil {
+		return NoteDoc{}, err
+	}
 	return nd, nil
 }
 
@@ -47,6 +68,9 @@ func (a *Archive) ReadNote(fileID string) (NoteDoc, error) {
 func (a *Archive) ReadPage(fileID, pageID string) (PageDoc, error) {
 	var pd PageDoc
 	if err := readJSON(filepath.Join(a.Root, fileID, pageID+".json"), &pd); err != nil {
+		return PageDoc{}, err
+	}
+	if err := verifySchema("page", pageID, pd.SchemaVersion); err != nil {
 		return PageDoc{}, err
 	}
 	return pd, nil
@@ -92,8 +116,11 @@ func (a *Archive) FindPage(pageID string) (string, error) {
 }
 
 // WritePage writes pd to <fileID>/<pageID>.json in the canonical format, leaving
-// every sibling artifact (svg, other pages, backgrounds) untouched.
+// every sibling artifact (svg, other pages, backgrounds) untouched. It stamps the
+// current schema version so a persisted doc always reports the grammar it was
+// written in (and never fails its own next read).
 func (a *Archive) WritePage(fileID string, pd PageDoc) error {
+	pd.SchemaVersion = CurrentSchemaVersion
 	return writeJSONIfChanged(filepath.Join(a.Root, fileID, pd.PageID+".json"), pd)
 }
 

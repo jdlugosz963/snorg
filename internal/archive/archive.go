@@ -16,6 +16,7 @@ package archive
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -99,10 +100,18 @@ func (a *Archive) Write(n *snote.Note, svgs map[string][]byte) error {
 	for i, p := range n.Pages {
 		pd := pageDoc(p)
 		// Re-ingest must not discard a page's derived AI analysis: carry it over
-		// from the existing page JSON (ingest itself never produces one).
-		if old, err := a.ReadPage(n.FileID, p.ID); err == nil {
+		// from the existing page JSON (ingest itself never produces one). A missing
+		// file is the normal first-ingest case; any other error (notably a stale
+		// schema version) must abort rather than silently clobber the old file.
+		old, err := a.ReadPage(n.FileID, p.ID)
+		switch {
+		case err == nil:
 			pd.Analysis = old.Analysis
 			carryRegionAnalyses(&pd, old)
+		case errors.Is(err, os.ErrNotExist):
+			// first ingest of this page — nothing to carry
+		default:
+			return err
 		}
 		if err := writeJSONIfChanged(filepath.Join(dir, p.ID+".json"), pd); err != nil {
 			return err

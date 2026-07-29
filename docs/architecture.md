@@ -80,9 +80,9 @@ straight from the archive, nothing copied to disk. Needs no provider config.
 
 ```
 <archive>/<FILE_ID>/
-    note.json          # file metadata + ordered page placement (id, number)
-    <PAGEID>.json      # per page: starred, titles(rect,level,analysis), keywords(text),
-                       # links(...,analysis), analysis{source_hash,fields}
+    note.json          # schema_version + file metadata + ordered page placement (id, number)
+    <PAGEID>.json      # schema_version + per page: starred, titles(rect,level,analysis),
+                       # keywords(text), links(...,analysis), analysis{source_hash,fields}
     <PAGEID>.md        # per page: the content transcription (Markdown), AI-produced
                        # and/or user-edited — always the effective content
     <PAGEID>.md.diff   # only while user edits diverge from the AI transcription:
@@ -159,6 +159,18 @@ source hash) is carried over, and per-title/per-link transcriptions are carried 
 **exact rect match** (`archive.carryRegionAnalyses`) — a moved region drops its
 transcription and is re-transcribed by the next `analyze` run.
 
+**Schema versioning.** Both JSON docs carry a `schema_version` (first field); every
+writer stamps `archive.CurrentSchemaVersion`. `ReadNote`/`ReadPage` **hard-reject**
+any file whose version differs (`ErrSchemaVersion`, "run `snorg migrate`"), so no
+command ever misreads a grammar it doesn't understand — the whole tool refuses a
+stale archive, and re-ingest aborts rather than clobbering a stale page. When the
+JSON contract changes we bump the constant and add one step function `f_{v→v+1}`; a
+future `migrate` command reads each file through a **raw, un-gated** path (the only
+reader allowed to touch old grammars) and applies the steps in a **chain**
+(v→v+1→…→current) until every file reaches the latest version — each version
+reachable from the one before it. (Not implemented yet; version 0 = pre-versioning,
+also stale.)
+
 ## Packages
 
 - `cmd/snorg` — CLI entry: one `urfave/cli/v3` command tree, thin actions over the
@@ -173,10 +185,12 @@ transcription and is re-transcribed by the next `analyze` run.
   Replaceable by a native-Go parser without touching callers.
 - `internal/archive` — owns the on-disk layout; `doc.go` is the JSON serialization boundary
   (per-title/per-link `analysis` nested on the items; page-level `analysis` holds
-  `source_hash` + `fields`); `Write` reconciles a note's directory in place and runs the
+  `source_hash` + `fields`; both docs carry `schema_version` = `CurrentSchemaVersion`);
+  `Write` reconciles a note's directory in place and runs the
   SVG pipeline (background mode → `recolor` → `injectNav` → `injectLinks` → `formatSVG`,
   each configurable); `read.go` are the layout-aware accessors (`List`/`ReadNote`/`ReadPage`/
-  `ReadSVG`/`SVGRel`/`FindPage`) plus `WritePage` and the `<PAGEID>.md` sidecar pair
+  `ReadSVG`/`SVGRel`/`FindPage` — `ReadNote`/`ReadPage` gate on `schema_version`, erroring
+  `ErrSchemaVersion` on a mismatch) plus `WritePage` and the `<PAGEID>.md` sidecar pair
   `ReadAnalysisMD`/`WriteAnalysisMD`; `editdiff.go` owns the `<PAGEID>.md.diff`
   sidecar and its invariant (`ReadAnalysisBase`/`WriteAnalysisEdit`/`MergeAnalysis`).
 - `internal/retrieve` — platform-agnostic read contract: assembles `note.json` + each

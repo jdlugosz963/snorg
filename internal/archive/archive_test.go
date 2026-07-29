@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -366,5 +367,92 @@ func TestWriteReorderUpdatesNavAndNoteJSON(t *testing.T) {
 	}
 	if nd.Pages[0].Number != 1 || nd.Pages[1].Number != 2 {
 		t.Errorf("note.json numbers not renumbered: %+v", nd.Pages)
+	}
+}
+
+// TestSchemaVersionStamped checks that Write stamps CurrentSchemaVersion into both
+// note.json and the page JSON, and that WritePage re-stamps it.
+func TestSchemaVersionStamped(t *testing.T) {
+	a := New(t.TempDir())
+	if err := a.Write(note("Pa"), svgMap(map[string]string{"Pa": "<svg/>"})); err != nil {
+		t.Fatal(err)
+	}
+	nd, err := a.ReadNote("F_TEST")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if nd.SchemaVersion != CurrentSchemaVersion {
+		t.Errorf("note.json schema_version = %d want %d", nd.SchemaVersion, CurrentSchemaVersion)
+	}
+	pd, err := a.ReadPage("F_TEST", "Pa")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pd.SchemaVersion != CurrentSchemaVersion {
+		t.Errorf("page json schema_version = %d want %d", pd.SchemaVersion, CurrentSchemaVersion)
+	}
+	// WritePage re-stamps even when handed a zeroed version.
+	pd.SchemaVersion = 0
+	if err := a.WritePage("F_TEST", pd); err != nil {
+		t.Fatal(err)
+	}
+	if pd2, err := a.ReadPage("F_TEST", "Pa"); err != nil {
+		t.Fatalf("WritePage should have re-stamped the version: %v", err)
+	} else if pd2.SchemaVersion != CurrentSchemaVersion {
+		t.Errorf("WritePage schema_version = %d want %d", pd2.SchemaVersion, CurrentSchemaVersion)
+	}
+}
+
+// TestSchemaVersionGate checks the fail-loud read gate: a file stamped with a
+// different version makes ReadPage/ReadNote return ErrSchemaVersion, and a stale
+// page aborts re-ingest instead of being silently clobbered.
+func TestSchemaVersionGate(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "F_TEST")
+	a := New(root)
+	if err := a.Write(note("Pa"), svgMap(map[string]string{"Pa": "<svg/>"})); err != nil {
+		t.Fatal(err)
+	}
+
+	// Corrupt the page JSON to a future grammar version.
+	bumpVersion(t, filepath.Join(dir, "Pa.json"))
+
+	if _, err := a.ReadPage("F_TEST", "Pa"); !errors.Is(err, ErrSchemaVersion) {
+		t.Errorf("ReadPage on stale page: err = %v, want ErrSchemaVersion", err)
+	}
+
+	// Re-ingest must abort (not clobber the stale file) — and not with a
+	// not-exist error either.
+	err := a.Write(note("Pa"), svgMap(map[string]string{"Pa": "<svg/>"}))
+	if !errors.Is(err, ErrSchemaVersion) {
+		t.Errorf("re-ingest over stale page: err = %v, want ErrSchemaVersion", err)
+	}
+
+	// The note gate mirrors the page gate.
+	bumpVersion(t, filepath.Join(dir, "note.json"))
+	if _, err := a.ReadNote("F_TEST"); !errors.Is(err, ErrSchemaVersion) {
+		t.Errorf("ReadNote on stale note: err = %v, want ErrSchemaVersion", err)
+	}
+}
+
+// bumpVersion rewrites the JSON file at path with its schema_version set past the
+// current one, simulating a file left by a future binary.
+func bumpVersion(t *testing.T, path string) {
+	t.Helper()
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(b, &m); err != nil {
+		t.Fatal(err)
+	}
+	m["schema_version"] = json.RawMessage([]byte("999"))
+	out, err := json.Marshal(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, out, 0o644); err != nil {
+		t.Fatal(err)
 	}
 }

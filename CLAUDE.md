@@ -54,7 +54,12 @@ Flow: `cmd/snorg` → `internal/ingest` orchestrates `snote.Source.Read` → ren
   `doc.go` is the JSON serialization boundary (the stable plaintext contract; add fields freely —
   per-title/per-link `analysis` is nested on the items (`name` + `edited` = user-override flag), page
   `analysis` holds `source_hash`+`fields`, the content transcription lives in the `<PAGEID>.md`
-  sidecar); `Write` runs the config-driven
+  sidecar); both `note.json`/`<PAGEID>.json` carry `schema_version` (= `CurrentSchemaVersion`,
+  stamped by every writer): `ReadNote`/`ReadPage` **hard-reject** a mismatch (`ErrSchemaVersion`,
+  "run `snorg migrate`") so no command touches a grammar it doesn't understand and re-ingest aborts
+  rather than clobbering a stale page — a future `migrate` command (not built) reads old files raw
+  and walks them forward one version per step (v→v+1→…→current); bump the constant + add a step on any
+  contract change; `Write` runs the config-driven
   SVG pipeline (background mode `extract`/`inline`/`blank`/`remove` → `recolor` pen-shade fills →
   `injectNav` prev/next half-page zones → `injectLinks` note links → `formatSVG`; nav is emitted
   before links so links win hit-testing — SVG picks the later element);

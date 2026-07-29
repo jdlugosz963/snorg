@@ -5,13 +5,22 @@ import "github.com/jdlugosz963/snorg/internal/snote"
 // The Doc types are the serialization boundary: they define the stable plaintext
 // JSON contract written to disk, decoupled from the in-memory domain model.
 
+// CurrentSchemaVersion is the JSON grammar version this binary reads and writes.
+// Every note.json/<PAGEID>.json is stamped with it (SchemaVersion), and
+// ReadNote/ReadPage reject any file not equal to it. Bump it (and add the matching
+// migration step) whenever the JSON contract changes; a future `migrate` command
+// walks stale files forward one version at a time. 0 (absent field) is
+// pre-versioning, and is also stale.
+const CurrentSchemaVersion = 1
+
 // NoteDoc is note.json — file metadata plus ordered page placement.
 type NoteDoc struct {
-	FileID    string        `json:"file_id"`
-	Signature string        `json:"signature"`
-	Device    string        `json:"device"`
-	Source    string        `json:"source"`
-	Pages     []NotePageRef `json:"pages"`
+	SchemaVersion int           `json:"schema_version"`
+	FileID        string        `json:"file_id"`
+	Signature     string        `json:"signature"`
+	Device        string        `json:"device"`
+	Source        string        `json:"source"`
+	Pages         []NotePageRef `json:"pages"`
 }
 
 // NotePageRef is one entry in note.json's page placement.
@@ -23,12 +32,13 @@ type NotePageRef struct {
 // PageDoc is <PAGEID>.json — the per-page deterministic metadata, optionally
 // enriched with a derived AI Analysis (written by the analyze command, not ingest).
 type PageDoc struct {
-	PageID   string        `json:"page_id"`
-	Starred  bool          `json:"starred"`
-	Titles   []TitleDoc    `json:"titles"`
-	Keywords []KeywordDoc  `json:"keywords"`
-	Links    []LinkDoc     `json:"links"`
-	Analysis *PageAnalysis `json:"analysis,omitempty"`
+	SchemaVersion int           `json:"schema_version"`
+	PageID        string        `json:"page_id"`
+	Starred       bool          `json:"starred"`
+	Titles        []TitleDoc    `json:"titles"`
+	Keywords      []KeywordDoc  `json:"keywords"`
+	Links         []LinkDoc     `json:"links"`
+	Analysis      *PageAnalysis `json:"analysis,omitempty"`
 }
 
 // PageAnalysis is the page-level derived AI output. The transcribed content
@@ -82,11 +92,12 @@ func noteDoc(n *snote.Note) NoteDoc {
 		pages = append(pages, NotePageRef{ID: p.ID, Number: p.Number})
 	}
 	return NoteDoc{
-		FileID:    n.FileID,
-		Signature: n.Signature,
-		Device:    n.Device,
-		Source:    n.Source,
-		Pages:     pages,
+		SchemaVersion: CurrentSchemaVersion,
+		FileID:        n.FileID,
+		Signature:     n.Signature,
+		Device:        n.Device,
+		Source:        n.Source,
+		Pages:         pages,
 	}
 }
 
@@ -108,5 +119,5 @@ func pageDoc(p snote.Page) PageDoc {
 			Name:         l.Name,
 		})
 	}
-	return PageDoc{PageID: p.ID, Starred: p.Starred, Titles: titles, Keywords: keywords, Links: links}
+	return PageDoc{SchemaVersion: CurrentSchemaVersion, PageID: p.ID, Starred: p.Starred, Titles: titles, Keywords: keywords, Links: links}
 }
