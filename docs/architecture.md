@@ -13,6 +13,7 @@ snorg -a <archive-path> analyze [--force] [PAGEID ...]
 snorg -a <archive-path> analyze-edit <PAGEID>
 snorg -a <archive-path> export [PAGEID ...]
 snorg -a <archive-path> serve [-l ADDR] [--flat] [PAGEID ...]
+snorg -a <archive-path> migrate [PAGEID ...]
 ```
 
 The archive path is a required global flag (`-a`/`--archive`, never hardcoded) and
@@ -75,6 +76,12 @@ so far fewer bytes than the vector) and both the thumbnail and full-SVG routes c
 `ETag`/`Cache-Control` for browser caching. No PAGEIDs and no pipe means the whole archive. Everything is in-memory: the
 views are computed once, thumbnails are memoized, and the page SVGs are streamed
 straight from the archive, nothing copied to disk. Needs no provider config.
+
+`migrate` upgrades stale archive JSON to the current `schema_version` (see "Schema
+versioning" below). It is the one command that reads pre-versioning/older grammars —
+every other command hard-errors on a version mismatch, pointing here. Selection is
+like `serve` (PAGEID args / stdin / bare = whole archive); a page selection also
+migrates its owning `note.json`. Idempotent, needs no provider config.
 
 ## Archive layout (plaintext contract)
 
@@ -164,12 +171,22 @@ writer stamps `archive.CurrentSchemaVersion`. `ReadNote`/`ReadPage` **hard-rejec
 any file whose version differs (`ErrSchemaVersion`, "run `snorg migrate`"), so no
 command ever misreads a grammar it doesn't understand — the whole tool refuses a
 stale archive, and re-ingest aborts rather than clobbering a stale page. When the
-JSON contract changes we bump the constant and add one step function `f_{v→v+1}`; a
-future `migrate` command reads each file through a **raw, un-gated** path (the only
-reader allowed to touch old grammars) and applies the steps in a **chain**
-(v→v+1→…→current) until every file reaches the latest version — each version
-reachable from the one before it. (Not implemented yet; version 0 = pre-versioning,
-also stale.)
+JSON contract changes we bump the constant and append one step function to
+`archive.schemaMigrations` (indexed by source version, so `len == CurrentSchemaVersion`).
+
+The `migrate` command (`archive.MigrateAll`/`MigratePages` in `migrate.go`) is the
+**only** reader that walks stale grammars: it reads each file **raw** (no
+`verifySchema`) and enumerates the archive by `os.Stat`/glob (`List` +
+`archivedPageIDs`), never the gated readers — so it works on exactly the stale
+archive it repairs. Each file is walked **one version at a time** (v→v+1→…→current)
+through `schemaMigrations` (steps mutate a generic `map[string]any`, `kind`-aware for
+note vs page), then re-serialized through the canonical `NoteDoc`/`PageDoc` struct so
+the bytes match ingest exactly (`schema_version` first, unknown fields dropped). It is
+idempotent (already-current files report `current` and are not rewritten) and refuses
+to downgrade a file newer than the binary. Selection mirrors `serve` (PAGEID args /
+stdin / bare = whole archive), but a page selection also migrates its owning
+`note.json`. Version 0 (absent field) = pre-versioning, migrated to 1 by the first
+(no-op) step.
 
 ## Packages
 
@@ -192,7 +209,9 @@ also stale.)
   `ReadSVG`/`SVGRel`/`FindPage` — `ReadNote`/`ReadPage` gate on `schema_version`, erroring
   `ErrSchemaVersion` on a mismatch) plus `WritePage` and the `<PAGEID>.md` sidecar pair
   `ReadAnalysisMD`/`WriteAnalysisMD`; `editdiff.go` owns the `<PAGEID>.md.diff`
-  sidecar and its invariant (`ReadAnalysisBase`/`WriteAnalysisEdit`/`MergeAnalysis`).
+  sidecar and its invariant (`ReadAnalysisBase`/`WriteAnalysisEdit`/`MergeAnalysis`);
+  `migrate.go` is the un-gated schema upgrader (`MigrateAll`/`MigratePages` +
+  the version-indexed `schemaMigrations` chain).
 - `internal/retrieve` — platform-agnostic read contract: assembles `note.json` + each
   `<PAGEID>.json` + `<PAGEID>.md` into denormalized `NoteView`s (the stable JSON
   consumers depend on). `Get` takes PAGEIDs and groups them per owning note (archive

@@ -12,6 +12,7 @@
 //	snorg -a <archive-path> analyze-edit <PAGEID>
 //	snorg -a <archive-path> export [PAGEID ...]
 //	snorg -a <archive-path> serve [-l ADDR] [--flat] [PAGEID ...]
+//	snorg -a <archive-path> migrate [PAGEID ...]
 //
 // retrieve, analyze and export take PAGEIDs as arguments or stdin lines, so
 // query pipes into any of them. query itself also reads PAGEIDs from stdin when
@@ -125,10 +126,11 @@ func commands(a *app) []*cli.Command {
 		analyzeEditCmd(a),
 		exportCmd(a),
 		serveCmd(a),
+		migrateCmd(a),
 	}
 }
 
-const commandNames = "ingest, list, retrieve, query, analyze, analyze-edit, export, serve"
+const commandNames = "ingest, list, retrieve, query, analyze, analyze-edit, export, serve, migrate"
 
 // root registers the global flags and subcommands and loads the merged config
 // once in its Before hook, which urfave/cli runs as part of the command chain
@@ -612,4 +614,53 @@ func servePageIDs(a *app, cmd *cli.Command) ([]string, error) {
 		ids[i] = m.PageID
 	}
 	return ids, nil
+}
+
+func migrateCmd(a *app) *cli.Command {
+	return &cli.Command{
+		Name:      "migrate",
+		Usage:     "upgrade note.json/page JSON to the current schema version (no PAGEIDs and no pipe = whole archive)",
+		ArgsUsage: "[PAGEID ...]",
+		Action: func(_ context.Context, cmd *cli.Command) error {
+			// Selection mirrors serve, but routes to the archive's un-gated
+			// migrator (not query): migrate must read the stale grammars it exists
+			// to repair, which the gated readers refuse.
+			var results []archive.MigrateResult
+			var err error
+			switch {
+			case cmd.Args().Len() > 0:
+				results, err = a.arch.MigratePages(cmd.Args().Slice())
+			case stdinPiped():
+				var ids []string
+				if ids, err = readLines(os.Stdin); err == nil {
+					results, err = a.arch.MigratePages(ids)
+				}
+			default:
+				results, err = a.arch.MigrateAll()
+			}
+			if err != nil {
+				return err
+			}
+
+			migrated, current, failed := 0, 0, 0
+			for _, r := range results {
+				switch {
+				case r.Err != nil:
+					failed++
+					fmt.Fprintf(os.Stderr, "failed %s %s: %v\n", r.Kind, r.ID, r.Err)
+				case r.Outcome == archive.MigrateUpgraded:
+					migrated++
+					fmt.Printf("%s %s: %s\n", r.Kind, r.ID, r.Outcome)
+				default:
+					current++
+				}
+			}
+			fmt.Printf("migrated %d, current %d, failed %d of %d file(s) -> schema v%d\n",
+				migrated, current, failed, len(results), archive.CurrentSchemaVersion)
+			if failed > 0 {
+				return fmt.Errorf("%d of %d file(s) failed to migrate", failed, len(results))
+			}
+			return nil
+		},
+	}
 }
