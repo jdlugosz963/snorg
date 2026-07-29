@@ -49,7 +49,37 @@ func seedArchive(t *testing.T) *archive.Archive {
 			{ID: "Pd", Number: 2},
 		},
 	})
+	// Transcribed content for a couple of pages; Pd stays without an md.
+	if err := a.WriteAnalysisMD("F_A", "Pa", "meeting notes about foo"); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.WriteAnalysisMD("F_B", "Pc", "grocery list"); err != nil {
+		t.Fatal(err)
+	}
 	return a
+}
+
+func TestPagesContentRegexp(t *testing.T) {
+	a := seedArchive(t)
+
+	// Matches the word in Pa's transcription only.
+	ms, err := query.Pages(a, query.Content(a, regexp.MustCompile("meeting")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"Pa"}; !reflect.DeepEqual(pageIDs(ms), want) {
+		t.Errorf("content /meeting/ = %v, want %v", pageIDs(ms), want)
+	}
+
+	// A pattern present in no transcription matches nothing (and a page with no
+	// md, like Pd, never matches).
+	ms, err = query.Pages(a, query.Content(a, regexp.MustCompile("nonexistent")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ms) != 0 {
+		t.Errorf("expected no matches, got %v", pageIDs(ms))
+	}
 }
 
 func TestPagesStarred(t *testing.T) {

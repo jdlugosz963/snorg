@@ -283,7 +283,7 @@ func pageIDArgs(cmd *cli.Command) ([]string, error) {
 	return pageIDs, nil
 }
 
-const queryFilters = "all, note <FILE_ID>, unanalyzed, keyword <regexp>, starred, date <spec>, not <filter> (inverse)"
+const queryFilters = "all, note <FILE_ID>, unanalyzed, keyword <regexp>, content <regexp>, starred, date <spec>, not <filter> (inverse)"
 
 func queryCmd(a *app) *cli.Command {
 	return &cli.Command{
@@ -295,7 +295,7 @@ func queryCmd(a *app) *cli.Command {
 			if len(args) < 1 {
 				return fmt.Errorf("usage: snorg -a <archive-path> query <filter> [arg]\n  filters: %s", queryFilters)
 			}
-			pred, err := queryPredicate(args[0], args[1:])
+			pred, err := queryPredicate(a.arch, args[0], args[1:])
 			if err != nil {
 				return err
 			}
@@ -320,7 +320,7 @@ func queryCmd(a *app) *cli.Command {
 	}
 }
 
-func queryPredicate(filter string, args []string) (query.Predicate, error) {
+func queryPredicate(a *archive.Archive, filter string, args []string) (query.Predicate, error) {
 	arity := func(n int, usage string) error {
 		if len(args) != n {
 			return fmt.Errorf("usage: snorg -a <archive-path> query %s", usage)
@@ -333,7 +333,7 @@ func queryPredicate(filter string, args []string) (query.Predicate, error) {
 		if len(args) < 1 {
 			return nil, fmt.Errorf("usage: snorg -a <archive-path> query not <filter> [arg]\n  filters: %s", queryFilters)
 		}
-		inner, err := queryPredicate(args[0], args[1:])
+		inner, err := queryPredicate(a, args[0], args[1:])
 		if err != nil {
 			return nil, err
 		}
@@ -360,6 +360,15 @@ func queryPredicate(filter string, args []string) (query.Predicate, error) {
 			return nil, fmt.Errorf("invalid keyword regexp: %w", err)
 		}
 		return query.Keyword(re), nil
+	case "content":
+		if err := arity(1, "content <regexp>"); err != nil {
+			return nil, err
+		}
+		re, err := regexp.Compile(args[0])
+		if err != nil {
+			return nil, fmt.Errorf("invalid content regexp: %w", err)
+		}
+		return query.Content(a, re), nil
 	case "date":
 		if err := arity(1, "date <spec>   (today|yesterday|YYYY-MM-DD|FROM..TO, open ends ok)"); err != nil {
 			return nil, err

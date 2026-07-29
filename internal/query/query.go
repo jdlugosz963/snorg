@@ -106,6 +106,19 @@ func Keyword(re *regexp.Regexp) Predicate {
 	}
 }
 
+// Content matches pages whose transcribed content (the <PAGEID>.md effective
+// content, AI or hand-written) matches re. Pages with no transcription never
+// match; an unreadable md is treated as non-matching.
+func Content(a *archive.Archive, re *regexp.Regexp) Predicate {
+	return func(fileID string, pd archive.PageDoc) bool {
+		md, err := a.ReadAnalysisMD(fileID, pd.PageID)
+		if err != nil {
+			return false
+		}
+		return re.MatchString(md)
+	}
+}
+
 // Date matches pages whose creation day (embedded in the PAGEID) falls within
 // [from, to], both inclusive and formatted "YYYYMMDD"; an empty bound is open.
 // Pages whose PAGEID carries no date never match.

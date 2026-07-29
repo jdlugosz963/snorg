@@ -14,7 +14,8 @@ snorg -a <archive-path> retrieve [PAGEID ...] # assembled notes as indented JSON
 ```
 
 `list` enumerates notes; `query` enumerates pages (`all`, `note <FILE_ID>`,
-`unanalyzed`, `keyword <regexp>`, `starred`, `date <spec>` where the day is the
+`unanalyzed`, `keyword <regexp>`, `content <regexp>` (matched against the page's
+transcribed `<PAGEID>.md`), `starred`, `date <spec>` where the day is the
 PAGEID's leading 8 digits and spec is `today`/`yesterday`/`YYYY-MM-DD`/`FROM..TO`
 with open ends; a `not <filter>` prefix inverts any filter). `query` also reads
 PAGEIDs from stdin when piped, restricting its filter to that set, so filters

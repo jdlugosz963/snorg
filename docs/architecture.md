@@ -30,7 +30,8 @@ note's directory in place (see Archive layout); it is the update path.
 `list`, `query` and `retrieve` are the read side — the platform-agnostic interface
 external tools build on (see [retrieval.md](retrieval.md)). `query` takes one
 filter per call — `all`, `note <FILE_ID>`, `unanalyzed`, `keyword <regexp>`
-(matched against `Keyword.Text`), `starred`, `date <spec>`, and a `not <filter>`
+(matched against `Keyword.Text`), `content <regexp>` (matched against the page's
+transcribed `<PAGEID>.md`), `starred`, `date <spec>`, and a `not <filter>`
 prefix that inverts any of them — and prints the PAGEID of each
 matching page, one per line. `retrieve`, `analyze` and `export` all take PAGEIDs
 as arguments, or read them one-per-line from stdin when none are given, so
@@ -180,7 +181,8 @@ transcription and is re-transcribed by the next `analyze` run.
   List order, pages in placement order); an unknown PAGEID is an error.
 - `internal/query` — read-only metadata filter: walks every note/page via the `archive`
   accessors and returns the pages matching a `Predicate` (`All`, `Starred`, `Unanalyzed`,
-  `InNote(fileID)`, `Keyword(regexp)`).
+  `InNote(fileID)`, `Keyword(regexp)`, `Content(archive, regexp)` — the last reads each
+  page's `<PAGEID>.md`).
 - `internal/config` — loads + deep-merges YAML config (provider creds, analysis prompts,
   `ingest.svg` toggles, `export.template`); `Load` parses + defaults only — commands
   validate the section they use. External dep: `yaml.v3`.
