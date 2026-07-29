@@ -11,9 +11,10 @@ func TestRewriteViewerLinks(t *testing.T) {
 		`<a xlink:href="Pb.svg"><rect/></a>` +
 		`<a xlink:href="../F_OTHER/Pz.svg"><rect/></a>` +
 		`</svg>`
-	got := string(rewriteViewerLinks([]byte(in), "F_HERE"))
-
-	// Same-note link resolves against the owning note; cross-note keeps its FID.
+	// The grouped layout's href: same-note link resolves against the owning note,
+	// cross-note keeps its FID.
+	grouped := func(fid, pid string) string { return "/note/" + fid + "?page=" + pid }
+	got := string(rewriteViewerLinks([]byte(in), "F_HERE", grouped))
 	for _, want := range []string{
 		`target="_top" xlink:href="/note/F_HERE?page=Pb"`,
 		`target="_top" xlink:href="/note/F_OTHER?page=Pz"`,
@@ -29,6 +30,22 @@ func TestRewriteViewerLinks(t *testing.T) {
 	// No raw page-svg link should survive.
 	if strings.Contains(got, `.svg"`) {
 		t.Errorf("a raw .svg link survived rewriting:\n%s", got)
+	}
+
+	// The flat layout's href drops the note segment: every link retargets the
+	// single flat index (/?page={pid}); the background PNG stays untouched.
+	flat := func(_, pid string) string { return "/?page=" + pid }
+	flatGot := string(rewriteViewerLinks([]byte(in), "F_HERE", flat))
+	for _, want := range []string{
+		`target="_top" xlink:href="/?page=Pb"`,
+		`target="_top" xlink:href="/?page=Pz"`,
+	} {
+		if !strings.Contains(flatGot, want) {
+			t.Errorf("missing %q in flat rewrite:\n%s", want, flatGot)
+		}
+	}
+	if !strings.Contains(flatGot, `xlink:href="backgrounds/abc123.png"`) {
+		t.Errorf("background href was rewritten in flat mode:\n%s", flatGot)
 	}
 }
 

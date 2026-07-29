@@ -11,7 +11,7 @@
 //	snorg -a <archive-path> analyze [--force] [PAGEID ...]
 //	snorg -a <archive-path> analyze-edit <PAGEID>
 //	snorg -a <archive-path> export [PAGEID ...]
-//	snorg -a <archive-path> serve [-l ADDR] [PAGEID ...]
+//	snorg -a <archive-path> serve [-l ADDR] [--flat] [PAGEID ...]
 //
 // retrieve, analyze and export take PAGEIDs as arguments or stdin lines, so
 // query pipes into any of them. query itself also reads PAGEIDs from stdin when
@@ -571,6 +571,11 @@ func serveCmd(a *app) *cli.Command {
 				Usage:   "`ADDR` to listen on",
 				Value:   "127.0.0.1:8080",
 			},
+			&cli.BoolFlag{
+				Name:    "flat",
+				Aliases: []string{"f"},
+				Usage:   "one flat page gallery instead of grouping by note",
+			},
 		},
 		Action: func(_ context.Context, cmd *cli.Command) error {
 			pageIDs, err := servePageIDs(a, cmd)
@@ -583,7 +588,7 @@ func serveCmd(a *app) *cli.Command {
 			}
 			addr := cmd.String("listen")
 			fmt.Fprintf(os.Stderr, "snorg: serving %d note(s) on http://%s/\n", len(views), addr)
-			return http.ListenAndServe(addr, serve.Handler(a.arch, views))
+			return http.ListenAndServe(addr, serve.Handler(a.arch, views, cmd.Bool("flat")))
 		},
 	}
 }

@@ -39,7 +39,7 @@ Read `docs/principles.md` (project rules), `docs/architecture.md` (modules/CLI),
 - `go run ./cmd/snorg -a <archive-path> [-c ...] analyze [--force] [PAGEID ...]` — incremental vision-LLM analysis; PAGEIDs from args or stdin (pipe from `query`); unchanged pages (path-geometry hash == `analysis.source_hash`; invariant under recolor/background/overlays) are skipped without an LLM call (no rasterize), changed ones re-transcribed through the update prompt + the previous **AI base** (`<PAGEID>.md` with the user's edit diff reverse-applied — user edits never reach the LLM; minimal diff), then 3-way merged with any user edits (overlap → outcome `conflict`, markers in the md, resolve via `analyze-edit`); writes `<PAGEID>.md` (effective content) + `<PAGEID>.json` (per-title/link `analysis.name`, `analysis.{source_hash,fields}`; fields generated from the effective content); a title/link name marked `analysis.edited` (a user override from `analyze-edit`) is kept as-is and its region is **not** re-transcribed, even under `--force`; provider + prompts from the config (`docs/config.md`); `api_key` falls back to `api_key_command` stdout then `OPENAI_API_KEY`
 - `go run ./cmd/snorg -a <archive-path> analyze-edit <PAGEID>` — open the page's transcription in `$VISUAL`/`$EDITOR` (exactly one PAGEID, no stdin — the editor needs the terminal; no provider config needed). The buffer is content **plus** the title/link names: when the page has any title/link the editor opens a header of `<!-- title N (h..) -->` / `<!-- link N → target -->` markers (context after the index is informational — snorg keys off kind+index only) with each name below, then a `<!-- content -->` marker and the content (a page with no regions opens as bare content, as before). On save the content section flows through the usual sidecars — `<PAGEID>.md` stays the effective content, the divergence from the AI base is stored as `<PAGEID>.md.diff` (unified diff base→md, exists iff they diverge) — and each changed name becomes a **user override** (`analysis.edited`) in `<PAGEID>.json` that `analyze` keeps (and skips re-transcribing) until the region's rect changes. Works on never-analyzed pages too (empty content → hand-written transcription, empty base ⇒ first `analyze` conflicts once); needs `git` on PATH
 - `go run ./cmd/snorg -a <archive-path> [-c ...] export [PAGEID ...]` — PAGEIDs from args or stdin (pipe from `query`); groups pages per owning note like `retrieve` and renders the config's single `export.template` (pongo2/Jinja2) **once** over the whole result to stdout; template context is the `retrieve` JSON array under the `notes` key (snake_case: `notes[].pages[].titles/keywords/links/analysis.content`, `title.analysis.name`, `link.analysis.name`), so one template can span notes; filters: `denote` (FILE_ID/PAGEID → denote id), `org` (markdown→org via pandoc), `html` (markdown→HTML via pandoc), `nestorgheadings:N` (demote org headings), `nestmdheadings:N` (demote Markdown headings); needs no `provider` creds; see `examples/config.yaml` (Markdown), `examples/emacs/orgmode.yaml` (org), and `examples/web/` (static HTML site: `export.sh` runs `index.yaml` + per-note `note.yaml` over piped PAGEIDs, copies the pages' SVGs)
-- `go run ./cmd/snorg -a <archive-path> serve [-l ADDR] [PAGEID ...]` — the built-in, zero-setup HTTP viewer (no provider/config needed). PAGEIDs from args or stdin; **neither = the whole archive**. Assembles the pages like `retrieve` and serves a minimal, dependency-free HTML site on `-l`/`--listen` (default `127.0.0.1:8080`): `/` = note gallery (name from `note.json` `source` sans `.note`, first-page SVG thumbnail) → `/note/<FILE_ID>` = that note's page gallery with a click-to-enlarge lightbox (←/→ pages, Esc) → `/svg/<FILE_ID>/<PAGEID>.svg` streams the page SVG straight from the archive (only pages in the served set; nothing copied to disk — in-memory viewer)
+- `go run ./cmd/snorg -a <archive-path> serve [-l ADDR] [--flat] [PAGEID ...]` — the built-in, zero-setup HTTP viewer (no provider/config needed). PAGEIDs from args or stdin; **neither = the whole archive**. Assembles the pages like `retrieve` and serves a minimal, dependency-free HTML site on `-l`/`--listen` (default `127.0.0.1:8080`): `/` = note gallery (name from `note.json` `source` sans `.note`, first-page SVG thumbnail) → `/note/<FILE_ID>` = that note's page gallery with a click-to-enlarge lightbox (←/→ pages, Esc) → `/svg/<FILE_ID>/<PAGEID>.svg` streams the page SVG straight from the archive (only pages in the served set; nothing copied to disk — in-memory viewer). `--flat`/`-f` drops the per-note grouping: `/` becomes **one flat gallery of all selected pages** (across notes, each captioned `<note name> · <page number>`) with the same lightbox; in-page SVG links then reopen `/` on the target (`/?page=<PAGEID>`) instead of the note page
 
 ## Architecture
 
@@ -74,7 +74,7 @@ Flow: `cmd/snorg` → `internal/ingest` orchestrates `snote.Source.Read` → ren
   **not** exposed; `analysis.content` is exposed whenever the md exists (AI or
   hand-written), fields only once AI-analyzed. Consumers talk to snorg only via
   `list`/`query`/`retrieve`; read-only.
-- `internal/serve` — the built-in HTTP viewer (`serve` cmd): `Handler(a, views)` builds a
+- `internal/serve` — the built-in HTTP viewer (`serve` cmd): `Handler(a, views, flat)` builds a
   `net/http.ServeMux` over the assembled `[]*retrieve.NoteView` — `/` (note gallery: name +
   first-page thumbnail), `/note/{fid}` (that note's page gallery + a vanilla-JS lightbox that
   shows the page's transcription under the enlarged page), `/thumb/{fid}/{name}` (small
@@ -82,9 +82,17 @@ Flow: `cmd/snorg` → `internal/ingest` orchestrates `snote.Source.Read` → ren
   handwriting-on-white and far fewer bytes than the vector SVG; memoized in-memory for the
   session) and `/svg/{fid}/{name}` (full page SVG via `archive.ReadSVG`, used for the enlarged
   view — the lightbox embeds it in an `<object>` so its links stay clickable, unlike an `<img>`).
-  For the enlarged view `svglinks.go` transforms the served SVG: `rewriteViewerLinks` retargets
-  each baked page link `xlink:href="…PID.svg"` → `target="_top" xlink:href="/note/{fid}?page={pid}"`
-  (a tap opens that note and, via the note page's `?page=` reader, enlarges the target page), and
+  The grouped/flat difference lives behind a `layout` **seam** (`layout` interface with
+  `render(w)` + `pageHref(fid,pid)`; `groupedLayout` note gallery vs `flatLayout` one page
+  gallery — `--flat`): Handler picks one from `flat` in the **single** branch, so the routes stay
+  branch-free and both galleries share one `{{define "pagegrid"}}` template over a `pageItem`
+  tile (its `Caption` renders only when set — flat sets `<note> · <n>`, a note's own gallery leaves
+  it empty). For the enlarged view `svglinks.go` transforms the served SVG: `rewriteViewerLinks`
+  retargets each baked page link `xlink:href="…PID.svg"` → `target="_top" xlink:href="<pageHref>"`
+  where the active layout supplies `pageHref` (grouped `/note/{fid}?page={pid}`, flat
+  `/?page={pid}`); `rewriteViewerLinks` itself is mode-agnostic (takes the href closure). A tap
+  thus reopens the right index (note page, or the flat `/`) whose `?page=` reader enlarges the
+  target page, and
   `responsiveSVGRoot` gives the root a viewBox + `width/height="100%"` so it scales to the object
   box instead of rendering at native 1920x2560 and clipping (memoized). Both image routes carry
   `ETag` + `Cache-Control` (`writeAsset`, 304 on re-request) and are gated to pages in the served

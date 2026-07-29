@@ -43,7 +43,32 @@ func fixture(t *testing.T) *httptest.Server {
 	if err != nil {
 		t.Fatal(err)
 	}
-	srv := httptest.NewServer(serve.Handler(a, views))
+	srv := httptest.NewServer(serve.Handler(a, views, false))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// flatFixture is like fixture but serves the same two-page note in flat mode.
+func flatFixture(t *testing.T) *httptest.Server {
+	t.Helper()
+	a := archive.New(t.TempDir())
+	n := &snote.Note{
+		FileID: "F_TEST",
+		Source: "My Meeting.note",
+		Pages:  []snote.Page{{ID: "Pa", Number: 1}, {ID: "Pb", Number: 2}},
+	}
+	svg := `<svg xmlns="http://www.w3.org/2000/svg" width="1920" height="2560"><path d="M10 10 L100 100" stroke="#000"/></svg>`
+	if err := a.Write(n, map[string][]byte{"Pa": []byte(svg), "Pb": []byte(svg)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.WriteAnalysisMD("F_TEST", "Pa", "# Heading\nsome notes"); err != nil {
+		t.Fatal(err)
+	}
+	views, err := retrieve.Get(a, []string{"Pa", "Pb"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(serve.Handler(a, views, true))
 	t.Cleanup(srv.Close)
 	return srv
 }
@@ -79,6 +104,34 @@ func TestIndexListsNotes(t *testing.T) {
 	// The card thumbnail is the lightweight rasterized PNG, not the SVG.
 	if !strings.Contains(body, `/thumb/F_TEST/Pa.png`) {
 		t.Errorf("index missing first-page thumbnail:\n%s", body)
+	}
+}
+
+func TestFlatIndexListsAllPages(t *testing.T) {
+	srv := flatFixture(t)
+	resp, body := get(t, srv, "/")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d", resp.StatusCode)
+	}
+	// Every selected page is a click-to-enlarge thumb on the index itself (no
+	// per-note grouping), captioned "<note name> · <page number>".
+	for _, want := range []string{
+		`class="thumb"`,
+		`data-full="/svg/F_TEST/Pa.svg"`, `data-pid="Pa"`,
+		`data-full="/svg/F_TEST/Pb.svg"`, `data-pid="Pb"`,
+		"My Meeting · 1", "My Meeting · 2",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("flat index missing %q:\n%s", want, body)
+		}
+	}
+	// The first page's transcription rides along for the lightbox.
+	if !strings.Contains(body, `class="txt"`) || !strings.Contains(body, "some notes") {
+		t.Errorf("flat index missing transcription span:\n%s", body)
+	}
+	// Flat mode has no note-card links to /note/{fid}.
+	if strings.Contains(body, `href="/note/F_TEST"`) {
+		t.Errorf("flat index should not link to note pages:\n%s", body)
 	}
 }
 
@@ -192,7 +245,7 @@ func TestSVGForUnservedPageIs404(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	only := httptest.NewServer(serve.Handler(a, views))
+	only := httptest.NewServer(serve.Handler(a, views, false))
 	t.Cleanup(only.Close)
 	if resp, _ := get(t, only, "/svg/F_TEST/Pb.svg"); resp.StatusCode != http.StatusNotFound {
 		t.Errorf("unserved page status = %d want 404", resp.StatusCode)

@@ -1,7 +1,6 @@
 package serve
 
 import (
-	"fmt"
 	"regexp"
 	"strings"
 )
@@ -14,20 +13,21 @@ import (
 var svgLinkRe = regexp.MustCompile(`xlink:href="(?:\.\./([^"/]+)/)?([^"/]+)\.svg"`)
 
 // rewriteViewerLinks retargets every baked page link so that, inside the viewer's
-// enlarged (lightbox) SVG, a tap opens the note and enlarges the target page.
-// Each `xlink:href="…PID.svg"` becomes `target="_top" xlink:href="/note/{fid}?page={pid}"`:
-// the viewer route drives the note page (which reads ?page= to open the lightbox on
-// that page) and target="_top" breaks the navigation out of the <object> embedding
-// up to the top window. fromFid supplies the note for same-note links (no "../FID/").
-func rewriteViewerLinks(svg []byte, fromFid string) []byte {
+// enlarged (lightbox) SVG, a tap enlarges the target page. Each
+// `xlink:href="…PID.svg"` becomes `target="_top" xlink:href="<href(fid,pid)>"`;
+// target="_top" breaks the navigation out of the <object> embedding up to the top
+// window, and the destination's `?page=` reader opens the lightbox there. The
+// concrete route is supplied by href, which the active layout provides (grouped:
+// /note/{fid}?page={pid}; flat: /?page={pid}) — so this function knows nothing of
+// the mode. fromFid supplies the note for same-note links (no "../FID/").
+func rewriteViewerLinks(svg []byte, fromFid string, href func(fid, pid string) string) []byte {
 	return svgLinkRe.ReplaceAllFunc(svg, func(m []byte) []byte {
 		sub := svgLinkRe.FindSubmatch(m)
 		fid := string(sub[1])
 		if fid == "" {
 			fid = fromFid
 		}
-		pid := string(sub[2])
-		return []byte(fmt.Sprintf(`target="_top" xlink:href="/note/%s?page=%s"`, fid, pid))
+		return []byte(`target="_top" xlink:href="` + href(fid, string(sub[2])) + `"`)
 	})
 }
 

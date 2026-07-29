@@ -10,6 +10,10 @@
 //	GET /note/{fid}          gallery of that note's pages, click to enlarge
 //	GET /svg/{fid}/{pid}.svg the page SVG, streamed from the archive
 //
+// In flat mode (Handler's flat=true), the index instead shows every selected
+// page in one gallery (no per-note grouping), each captioned with its note name
+// and page number; the /note/{fid} and asset routes are unchanged.
+//
 // The SVG route only serves pages that belong to the served set, so the viewer
 // never exposes the whole archive — just the selected pages.
 package serve
@@ -17,6 +21,7 @@ package serve
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"html/template"
 	"net/http"
 	"strings"
@@ -28,8 +33,9 @@ import (
 
 // Handler builds the viewer over the given views. The archive is used only to
 // stream page SVGs (and rasterize thumbnails) on demand; views carry everything
-// else.
-func Handler(a *archive.Archive, views []*retrieve.NoteView) http.Handler {
+// else. When flat is true, the index is a single flat gallery of every selected
+// page instead of a per-note gallery.
+func Handler(a *archive.Archive, views []*retrieve.NoteView, flat bool) http.Handler {
 	byID := make(map[string]*retrieve.NoteView, len(views))
 	allowed := make(map[string]bool) // "fid/pid" pairs this viewer may serve
 	for _, v := range views {
@@ -46,17 +52,18 @@ func Handler(a *archive.Archive, views []*retrieve.NoteView) http.Handler {
 	thumbs := make(map[string][]byte)
 	svgs := make(map[string][]byte)
 
+	// The landing layout — the grouped note gallery by default, one flat page
+	// gallery under --flat — is the single place the mode is chosen; the routes
+	// below stay branch-free.
+	var lay layout = newGroupedLayout(views)
+	if flat {
+		lay = newFlatLayout(views)
+	}
+
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
-		cards := make([]noteCard, 0, len(views))
-		for _, v := range views {
-			if len(v.Pages) == 0 {
-				continue
-			}
-			cards = append(cards, noteCard{FileID: v.FileID, Name: noteName(v), FirstPageID: v.Pages[0].PageID})
-		}
-		render(w, indexTmpl, indexData{Notes: cards})
+		lay.render(w)
 	})
 
 	mux.HandleFunc("GET /note/{fid}", func(w http.ResponseWriter, r *http.Request) {
@@ -65,15 +72,7 @@ func Handler(a *archive.Archive, views []*retrieve.NoteView) http.Handler {
 			http.NotFound(w, r)
 			return
 		}
-		pages := make([]notePage, 0, len(v.Pages))
-		for _, p := range v.Pages {
-			var content string
-			if p.Analysis != nil {
-				content = p.Analysis.Content
-			}
-			pages = append(pages, notePage{PageID: p.PageID, Content: content})
-		}
-		render(w, noteTmpl, noteData{FileID: v.FileID, Name: noteName(v), Pages: pages})
+		render(w, noteTmpl, gridData{Name: noteName(v), Pages: notePages(v)})
 	})
 
 	// The .svg/.png suffix stays in the URL for clarity but is not a routable
@@ -98,7 +97,7 @@ func Handler(a *archive.Archive, views []*retrieve.NoteView) http.Handler {
 			// Retarget baked links so a tap in the enlarged view opens the note
 			// and enlarges the target page, and make the root scale to the
 			// <object> box instead of rendering at native size and clipping.
-			b = responsiveSVGRoot(rewriteViewerLinks(raw, fid))
+			b = responsiveSVGRoot(rewriteViewerLinks(raw, fid, lay.pageHref))
 			memoMu.Lock()
 			svgs[key] = b
 			memoMu.Unlock()
@@ -170,6 +169,58 @@ func render(w http.ResponseWriter, t *template.Template, data any) {
 	}
 }
 
+// layout is the pluggable landing layout: it renders GET / and decides where a
+// baked in-page SVG link should jump in the enlarged view. Grouped (note gallery)
+// and flat (one page gallery) are the two implementations; Handler picks one and
+// every route stays branch-free. This is the seam that keeps the grouped/flat
+// difference in one place instead of scattered `if flat` checks.
+type layout interface {
+	render(w http.ResponseWriter)    // GET /
+	pageHref(fid, pid string) string // target of a rewritten in-SVG link
+}
+
+// groupedLayout is the default: a gallery of notes, each linking to its own page
+// gallery; an in-page link opens the target note and enlarges the page there.
+type groupedLayout struct{ cards []noteCard }
+
+func newGroupedLayout(views []*retrieve.NoteView) groupedLayout {
+	cards := make([]noteCard, 0, len(views))
+	for _, v := range views {
+		if len(v.Pages) == 0 {
+			continue
+		}
+		cards = append(cards, noteCard{FileID: v.FileID, Name: noteName(v), FirstPageID: v.Pages[0].PageID})
+	}
+	return groupedLayout{cards: cards}
+}
+
+func (l groupedLayout) render(w http.ResponseWriter)    { render(w, indexTmpl, indexData{Notes: l.cards}) }
+func (l groupedLayout) pageHref(fid, pid string) string { return "/note/" + fid + "?page=" + pid }
+
+// flatLayout is the --flat layout: one gallery of every selected page (captioned
+// with its owning note and page number, since there is no per-note grouping to
+// convey that); an in-page link reopens that single index on the target page.
+type flatLayout struct{ pages []pageItem }
+
+func newFlatLayout(views []*retrieve.NoteView) flatLayout {
+	pages := make([]pageItem, 0)
+	for _, v := range views {
+		name := noteName(v)
+		for _, p := range v.Pages {
+			pages = append(pages, pageItem{
+				FileID:  v.FileID,
+				PageID:  p.PageID,
+				Content: pageContent(p),
+				Caption: fmt.Sprintf("%s · %d", name, p.Number),
+			})
+		}
+	}
+	return flatLayout{pages: pages}
+}
+
+func (l flatLayout) render(w http.ResponseWriter)  { render(w, flatTmpl, gridData{Pages: l.pages}) }
+func (l flatLayout) pageHref(_, pid string) string { return "/?page=" + pid }
+
 type indexData struct{ Notes []noteCard }
 
 type noteCard struct {
@@ -178,15 +229,40 @@ type noteCard struct {
 	FirstPageID string
 }
 
-type noteData struct {
-	FileID string
-	Name   string
-	Pages  []notePage
+// gridData feeds the shared "pagegrid" template. Name is the note-gallery header
+// label (unused by the flat gallery); Pages are the tiles.
+type gridData struct {
+	Name  string
+	Pages []pageItem
 }
 
-type notePage struct {
+// pageItem is one page tile in a grid (a note's page gallery or the flat gallery).
+// It carries its own note (FileID) so the asset/lightbox routes resolve per tile,
+// and an optional Caption that renders only when set (the flat gallery names the
+// owning note + page number; a note's own gallery leaves it empty).
+type pageItem struct {
+	FileID  string
 	PageID  string
 	Content string // transcription markdown, shown under the enlarged page
+	Caption string // "<note name> · <page number>", or "" in a note's own gallery
+}
+
+// pageContent is a page's transcription, or "" when it has none.
+func pageContent(p retrieve.PageView) string {
+	if p.Analysis != nil {
+		return p.Analysis.Content
+	}
+	return ""
+}
+
+// notePages is a note's pages as caption-less grid tiles (the note gallery's
+// header already names the note).
+func notePages(v *retrieve.NoteView) []pageItem {
+	items := make([]pageItem, 0, len(v.Pages))
+	for _, p := range v.Pages {
+		items = append(items, pageItem{FileID: v.FileID, PageID: p.PageID, Content: pageContent(p)})
+	}
+	return items
 }
 
 // shell wraps a page body in a minimal, dependency-free HTML document. The
@@ -243,8 +319,8 @@ const shell = `<!doctype html>
   var lb = document.getElementById('lb'), obj = lb.querySelector('object'),
       txt = document.getElementById('lbtext'), i = 0;
   // The enlarged page is an <object> (a live SVG document), so its baked links —
-  // retargeted to /note/{fid}?page={pid} with target="_top" — are clickable and
-  // navigate the whole viewer; an <img> would render the SVG inertly.
+  // retargeted to a viewer route (?page={pid}) with target="_top" — are clickable
+  // and navigate the whole viewer; an <img> would render the SVG inertly.
   function show(n) { i = (n + thumbs.length) % thumbs.length;
     obj.data = thumbs[i].dataset.full;
     var el = thumbs[i].querySelector('.txt'), t = el ? el.textContent : '';
@@ -265,8 +341,8 @@ const shell = `<!doctype html>
     else if (e.key === 'ArrowLeft') show(i - 1);
     else if (e.key === 'ArrowRight') show(i + 1);
   });
-  // Following an in-SVG link lands on /note/{fid}?page={pid}: open the lightbox
-  // on that page so the tap "enlarges" the target.
+  // Following an in-SVG link lands on a viewer route carrying ?page={pid}: open
+  // the lightbox on that page so the tap "enlarges" the target.
   var want = new URLSearchParams(location.search).get('page');
   if (want) {
     var idx = thumbs.findIndex(function (t) { return t.dataset.pid === want; });
@@ -275,6 +351,19 @@ const shell = `<!doctype html>
 })();
 </script>
 </html>
+{{define "pagegrid"}}
+<div class="grid">
+  {{range $i, $p := .Pages}}
+  <button class="thumb" data-full="/svg/{{$p.FileID}}/{{$p.PageID}}.svg" data-pid="{{$p.PageID}}" aria-label="{{if $p.Caption}}{{$p.Caption}}{{else}}page {{$i}}{{end}}">
+    <img src="/thumb/{{$p.FileID}}/{{$p.PageID}}.png" alt="" loading="lazy" decoding="async">
+    <span class="txt" hidden>{{$p.Content}}</span>
+    {{if $p.Caption}}<div class="cap">{{$p.Caption}}</div>{{end}}
+  </button>
+  {{else}}
+  <p>No pages.</p>
+  {{end}}
+</div>
+{{end}}
 `
 
 var indexTmpl = mustShell(`
@@ -297,18 +386,15 @@ var indexTmpl = mustShell(`
 var noteTmpl = mustShell(`
 {{define "title"}}{{.Name}} — snorg{{end}}
 {{define "head"}}<a href="/">&#8592; Notes</a><h1>{{.Name}}</h1>{{end}}
-{{define "body"}}
-<div class="grid">
-  {{range $n, $p := .Pages}}
-  <button class="thumb" data-full="/svg/{{$.FileID}}/{{$p.PageID}}.svg" data-pid="{{$p.PageID}}" aria-label="page {{$n}}">
-    <img src="/thumb/{{$.FileID}}/{{$p.PageID}}.png" alt="" loading="lazy" decoding="async">
-    <span class="txt" hidden>{{$p.Content}}</span>
-  </button>
-  {{else}}
-  <p>No pages.</p>
-  {{end}}
-</div>
-{{end}}
+{{define "body"}}{{template "pagegrid" .}}{{end}}
+`)
+
+// flatTmpl is the flat-mode index: the shared page grid over every selected page
+// (captions set, so each tile names its owning note + page number).
+var flatTmpl = mustShell(`
+{{define "title"}}snorg{{end}}
+{{define "head"}}<h1>Pages</h1>{{end}}
+{{define "body"}}{{template "pagegrid" .}}{{end}}
 `)
 
 // mustShell parses the shared shell plus the page-specific blocks into one
