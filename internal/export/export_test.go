@@ -43,7 +43,7 @@ func TestRender(t *testing.T) {
 		"{% for link in p.links %}link:[[denote:{{ link.target_file_id|denote }}]] {{ link.name }} <{{ link.analysis.name }}>\n{% endfor %}" +
 		"{% endfor %}"
 
-	got, err := Render([]*retrieve.NoteView{view}, tmpl)
+	got, err := Render(&retrieve.Result{Notes: []*retrieve.NoteView{view}}, tmpl)
 	if err != nil {
 		t.Fatalf("Render: %v", err)
 	}
@@ -68,6 +68,23 @@ func TestRenderBadTemplate(t *testing.T) {
 	}
 }
 
+// TestRenderExposesArchive: the context is the whole retrieve Result, so a
+// template can read the archive root alongside notes (e.g. to build an absolute
+// svg path).
+func TestRenderExposesArchive(t *testing.T) {
+	res := &retrieve.Result{
+		Archive: "/home/u/notes/sn",
+		Notes:   []*retrieve.NoteView{{Pages: []retrieve.PageView{{SVG: "F/Pa.svg"}}}},
+	}
+	got, err := Render(res, "{{ archive }}/{{ notes.0.pages.0.svg }}")
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	if want := "/home/u/notes/sn/F/Pa.svg"; got != want {
+		t.Errorf("Render = %q, want %q", got, want)
+	}
+}
+
 // TestRenderSpansNotes: one render sees every note, so a template can emit a
 // shared root once and pages from many notes flat under it.
 func TestRenderSpansNotes(t *testing.T) {
@@ -81,7 +98,7 @@ func TestRenderSpansNotes(t *testing.T) {
 		"** {{ note.source }} {{ p.page_id }}\n" +
 		"{% endfor %}\n" +
 		"{% endfor %}"
-	got, err := Render(views, tmpl)
+	got, err := Render(&retrieve.Result{Notes: views}, tmpl)
 	if err != nil {
 		t.Fatalf("Render: %v", err)
 	}
@@ -101,7 +118,7 @@ func TestRenderTrimsBlocks(t *testing.T) {
 		"- {{ p.number }}\n" +
 		"  {% endif %}\n" +
 		"{% endfor %}"
-	got, err := Render([]*retrieve.NoteView{view}, tmpl)
+	got, err := Render(&retrieve.Result{Notes: []*retrieve.NoteView{view}}, tmpl)
 	if err != nil {
 		t.Fatalf("Render: %v", err)
 	}

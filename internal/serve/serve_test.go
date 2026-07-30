@@ -39,11 +39,11 @@ func fixture(t *testing.T) *httptest.Server {
 	if err := a.WriteAnalysisMD("F_TEST", "Pa", "# Heading\nsome notes"); err != nil {
 		t.Fatal(err)
 	}
-	views, err := retrieve.Get(a, []string{"Pa", "Pb"})
+	res, err := retrieve.Get(a, []string{"Pa", "Pb"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	srv := httptest.NewServer(serve.Handler(a, views, false))
+	srv := httptest.NewServer(serve.Handler(a, res.Notes, false))
 	t.Cleanup(srv.Close)
 	return srv
 }
@@ -64,11 +64,11 @@ func flatFixture(t *testing.T) *httptest.Server {
 	if err := a.WriteAnalysisMD("F_TEST", "Pa", "# Heading\nsome notes"); err != nil {
 		t.Fatal(err)
 	}
-	views, err := retrieve.Get(a, []string{"Pa", "Pb"})
+	res, err := retrieve.Get(a, []string{"Pa", "Pb"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	srv := httptest.NewServer(serve.Handler(a, views, true))
+	srv := httptest.NewServer(serve.Handler(a, res.Notes, true))
 	t.Cleanup(srv.Close)
 	return srv
 }
@@ -241,11 +241,11 @@ func TestSVGForUnservedPageIs404(t *testing.T) {
 	if err := a.Write(&snote.Note{FileID: "F_TEST", Source: "x.note", Pages: []snote.Page{{ID: "Pa", Number: 1}}}, map[string][]byte{"Pa": []byte("<svg/>")}); err != nil {
 		t.Fatal(err)
 	}
-	views, err := retrieve.Get(a, []string{"Pa"})
+	res, err := retrieve.Get(a, []string{"Pa"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	only := httptest.NewServer(serve.Handler(a, views, false))
+	only := httptest.NewServer(serve.Handler(a, res.Notes, false))
 	t.Cleanup(only.Close)
 	if resp, _ := get(t, only, "/svg/F_TEST/Pb.svg"); resp.StatusCode != http.StatusNotFound {
 		t.Errorf("unserved page status = %d want 404", resp.StatusCode)

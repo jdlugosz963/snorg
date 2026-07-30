@@ -33,12 +33,16 @@ Put the files on your `load-path`, require `snorg` plus one backend
       snorg-config-files '("~/work/snorg/examples/emacs/orgmode.yaml"))
 ```
 
+`snorg-archive` is optional: leave it nil and snorg resolves the archive from
+`archive:` in its own config (`~/.config/snorg/config.yaml`); the client learns
+the root from `retrieve` output to open page SVGs.
+
 Config variables (all plain `defvar`s you may override):
 
 | Variable                  | Meaning                                                                                               |
 |---------------------------|-------------------------------------------------------------------------------------------------------|
 | `snorg-executable`        | CLI binary name/path (default `"snorg"`).                                                             |
-| `snorg-archive`           | Archive path, passed as `-a`. **Required.**                                                           |
+| `snorg-archive`           | Archive path, passed as `-a`. Optional: leave nil to use `archive:` from snorg's own config.           |
 | `snorg-config-files`      | List of `-c` config files; one must define `export.template`.                                         |
 | `snorg-backend`           | Active backend symbol (`denote` / `org-roam`); set by the first backend required.                     |
 | `snorg-import-directory`  | Import destination: a string is used directly, a list prompts for one, `nil` uses the backend default. |

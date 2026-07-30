@@ -59,8 +59,11 @@
 ;; - `snorg-command-map' -- an (unbound) prefix keymap gathering the interactive
 ;;   commands; bind it to a prefix key of your choice.
 ;;
-;; Set `snorg-archive' and `snorg-config-files' before use.  The config must
-;; define `export.template' (see examples/emacs/orgmode.yaml in the snorg repo).
+;; Set `snorg-config-files' before use; the config must define `export.template'
+;; (see examples/emacs/orgmode.yaml in the snorg repo).  `snorg-archive' is
+;; optional: leave it nil to let snorg resolve the archive from `archive:' in its
+;; own XDG config (~/.config/snorg/config.yaml) — the client then discovers the
+;; root from `retrieve' output.
 
 ;;; Code:
 
@@ -85,7 +88,9 @@
 
 (defvar snorg-archive nil
   "Path to the snorg archive, passed to the CLI as `-a'.
-Must be set before any command is used.")
+Optional: when nil, `-a' is omitted and snorg resolves the archive from
+its own config (`archive:' in ~/.config/snorg/config.yaml); the client
+then learns the root from `retrieve' output to open page SVGs.")
 
 (defvar snorg-config-files nil
   "List of snorg config files, each passed to the CLI as `-c'.
@@ -108,10 +113,10 @@ Prepended to the note's own page keywords on `snorg-import'.")
 ;;;; CLI / process layer
 
 (defun snorg--global-args ()
-  "Return the global CLI args (archive and config flags)."
-  (unless snorg-archive
-    (user-error "`snorg-archive' is not set"))
-  (append (list "-a" (expand-file-name snorg-archive))
+  "Return the global CLI args (archive and config flags).
+`-a' is passed only when `snorg-archive' is set; otherwise snorg resolves
+the archive from its own config (`archive:' in the XDG user config)."
+  (append (when snorg-archive (list "-a" (expand-file-name snorg-archive)))
           (mapcan (lambda (f) (list "-c" (expand-file-name f)))
                   snorg-config-files)))
 
@@ -135,15 +140,27 @@ Return stdout as a string, or signal an error with the CLI output."
   "Return the PAGEIDs of FILE-ID (placement order) via `query note'."
   (split-string (snorg--call "query" "note" file-id) "\n" t))
 
+(defvar snorg--archive-root nil
+  "Absolute archive root, cached from `retrieve' output for the session.
+Used to resolve archive-relative SVG paths when `snorg-archive' is nil.")
+
+(defun snorg--parse-retrieve (json)
+  "Parse retrieve JSON string, cache its archive root and return the note list.
+`retrieve' emits an object {archive, notes}; the root is stashed in
+`snorg--archive-root' and the `notes' array (an alist list) is returned."
+  (let* ((json-object-type 'alist)
+         (json-array-type 'list)
+         (json-key-type 'symbol)
+         (data (json-read-from-string json)))
+    (setq snorg--archive-root (alist-get 'archive data))
+    (alist-get 'notes data)))
+
 (defun snorg-retrieve (file-id)
-  "Return the retrieve JSON for FILE-ID parsed as an alist.
+  "Return the retrieve NoteView for FILE-ID parsed as an alist.
 `retrieve' takes PAGEIDs and groups them per note; passing one note's
-pages yields a single-element array, whose sole NoteView is returned."
-  (let ((json-object-type 'alist)
-        (json-array-type 'list)
-        (json-key-type 'symbol))
-    (car (json-read-from-string
-          (apply #'snorg--call "retrieve" (snorg--note-pageids file-id))))))
+pages yields a single-element `notes' array, whose sole NoteView is returned."
+  (car (snorg--parse-retrieve
+        (apply #'snorg--call "retrieve" (snorg--note-pageids file-id)))))
 
 (defun snorg-export (file-id)
   "Return the exported org text for FILE-ID."
@@ -160,9 +177,10 @@ pages yields a single-element array, whose sole NoteView is returned."
       (puthash file-id (snorg-retrieve file-id) snorg--retrieve-cache)))
 
 (defun snorg-reset-cache ()
-  "Clear the retrieve cache."
+  "Clear the retrieve cache and the cached archive root."
   (interactive)
-  (clrhash snorg--retrieve-cache))
+  (clrhash snorg--retrieve-cache)
+  (setq snorg--archive-root nil))
 
 (defun snorg--source (view)
   "Return the `source' string of retrieve alist VIEW."
@@ -356,10 +374,7 @@ ORIGIN is the buffer point was in when the edit started; VIEW-P says
 whether `snorg-view-mode' was active there.  Reuses `snorg--import' to
 regenerate the note's subtree from the freshly written transcription."
   (snorg-reset-cache)
-  (let* ((json-object-type 'alist)
-         (json-array-type 'list)
-         (json-key-type 'symbol)
-         (view (car (json-read-from-string (snorg--call "retrieve" pageid))))
+  (let* ((view (car (snorg--parse-retrieve (snorg--call "retrieve" pageid))))
          (file-id (alist-get 'file_id view)))
     (when file-id
       (snorg--import file-id)
@@ -468,11 +483,21 @@ note's org subtree is refreshed in place (see `snorg-analyze-edit-refresh')."
 
 ;;;; Org link types
 
+(defun snorg--archive-root-for (rel)
+  "Return the absolute archive root REL (an archive-relative path) resolves against.
+`snorg-archive' wins when set; otherwise the root cached from `retrieve'
+output; otherwise it is fetched by retrieving REL's owning note — every
+archive-relative path is prefixed by its FILE_ID, so REL's first path
+component names the note to retrieve."
+  (or (and snorg-archive (expand-file-name snorg-archive))
+      snorg--archive-root
+      (progn (snorg--retrieve-cached (car (split-string rel "/")))
+             snorg--archive-root)
+      (user-error "Cannot resolve the archive root for %s" rel)))
+
 (defun snorg--follow-svg (path _)
-  "Open the archive-relative SVG PATH via `snorg-archive'."
-  (unless snorg-archive
-    (user-error "`snorg-archive' is not set"))
-  (find-file (expand-file-name path (expand-file-name snorg-archive))))
+  "Open the archive-relative SVG PATH from the archive."
+  (find-file (expand-file-name path (snorg--archive-root-for path))))
 
 (defun snorg--follow-note-page (backend path)
   "Follow a BACKEND note-page link PATH of the form FILE_ID::PAGEID.
@@ -617,7 +642,7 @@ Read from the `SNORG_SVGP' property (set by the export template) rather
 than scanning the body for a link, which body edits could remove."
   (let ((rel (org-entry-get nil "SNORG_SVGP")))
     (when (and rel (not (string-empty-p rel)))
-      (expand-file-name rel (expand-file-name snorg-archive)))))
+      (expand-file-name rel (snorg--archive-root-for rel)))))
 
 (defun snorg--goto-page-heading (direction)
   "Move point to the next page heading in DIRECTION (1 or -1).

@@ -1,6 +1,7 @@
 package retrieve_test
 
 import (
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -43,10 +44,15 @@ func TestGetAssemblesOrderedView(t *testing.T) {
 	writeNote(t, a, n, map[string]string{"Pa": "<svg>a</svg>", "Pb": "<svg>b</svg>"})
 
 	// Argument order is irrelevant: pages come back in placement order.
-	views, err := retrieve.Get(a, []string{"Pb", "Pa"})
+	res, err := retrieve.Get(a, []string{"Pb", "Pa"})
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The result carries the absolute archive root the svg paths resolve against.
+	if !filepath.IsAbs(res.Archive) || filepath.Clean(res.Archive) != filepath.Clean(root) {
+		t.Errorf("archive = %q, want absolute %q", res.Archive, root)
+	}
+	views := res.Notes
 	if len(views) != 1 {
 		t.Fatalf("views = %d want 1", len(views))
 	}
@@ -96,10 +102,11 @@ func TestGetGroupsByNote(t *testing.T) {
 		{ID: "Pa1", Number: 1},
 	}}, map[string]string{"Pa1": "<svg/>"})
 
-	views, err := retrieve.Get(a, []string{"Pb2", "Pa1", "Pb2"})
+	res, err := retrieve.Get(a, []string{"Pb2", "Pa1", "Pb2"})
 	if err != nil {
 		t.Fatal(err)
 	}
+	views := res.Notes
 	if len(views) != 2 || views[0].FileID != "F_A" || views[1].FileID != "F_B" {
 		t.Fatalf("views = %+v want F_A then F_B", views)
 	}
@@ -153,10 +160,11 @@ func TestGetAssemblesAnalysis(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	views, err := retrieve.Get(a, []string{"Pa"})
+	res, err := retrieve.Get(a, []string{"Pa"})
 	if err != nil {
 		t.Fatal(err)
 	}
+	views := res.Notes
 	p := views[0].Pages[0]
 	if p.Analysis == nil || p.Analysis.Content != "# Chapter\n\nbody" {
 		t.Errorf("analysis = %+v, want content from sidecar without trailing newline", p.Analysis)
@@ -183,10 +191,11 @@ func TestGetExposesHumanTranscription(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	views, err := retrieve.Get(a, []string{"Pa", "Pb"})
+	res, err := retrieve.Get(a, []string{"Pa", "Pb"})
 	if err != nil {
 		t.Fatal(err)
 	}
+	views := res.Notes
 	pa, pb := views[0].Pages[0], views[0].Pages[1]
 	if pa.Analysis == nil || pa.Analysis.Content != "written by hand" {
 		t.Errorf("analysis = %+v, want the hand-written content", pa.Analysis)

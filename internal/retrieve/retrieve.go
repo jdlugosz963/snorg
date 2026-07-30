@@ -9,12 +9,22 @@ package retrieve
 
 import (
 	"fmt"
+	"path/filepath"
 	"sort"
 	"strings"
 
 	"github.com/jdlugosz963/snorg/internal/archive"
 	"github.com/jdlugosz963/snorg/internal/snote"
 )
+
+// Result is the top-level retrieve payload: the assembled notes plus the absolute
+// archive root the pages' relative svg paths are resolved against. Emitting the
+// root makes the read contract self-contained — a consumer needs no out-of-band
+// knowledge of where the archive lives to open a page's svg.
+type Result struct {
+	Archive string      `json:"archive"`
+	Notes   []*NoteView `json:"notes"`
+}
 
 // NoteView is the assembled, consumer-facing representation of one archived note.
 type NoteView struct {
@@ -26,7 +36,7 @@ type NoteView struct {
 }
 
 // PageView is one page in placement order, with its SVG path relative to the
-// archive root (join it with the archive location to resolve the file).
+// archive root (join it with Result.Archive to resolve the file).
 type PageView struct {
 	Number   int               `json:"number"`
 	PageID   string            `json:"page_id"`
@@ -84,11 +94,11 @@ func List(a *archive.Archive) ([]string, error) {
 	return a.List()
 }
 
-// Get assembles NoteViews for the given PAGEIDs (deduplicated), grouped per
-// owning note in archive List order; each view carries full note metadata but
-// only the requested pages, in note.json placement order. A PAGEID owned by no
-// note is an error.
-func Get(a *archive.Archive, pageIDs []string) ([]*NoteView, error) {
+// Get assembles a Result for the given PAGEIDs (deduplicated): the absolute
+// archive root plus the NoteViews grouped per owning note in archive List order;
+// each view carries full note metadata but only the requested pages, in note.json
+// placement order. A PAGEID owned by no note is an error.
+func Get(a *archive.Archive, pageIDs []string) (*Result, error) {
 	pending := make(map[string]bool, len(pageIDs))
 	for _, id := range pageIDs {
 		pending[id] = true
@@ -133,7 +143,11 @@ func Get(a *archive.Archive, pageIDs []string) ([]*NoteView, error) {
 		sort.Strings(missing)
 		return nil, fmt.Errorf("page(s) not found in archive: %s", strings.Join(missing, ", "))
 	}
-	return views, nil
+	root, err := filepath.Abs(a.Root)
+	if err != nil {
+		root = a.Root
+	}
+	return &Result{Archive: root, Notes: views}, nil
 }
 
 // getPage assembles one PageView, joining <PAGEID>.json with the .md sidecar.

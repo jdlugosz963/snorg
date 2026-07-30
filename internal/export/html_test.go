@@ -19,7 +19,7 @@ func TestHTMLFilter(t *testing.T) {
 			Analysis: &retrieve.PageAnalysisView{Content: "# Heading\n\nsome **bold** text"},
 		}},
 	}
-	got, err := Render([]*retrieve.NoteView{view}, "{{ notes.0.pages.0.analysis.content|html }}")
+	got, err := Render(&retrieve.Result{Notes: []*retrieve.NoteView{view}}, "{{ notes.0.pages.0.analysis.content|html }}")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -37,7 +37,7 @@ func TestHTMLFilter(t *testing.T) {
 // not invoke pandoc (the export then works on a pandoc-less machine too).
 func TestHTMLFilterEmptyInput(t *testing.T) {
 	view := &retrieve.NoteView{Pages: []retrieve.PageView{{Number: 1}}}
-	got, err := Render([]*retrieve.NoteView{view}, "<{{ notes.0.pages.0.analysis.content|html }}>")
+	got, err := Render(&retrieve.Result{Notes: []*retrieve.NoteView{view}}, "<{{ notes.0.pages.0.analysis.content|html }}>")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -80,7 +80,7 @@ func TestWebNoteExample(t *testing.T) {
 		}},
 	}
 
-	got, err := Render([]*retrieve.NoteView{view}, cfg.Export.Template)
+	got, err := Render(&retrieve.Result{Notes: []*retrieve.NoteView{view}}, cfg.Export.Template)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -130,7 +130,7 @@ func TestWebIndexExample(t *testing.T) {
 		},
 	}
 
-	got, err := Render(views, cfg.Export.Template)
+	got, err := Render(&retrieve.Result{Notes: views}, cfg.Export.Template)
 	if err != nil {
 		t.Fatal(err)
 	}

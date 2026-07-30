@@ -316,11 +316,11 @@ func retrieveCmd(a *app) *cli.Command {
 			if err != nil {
 				return err
 			}
-			views, err := retrieve.Get(a.arch, pageIDs)
+			res, err := retrieve.Get(a.arch, pageIDs)
 			if err != nil {
 				return err
 			}
-			b, err := json.MarshalIndent(views, "", "  ")
+			b, err := json.MarshalIndent(res, "", "  ")
 			if err != nil {
 				return err
 			}
@@ -608,11 +608,11 @@ func exportCmd(a *app) *cli.Command {
 			if err != nil {
 				return err
 			}
-			views, err := retrieve.Get(a.arch, pageIDs)
+			res, err := retrieve.Get(a.arch, pageIDs)
 			if err != nil {
 				return err
 			}
-			out, err := export.Render(views, a.cfg.Export.Template)
+			out, err := export.Render(res, a.cfg.Export.Template)
 			if err != nil {
 				return err
 			}
@@ -645,13 +645,13 @@ func serveCmd(a *app) *cli.Command {
 			if err != nil {
 				return err
 			}
-			views, err := retrieve.Get(a.arch, pageIDs)
+			res, err := retrieve.Get(a.arch, pageIDs)
 			if err != nil {
 				return err
 			}
 			addr := cmd.String("listen")
-			fmt.Fprintf(os.Stderr, "snorg: serving %d note(s) on http://%s/\n", len(views), addr)
-			return http.ListenAndServe(addr, serve.Handler(a.arch, views, cmd.Bool("flat")))
+			fmt.Fprintf(os.Stderr, "snorg: serving %d note(s) on http://%s/\n", len(res.Notes), addr)
+			return http.ListenAndServe(addr, serve.Handler(a.arch, res.Notes, cmd.Bool("flat")))
 		},
 	}
 }
