@@ -53,6 +53,11 @@ const (
 // each command validates only the section it uses (analyze: ValidateProvider; export:
 // a non-empty Export.Template), so an export-only config needs no provider creds.
 type Config struct {
+	// Archive is the default archive root, used when the -a/--archive flag is
+	// absent (the flag wins). Meant for the XDG user config so a single archive
+	// need not be passed on every invocation; a leading ~ is expanded by the
+	// caller (cmd/snorg), not here.
+	Archive  string   `yaml:"archive"`
 	Provider Provider `yaml:"provider"`
 	Analysis Analysis `yaml:"analysis"`
 	Export   Export   `yaml:"export"`

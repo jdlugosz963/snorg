@@ -31,7 +31,7 @@ Read `docs/principles.md` (project rules), `docs/architecture.md` (modules/CLI),
 - `go test ./...` — all tests
 - `go test ./internal/snote/sntool` — fast unit tests (footer-key parsing)
 - `go test -run TestIngestSampleNote ./internal/ingest` — e2e ingest; **slow (~1 min**, renders SVGs via supernote-tool) and skips if `supernote-tool` is not on PATH
-- CLI shape: `snorg -a <archive-path> [-c config.yaml ...] [--no-archive-config] <command> [command flags] [args]` — the archive is a **required global flag** (`-a`/`--archive`) and the config flags are global too, so all come **before** the command; the root's `Before` hook loads the merged config once (`<archive-path>/config.yaml` first if present, then `-c` files, later wins) and hands it to the command, which validates only the sections it uses
+- CLI shape: `snorg [-a <archive-path>] [-c config.yaml ...] [--no-archive-config] [--no-user-config] <command> [command flags] [args]` — the archive is the global `-a`/`--archive` flag and the config flags are global too, so all come **before** the command; the root's `Before` hook loads the merged config once in **increasing precedence**: `$XDG_CONFIG_HOME/snorg/config.yaml` (the XDG **user config**, `--no-user-config` to skip) → `<archive-path>/config.yaml` (`--no-archive-config` to skip) → `-c` files (later wins), and hands it to the command, which validates only the sections it uses. `-a` is **optional** when the user config sets the top-level `archive:` key (the flag wins; a leading `~` is expanded) — resolved before the archive config is located, so a bare `snorg <command>` targets that archive
 - `go run ./cmd/snorg -a <archive-path> [-c ...] ingest [-j N] <file-or-dir>` — register a note (or all `*.note` under a dir) into the archive; `-j` caps concurrent notes (default NumCPU); config drives the SVG pipeline (`ingest.svg.{links,navigation,format}` bools default true; `background` mode `extract`(default)`|inline|blank|remove`; `colors` remaps the 4 default pen-shade fills). None of these change the analyze fingerprint (path geometry), so restyling never re-transcribes.
 - `go run ./cmd/snorg -a <archive-path> list` — list FILE_IDs (one per line)
 - `go run ./cmd/snorg -a <archive-path> query <filter> [arg]` — print PAGEIDs of matching pages (one per line); one filter per call: `all`, `note <FILE_ID>`, `unanalyzed`, `keyword <regexp>` (matches `Keyword.Text`), `content <regexp>` (matches the page's transcribed `<PAGEID>.md`), `starred`, `date <spec>` (day from the PAGEID's leading 8 digits; spec = `today`/`yesterday`/`YYYY-MM-DD`/`FROM..TO` with open ends); a `not <filter>` **prefix** inverts any filter (`query not starred` == the non-starred pages), so under piping `query A | query not B` == A minus B; pipes into `retrieve`/`analyze`/`export` (all three take PAGEIDs as args or stdin lines). `query` **itself** reads PAGEIDs from stdin when piped, restricting the filter to that set — so filters intersect: `query keyword foo | query date today` == foo ∩ today
@@ -114,12 +114,17 @@ Flow: `cmd/snorg` → `internal/ingest` orchestrates `snote.Source.Read` → ren
   resolution is a separate `ResolveAPIKey` (called by analyze, not `Load`, so export never runs it):
   literal `api_key` > `api_key_command` shell stdout > `OPENAI_API_KEY`. **Load does not enforce required fields** — each command validates its
   own section (analyze: `ValidateProvider`; export: non-empty `Export.Template`), so an export-only
-  config needs no provider. Uses `yaml.v3`. `cmd/snorg`'s root command
-  builds the path list (`configPaths`: `<archive-path>/config.yaml` first if present —
-  `--no-archive-config` skips it — then the `-c` files, so `-c` overrides via the later-wins merge),
-  loads once in the root's `Before` hook, and shares the result with the command via the `app`
-  struct in `main.go` (the archive is the required global `-a`/`--archive` flag, so urfave's natural
-  subcommand dispatch handles routing — no manual dispatch).
+  config needs no provider. The top-level `archive:` key (a scalar carried through untouched) is the
+  default archive root when `-a` is absent. Uses `yaml.v3`. `cmd/snorg`'s root command
+  builds the path list (`configPaths`: XDG user config `$XDG_CONFIG_HOME/snorg/config.yaml`
+  first — `--no-user-config` skips it — then `<archive-path>/config.yaml` — `--no-archive-config`
+  skips it — then the `-c` files, so later layers override via the later-wins merge; each file layer
+  skipped when absent/a directory), loads once in the root's `Before` hook, and shares the result
+  with the command via the `app` struct in `main.go`. The archive path is resolved **first** (`-a`
+  flag, else the `archive:` key from a pre-merge of the layers that don't depend on it — user config +
+  `-c` — with `~` expanded via `expandHome`), since it's needed to locate the archive config; a bare
+  invocation with neither errors. The global `-a`/`--archive` flag is no longer `Required`, so
+  urfave's natural subcommand dispatch still handles routing — no manual dispatch.
 - `internal/export` — generic exporter (`export` cmd): renders the retrieved `[]*retrieve.NoteView`
   through one pongo2 template in a single pass (`Render(views, template)`). Marshals the views to JSON
   then back (numbers via `UseNumber` so levels/page numbers render as ints) into the pongo2 context

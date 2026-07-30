@@ -16,23 +16,34 @@ func TestConfigPaths(t *testing.T) {
 	if err := os.WriteFile(archiveCfg, []byte("provider:\n  model: archive\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	userCfg := filepath.Join(t.TempDir(), archiveConfigName)
+	if err := os.WriteFile(userCfg, []byte("archive: /somewhere\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	cli := []string{"/tmp/a.yaml", "/tmp/b.yaml"}
 
-	// Archive config present: it comes first, then -c files (which win the merge).
-	got := configPaths(dir, cli, false)
-	want := append([]string{archiveCfg}, cli...)
+	// All layers present: XDG user config, then archive config, then -c files
+	// (each later layer wins the merge).
+	got := configPaths(userCfg, dir, cli, false, false)
+	want := append([]string{userCfg, archiveCfg}, cli...)
 	if !reflect.DeepEqual(got, want) {
-		t.Errorf("with archive config: got %v, want %v", got, want)
+		t.Errorf("all layers: got %v, want %v", got, want)
 	}
 
-	// Opt-out: only the -c files.
-	if got := configPaths(dir, cli, true); !reflect.DeepEqual(got, cli) {
-		t.Errorf("no-archive-config: got %v, want %v", got, cli)
+	// Opt-outs are independent.
+	if got := configPaths(userCfg, dir, cli, true, false); !reflect.DeepEqual(got, append([]string{archiveCfg}, cli...)) {
+		t.Errorf("no-user-config: got %v", got)
+	}
+	if got := configPaths(userCfg, dir, cli, false, true); !reflect.DeepEqual(got, append([]string{userCfg}, cli...)) {
+		t.Errorf("no-archive-config: got %v", got)
+	}
+	if got := configPaths(userCfg, dir, cli, true, true); !reflect.DeepEqual(got, cli) {
+		t.Errorf("both opt-outs: got %v, want %v", got, cli)
 	}
 
-	// Missing archive config: only the -c files, no error.
-	if got := configPaths(t.TempDir(), cli, false); !reflect.DeepEqual(got, cli) {
-		t.Errorf("missing archive config: got %v, want %v", got, cli)
+	// Empty user path and missing archive config: only the -c files, no error.
+	if got := configPaths("", t.TempDir(), cli, false, false); !reflect.DeepEqual(got, cli) {
+		t.Errorf("missing files: got %v, want %v", got, cli)
 	}
 
 	// A directory named config.yaml is not treated as a config file.
@@ -40,8 +51,27 @@ func TestConfigPaths(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(dir2, archiveConfigName), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if got := configPaths(dir2, cli, false); !reflect.DeepEqual(got, cli) {
+	if got := configPaths("", dir2, cli, false, false); !reflect.DeepEqual(got, cli) {
 		t.Errorf("config.yaml dir: got %v, want %v", got, cli)
+	}
+}
+
+func TestExpandHome(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skipf("no home dir: %v", err)
+	}
+	cases := map[string]string{
+		"~":          home,
+		"~/notes/sn": filepath.Join(home, "notes/sn"),
+		"/abs/notes": "/abs/notes",
+		"rel/notes":  "rel/notes",
+		"~notuser/x": "~notuser/x", // ~ not followed by / is left alone
+	}
+	for in, want := range cases {
+		if got := expandHome(in); got != want {
+			t.Errorf("expandHome(%q) = %q, want %q", in, got, want)
+		}
 	}
 }
 
@@ -79,9 +109,13 @@ func TestRootDispatch(t *testing.T) {
 	ctx := context.Background()
 	arch := t.TempDir()
 
-	// Missing archive flag: urfave enforces the required global flag.
-	if err := root().Run(ctx, []string{"snorg", "list"}); err == nil || !strings.Contains(err.Error(), "archive") {
-		t.Errorf("missing -a: got %v, want required-flag error", err)
+	// Isolate the XDG user config: point it at an empty dir so the developer's
+	// real ~/.config/snorg/config.yaml can't leak an archive: default into tests.
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	// No -a and no user config: the resolver reports no archive path.
+	if err := root().Run(ctx, []string{"snorg", "list"}); err == nil || !strings.Contains(err.Error(), "no archive path") {
+		t.Errorf("missing -a: got %v, want no-archive-path error", err)
 	}
 
 	// Archive given but no command: root Action prints a usage error.
@@ -107,5 +141,34 @@ func TestRootDispatch(t *testing.T) {
 	err := root().Run(ctx, []string{"snorg", "-a", arch, "analyze", "--force", "PAGEID"})
 	if err == nil || strings.Contains(err.Error(), "--force") {
 		t.Errorf("analyze --force: got %v, want a non-flag-parse error (provider validation)", err)
+	}
+}
+
+// TestArchiveFromUserConfig: with no -a, the archive path comes from `archive:` in
+// the XDG user config; -a overrides it; --no-user-config ignores it.
+func TestArchiveFromUserConfig(t *testing.T) {
+	ctx := context.Background()
+	xdg := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", xdg)
+	if err := os.MkdirAll(filepath.Join(xdg, "snorg"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	arch := t.TempDir()
+	if err := os.WriteFile(filepath.Join(xdg, "snorg", archiveConfigName), []byte("archive: "+arch+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// No -a: `query all` runs against the user-config archive (empty = no match).
+	if err := root().Run(ctx, []string{"snorg", "query", "all"}); err != nil {
+		t.Errorf("archive from user config: %v", err)
+	}
+	// --no-user-config drops that default, leaving no archive path.
+	if err := root().Run(ctx, []string{"snorg", "--no-user-config", "query", "all"}); err == nil || !strings.Contains(err.Error(), "no archive path") {
+		t.Errorf("no-user-config: got %v, want no-archive-path error", err)
+	}
+	// -a wins over the user-config archive: a bad -a path still surfaces (the
+	// user-config archive is empty and would not error), proving -a is used.
+	if err := root().Run(ctx, []string{"snorg", "-a", filepath.Join(arch, "nope"), "list"}); err == nil {
+		t.Errorf("-a override: expected error listing a non-existent archive dir")
 	}
 }

@@ -19,17 +19,37 @@ org-mode exporter).
 
 The root loads, in increasing precedence:
 
-1. `<archive-path>/config.yaml` — the archive's own default config, if the file
+1. `$XDG_CONFIG_HOME/snorg/config.yaml` (i.e. `~/.config/snorg/config.yaml`) —
+   the XDG **user config**, if it exists: cross-archive defaults for the machine.
+   Pass `--no-user-config` to ignore it.
+2. `<archive-path>/config.yaml` — the archive's own default config, if the file
    exists (self-contained per-archive settings). Pass `--no-archive-config` to
    ignore it.
-2. each `-c` file, left to right.
+3. each `-c` file, left to right.
 
-Later sources win via the deep-merge below, so `-c` files override the archive
-config per key. A missing archive `config.yaml` is not an error; a malformed one is.
+Later sources win via the deep-merge below, so the archive config overrides the
+user config and `-c` files override both, per key. A missing config file is not
+an error; a malformed one is.
+
+## Archive path
+
+The archive root is normally the global `-a`/`--archive` flag. It may instead be
+set once as the top-level `archive:` key in the **user config**, so plain
+`snorg <command>` works with no `-a` (the flag still wins when both are given). A
+leading `~` in `archive:` is expanded to your home directory. `archive:` is only
+consulted to locate the archive — every other key merges as usual.
+
+```yaml
+# ~/.config/snorg/config.yaml
+archive: ~/notes/sn
+```
 
 ## Schema
 
 ```yaml
+archive: ~/notes/sn                         # optional; default archive root when -a is absent
+                                            # (user config only; -a flag overrides; ~ expanded)
+
 provider:
   endpoint: https://openrouter.ai/api/v1   # OpenAI-compatible base URL (required by analyze)
   api_key: sk-or-...                        # required; if empty, api_key_command then $OPENAI_API_KEY

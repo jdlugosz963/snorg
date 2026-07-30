@@ -17,6 +17,7 @@ func writeCfg(t *testing.T, name, body string) string {
 
 func TestLoadMergeAndDefaults(t *testing.T) {
 	base := writeCfg(t, "base.yaml", `
+archive: /base/archive
 provider:
   endpoint: https://example.test/v1
   api_key: base-key
@@ -29,6 +30,7 @@ analysis:
       prompt: summarize this
 `)
 	override := writeCfg(t, "override.yaml", `
+archive: /override/archive
 provider:
   model: override-model
 analysis:
@@ -43,6 +45,9 @@ analysis:
 	}
 
 	// Scalar override: later file wins; non-overridden scalar preserved.
+	if cfg.Archive != "/override/archive" {
+		t.Errorf("archive = %q, want /override/archive", cfg.Archive)
+	}
 	if cfg.Provider.Model != "override-model" {
 		t.Errorf("model = %q, want override-model", cfg.Provider.Model)
 	}

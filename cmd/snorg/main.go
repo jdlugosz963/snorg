@@ -1,8 +1,10 @@
-// Command snorg is the supernote-organizer CLI. The archive path is a required
-// global flag (-a/--archive); the merged config (archive config.yaml, overridden
-// by -c files) is loaded once in the root Before hook and shared by every command:
+// Command snorg is the supernote-organizer CLI. The archive path is the global
+// -a/--archive flag, optional when the XDG user config
+// ($XDG_CONFIG_HOME/snorg/config.yaml) sets `archive:` (the flag wins). The merged
+// config (XDG user config, overridden by the archive's config.yaml, overridden by
+// -c files) is loaded once in the root Before hook and shared by every command:
 //
-//	snorg -a <archive-path> [-c config.yaml ...] [--no-archive-config] <command> [command flags] [args]
+//	snorg [-a <archive-path>] [-c config.yaml ...] [--no-archive-config] [--no-user-config] <command> [command flags] [args]
 //
 //	snorg -a <archive-path> ingest [-j N] <file-or-dir>
 //	snorg -a <archive-path> list
@@ -66,21 +68,32 @@ type app struct {
 	cfg  *config.Config
 }
 
-// archiveFlag is the required global flag naming the archive root. Being on the
-// root, it must precede the command (urfave enforces Required for every command
-// except --help/completion, which are exempt).
+// archiveFlag is the global flag naming the archive root. Being on the root, it
+// must precede the command. It is not Required: the path may instead come from the
+// `archive:` key in the XDG user config (the flag wins when both are set).
 func archiveFlag() *cli.StringFlag {
 	return &cli.StringFlag{
-		Name:     "archive",
-		Aliases:  []string{"a"},
-		Usage:    "archive root `PATH` (holds the FILE_ID sub-dirs and config.yaml)",
-		Required: true,
+		Name:    "archive",
+		Aliases: []string{"a"},
+		Usage:   "archive root `PATH` (holds the FILE_ID sub-dirs and config.yaml); optional if the user config sets archive:",
 	}
 }
 
 // archiveConfigName is the per-archive default config, loaded from the archive
-// root and merged under any -c files (which override it).
+// root and merged over the XDG user config, under any -c files (which override it).
 const archiveConfigName = "config.yaml"
+
+// userConfigPath returns the XDG user config file
+// ($XDG_CONFIG_HOME/snorg/config.yaml, i.e. ~/.config/snorg/config.yaml), the
+// lowest-precedence config layer and the natural home for a default `archive:`.
+// Empty when the user config dir can't be resolved.
+func userConfigPath() string {
+	dir, err := os.UserConfigDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(dir, "snorg", archiveConfigName)
+}
 
 // configFlag is the repeatable global config flag; later files override earlier
 // ones (see config.Load).
@@ -96,21 +109,50 @@ func configFlag() *cli.StringSliceFlag {
 func noArchiveConfigFlag() *cli.BoolFlag {
 	return &cli.BoolFlag{
 		Name:  "no-archive-config",
-		Usage: "ignore <archive-path>/config.yaml (use only -c files)",
+		Usage: "ignore <archive-path>/config.yaml",
 	}
 }
 
-// configPaths orders the archive config (if present and not disabled) before the
-// -c files, so -c overrides the archive config via config.Load's later-wins merge.
-func configPaths(archivePath string, cliPaths []string, noArchive bool) []string {
+// noUserConfigFlag opts out of loading the XDG user config.
+func noUserConfigFlag() *cli.BoolFlag {
+	return &cli.BoolFlag{
+		Name:  "no-user-config",
+		Usage: "ignore the XDG user config (~/.config/snorg/config.yaml)",
+	}
+}
+
+// configPaths orders the config layers lowest-precedence first for config.Load's
+// later-wins merge: the XDG user config, then the archive's config.yaml, then the
+// -c files. A file layer is skipped when absent, a directory, or opted out.
+func configPaths(userPath, archivePath string, cliPaths []string, noUser, noArchive bool) []string {
 	var paths []string
+	isFile := func(p string) bool {
+		st, err := os.Stat(p)
+		return err == nil && !st.IsDir()
+	}
+	if !noUser && userPath != "" && isFile(userPath) {
+		paths = append(paths, userPath)
+	}
 	if !noArchive {
-		p := filepath.Join(archivePath, archiveConfigName)
-		if st, err := os.Stat(p); err == nil && !st.IsDir() {
+		if p := filepath.Join(archivePath, archiveConfigName); isFile(p) {
 			paths = append(paths, p)
 		}
 	}
 	return append(paths, cliPaths...)
+}
+
+// expandHome expands a leading ~ or ~/ in a path to the user's home directory, so
+// a config `archive: ~/notes/sn` resolves like the shell would (YAML/Go do not).
+// Returns p unchanged when it has no ~ prefix or the home dir can't be resolved.
+func expandHome(p string) string {
+	if p != "~" && !strings.HasPrefix(p, "~/") {
+		return p
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return p
+	}
+	return filepath.Join(home, strings.TrimPrefix(p[1:], "/"))
 }
 
 // commands builds the subcommands, closed over the shared app state. The root
@@ -142,13 +184,32 @@ func root() *cli.Command {
 	return &cli.Command{
 		Name:                  "snorg",
 		Usage:                 "supernote-organizer: ingest .note files into a plaintext archive",
-		UsageText:             "snorg -a <archive-path> [-c config.yaml ...] [--no-archive-config] <command> [command flags] [args]",
-		Flags:                 []cli.Flag{archiveFlag(), configFlag(), noArchiveConfigFlag()},
+		UsageText:             "snorg [-a <archive-path>] [-c config.yaml ...] [--no-archive-config] [--no-user-config] <command> [command flags] [args]",
+		Flags:                 []cli.Flag{archiveFlag(), configFlag(), noArchiveConfigFlag(), noUserConfigFlag()},
 		Commands:              commands(a),
 		EnableShellCompletion: true,
 		Before: func(ctx context.Context, cmd *cli.Command) (context.Context, error) {
+			userPath := userConfigPath()
+			noUser, noArchive := cmd.Bool("no-user-config"), cmd.Bool("no-archive-config")
+			cliPaths := cmd.StringSlice("config")
+
+			// Resolve the archive path before we can locate the archive's own
+			// config: the -a flag wins, else the `archive:` key from the layers
+			// that don't depend on the archive path (XDG user config + -c files).
 			archivePath := cmd.String("archive")
-			cfg, err := config.Load(configPaths(archivePath, cmd.StringSlice("config"), cmd.Bool("no-archive-config")))
+			if archivePath == "" {
+				preCfg, err := config.Load(configPaths(userPath, "", cliPaths, noUser, true))
+				if err != nil {
+					return ctx, err
+				}
+				archivePath = preCfg.Archive
+			}
+			if archivePath == "" {
+				return ctx, fmt.Errorf("no archive path: pass -a/--archive or set archive: in %s", userPath)
+			}
+			archivePath = expandHome(archivePath)
+
+			cfg, err := config.Load(configPaths(userPath, archivePath, cliPaths, noUser, noArchive))
 			if err != nil {
 				return ctx, err
 			}
