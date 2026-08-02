@@ -289,17 +289,38 @@ func ingestCmd(a *app) *cli.Command {
 func listCmd(a *app) *cli.Command {
 	return &cli.Command{
 		Name:  "list",
-		Usage: "list archived FILE_IDs, one per line",
+		Usage: "list archived FILE_IDs, one per line; -l/--long adds the note name (tab-separated)",
+		Flags: []cli.Flag{
+			&cli.BoolFlag{
+				Name:    "long",
+				Aliases: []string{"l"},
+				Usage:   "annotate each FILE_ID with its note name (source sans .note), tab-separated",
+			},
+		},
 		Action: func(_ context.Context, cmd *cli.Command) error {
 			if cmd.Args().Len() != 0 {
-				return fmt.Errorf("usage: snorg -a <archive-path> list")
+				return fmt.Errorf("usage: snorg [-a <archive-path>] list")
 			}
 			ids, err := retrieve.List(a.arch)
 			if err != nil {
 				return err
 			}
+			if !cmd.Bool("long") {
+				for _, id := range ids {
+					fmt.Println(id)
+				}
+				return nil
+			}
 			for _, id := range ids {
-				fmt.Println(id)
+				nd, err := a.arch.ReadNote(id)
+				if err != nil {
+					return fmt.Errorf("note %s: %w", id, err)
+				}
+				name := strings.TrimSuffix(nd.Source, ".note")
+				if name == "" {
+					name = id
+				}
+				fmt.Printf("%s\t%s\n", id, name)
 			}
 			return nil
 		},
@@ -351,12 +372,19 @@ const queryFilters = "all, note <FILE_ID>, unanalyzed, keyword <regexp>, content
 func queryCmd(a *app) *cli.Command {
 	return &cli.Command{
 		Name:      "query",
-		Usage:     "print PAGEIDs of matching pages, one per line (pipe into retrieve/analyze/export)",
+		Usage:     "print PAGEIDs of matching pages, one per line (pipe into retrieve/analyze/export); -l/--long annotates them (browse-only, not pipe-safe)",
 		ArgsUsage: "<filter> [arg]   (filters: " + queryFilters + ")",
+		Flags: []cli.Flag{
+			&cli.BoolFlag{
+				Name:    "long",
+				Aliases: []string{"l"},
+				Usage:   "annotate each PAGEID with note, page#, *, headings and #keywords in tab-separated columns (do not pipe downstream)",
+			},
+		},
 		Action: func(_ context.Context, cmd *cli.Command) error {
 			args := cmd.Args().Slice()
 			if len(args) < 1 {
-				return fmt.Errorf("usage: snorg -a <archive-path> query <filter> [arg]\n  filters: %s", queryFilters)
+				return fmt.Errorf("usage: snorg [-a <archive-path>] query <filter> [arg]\n  filters: %s", queryFilters)
 			}
 			pred, err := queryPredicate(a.arch, args[0], args[1:])
 			if err != nil {
@@ -375,18 +403,88 @@ func queryCmd(a *app) *cli.Command {
 			if err != nil {
 				return err
 			}
-			for _, m := range matches {
-				fmt.Println(m.PageID)
+			if !cmd.Bool("long") {
+				for _, m := range matches {
+					fmt.Println(m.PageID)
+				}
+				return nil
 			}
-			return nil
+			return printQueryLong(a.arch, matches)
 		},
 	}
+}
+
+// queryRow is one assembled line of the browse-only `query -l` view.
+type queryRow struct {
+	pageID   string
+	note     string // source filename sans ".note" (FILE_ID fallback)
+	number   int    // 1-based page number from note.json placement
+	starred  bool
+	headings []string // analyzed title names (empty until analyze runs)
+	keywords []string // device keyword text (present without analysis)
+}
+
+// printQueryLong emits the human-readable, browse-only form of a query result:
+// tab-separated columns "<PAGEID>\t<note>\tp<page#>\t<*?>\t<headings ' / '>\t#kw #kw",
+// where note is the source filename sans ".note", page# comes from note.json's
+// placement, * marks a starred page (empty otherwise), headings are the analyzed
+// title names (empty until analyze runs) and keywords (device metadata, present
+// without analysis) are rendered as #tags so a fuzzy finder can filter on them.
+// PAGEID stays the first whitespace field on purpose (`awk '{print $1}'` extracts
+// it for the fzf → serve workflow). Fixed \t separators keep the columns machine-
+// splittable (cut -f) regardless of value widths. This is deliberately NOT the
+// bare-PAGEID pipe contract, so it is never fed downstream.
+func printQueryLong(a *archive.Archive, matches []query.Match) error {
+	notes := make(map[string]*archive.NoteDoc)
+	for _, m := range matches {
+		nd, ok := notes[m.FileID]
+		if !ok {
+			read, err := a.ReadNote(m.FileID)
+			if err != nil {
+				return fmt.Errorf("note %s: %w", m.FileID, err)
+			}
+			nd = &read
+			notes[m.FileID] = nd
+		}
+		name := strings.TrimSuffix(nd.Source, ".note")
+		if name == "" {
+			name = m.FileID
+		}
+		number := 0
+		for _, ref := range nd.Pages {
+			if ref.ID == m.PageID {
+				number = ref.Number
+				break
+			}
+		}
+		pd, err := a.ReadPage(m.FileID, m.PageID)
+		if err != nil {
+			return fmt.Errorf("note %s page %s: %w", m.FileID, m.PageID, err)
+		}
+		row := queryRow{pageID: m.PageID, note: name, number: number, starred: pd.Starred}
+		for _, t := range pd.Titles {
+			if t.Analysis != nil {
+				row.headings = append(row.headings, t.Analysis.Name)
+			}
+		}
+		for _, k := range pd.Keywords {
+			row.keywords = append(row.keywords, "#"+k.Text)
+		}
+		star := ""
+		if row.starred {
+			star = "*"
+		}
+		fmt.Printf("%s\t%s\tp%d\t%s\t%s\t%s\n",
+			row.pageID, row.note, row.number, star,
+			strings.Join(row.headings, " / "), strings.Join(row.keywords, " "))
+	}
+	return nil
 }
 
 func queryPredicate(a *archive.Archive, filter string, args []string) (query.Predicate, error) {
 	arity := func(n int, usage string) error {
 		if len(args) != n {
-			return fmt.Errorf("usage: snorg -a <archive-path> query %s", usage)
+			return fmt.Errorf("usage: snorg [-a <archive-path>] query %s", usage)
 		}
 		return nil
 	}
