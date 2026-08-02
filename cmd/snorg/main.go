@@ -331,7 +331,7 @@ func listCmd(a *app) *cli.Command {
 func retrieveCmd(a *app) *cli.Command {
 	return &cli.Command{
 		Name:      "retrieve",
-		Usage:     "print the assembled pages as a JSON array of notes (no PAGEIDs = read them from stdin)",
+		Usage:     "print the assembled pages as a JSON object {archive, notes} (no PAGEIDs = read them from stdin)",
 		ArgsUsage: "[PAGEID ...]",
 		Action: func(_ context.Context, cmd *cli.Command) error {
 			pageIDs, err := pageIDArgs(cmd)
@@ -749,7 +749,11 @@ func serveCmd(a *app) *cli.Command {
 				return err
 			}
 			addr := cmd.String("listen")
-			fmt.Fprintf(os.Stderr, "snorg: serving %d note(s) on http://%s/\n", len(res.Notes), addr)
+			pages := 0
+			for _, n := range res.Notes {
+				pages += len(n.Pages)
+			}
+			fmt.Fprintf(os.Stderr, "snorg: serving %d page(s) across %d note(s) on http://%s/\n", pages, len(res.Notes), addr)
 			return http.ListenAndServe(addr, serve.Handler(a.arch, res.Notes, cmd.Bool("flat")))
 		},
 	}
