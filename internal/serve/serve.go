@@ -4,11 +4,12 @@
 // once by the caller (via retrieve.Get) and the page SVGs are streamed straight
 // from the archive on demand; nothing is copied to disk.
 //
-// Three routes:
+// Routes:
 //
 //	GET /                    gallery of notes (name + first-page thumbnail)
 //	GET /note/{fid}          gallery of that note's pages, click to enlarge
 //	GET /svg/{fid}/{pid}.svg the page SVG, streamed from the archive
+//	GET /events              SSE liveness stream carrying this process's boot-id
 //
 // In flat mode (Handler's flat=true), the index instead shows every selected
 // page in one gallery (no per-note grouping), each captioned with its note name
@@ -16,9 +17,18 @@
 //
 // The SVG route only serves pages that belong to the served set, so the viewer
 // never exposes the whole archive — just the selected pages.
+//
+// Auto-refresh: every page holds an EventSource on /events for the life of the
+// tab. Each serve process mints a random boot-id sent on that stream; when the
+// connection drops and reconnects, the client reloads to / only if the boot-id
+// changed — i.e. serve was genuinely restarted (possibly over a different page
+// selection, so / is the one always-valid landing). A blip that reconnects to
+// the same process does not reload. This is a liveness refresh, not
+// live-reload-on-edit: the view set is still built once at startup.
 package serve
 
 import (
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -36,6 +46,11 @@ import (
 // else. When flat is true, the index is a single flat gallery of every selected
 // page instead of a per-note gallery.
 func Handler(a *archive.Archive, views []*retrieve.NoteView, flat bool) http.Handler {
+	// One random id per serve process. The viewer keeps an SSE stream open and
+	// reloads to / only when this id changes after a reconnect, so a genuine
+	// restart resets open tabs while a mere blip does not.
+	bootID := newBootID()
+
 	byID := make(map[string]*retrieve.NoteView, len(views))
 	allowed := make(map[string]bool) // "fid/pid" pairs this viewer may serve
 	for _, v := range views {
@@ -64,6 +79,31 @@ func Handler(a *archive.Archive, views []*retrieve.NoteView, flat bool) http.Han
 
 	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
 		lay.render(w)
+	})
+
+	// SSE liveness stream: send the boot-id once, then hold the connection open
+	// for the life of the tab (or the process). The client keys off the socket
+	// closing (serve gone) and the boot-id changing (serve restarted). Two
+	// caveats keep this safe: the server must have no WriteTimeout (it would sever
+	// the stream and read as a phantom restart — the default http.Server used by
+	// `serve` has none), and each open tab holds one of the ~6 HTTP/1.1
+	// connections a browser allows per origin.
+	mux.HandleFunc("GET /events", func(w http.ResponseWriter, r *http.Request) {
+		f, ok := w.(http.Flusher)
+		if !ok {
+			http.Error(w, "streaming unsupported", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-store")
+		w.Header().Set("Connection", "keep-alive")
+		// retry: shrink the browser's EventSource reconnection interval from the
+		// ~3s spec default so a restarted serve is detected (and the tab reloaded)
+		// within a few hundred ms. The browser keeps using this value while serve
+		// is down, so it governs the reconnect cadence directly.
+		fmt.Fprintf(w, "retry: 300\ndata: %s\n\n", bootID)
+		f.Flush()
+		<-r.Context().Done() // park until the tab or process goes away
 	})
 
 	mux.HandleFunc("GET /note/{fid}", func(w http.ResponseWriter, r *http.Request) {
@@ -133,6 +173,14 @@ func Handler(a *archive.Archive, views []*retrieve.NoteView, flat bool) http.Han
 	})
 
 	return mux
+}
+
+// newBootID mints the per-process identifier the SSE liveness stream advertises,
+// so a reconnecting viewer can tell a restarted serve from the same one.
+func newBootID() string {
+	var b [16]byte
+	rand.Read(b[:]) // crypto/rand.Read never returns an error on supported platforms
+	return hex.EncodeToString(b[:])
 }
 
 // writeAsset serves an immutable-for-the-session binary asset with an ETag and a
@@ -348,6 +396,19 @@ const shell = `<!doctype html>
     var idx = thumbs.findIndex(function (t) { return t.dataset.pid === want; });
     if (idx >= 0) open(idx);
   }
+})();
+// Liveness: hold an SSE stream to /events. The first boot-id we see identifies
+// the serve process; on any later (re)connect a *different* boot-id means serve
+// was restarted (maybe over a different page set), so reload to the always-valid
+// index. Same id after a blip -> resume silently. EventSource auto-reconnects, so
+// onerror needs no handler.
+(function () {
+  var boot = null;
+  var es = new EventSource('/events');
+  es.onmessage = function (e) {
+    if (boot === null) { boot = e.data; return; }
+    if (e.data !== boot) location.assign('/');
+  };
 })();
 </script>
 </html>

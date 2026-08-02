@@ -1,11 +1,15 @@
 package serve_test
 
 import (
+	"bufio"
+	"context"
+	"encoding/hex"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jdlugosz963/snorg/internal/archive"
 	"github.com/jdlugosz963/snorg/internal/retrieve"
@@ -85,6 +89,107 @@ func get(t *testing.T, srv *httptest.Server, path string) (*http.Response, strin
 		t.Fatal(err)
 	}
 	return resp, string(b)
+}
+
+// bootID connects to the SSE liveness stream, asserts its content type, and
+// returns the boot-id from the single data: frame. It cancels the request on
+// return so the server's park releases.
+func bootID(t *testing.T, srv *httptest.Server) string {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	req, _ := http.NewRequestWithContext(ctx, "GET", srv.URL+"/events", nil)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { resp.Body.Close() })
+	if ct := resp.Header.Get("Content-Type"); ct != "text/event-stream" {
+		t.Fatalf("events content-type = %q want text/event-stream", ct)
+	}
+	// The frame is a retry: directive (shrinks the reconnection interval so the
+	// tab reloads near-instantly on restart) followed by the boot-id data: line.
+	br := bufio.NewReader(resp.Body)
+	var id string
+	var sawRetry bool
+	for {
+		line, err := br.ReadString('\n')
+		if err != nil {
+			t.Fatal(err)
+		}
+		line = strings.TrimSpace(line)
+		if line == "" && id != "" {
+			break // end of frame
+		}
+		if line == "retry: 300" {
+			sawRetry = true
+		}
+		if v, ok := strings.CutPrefix(line, "data: "); ok {
+			id = v
+		}
+	}
+	if !sawRetry {
+		t.Errorf("events frame missing `retry: 300` directive")
+	}
+	return id
+}
+
+func TestEventsStreamCarriesBootID(t *testing.T) {
+	srv := fixture(t)
+	id := bootID(t, srv)
+	// The boot-id is a hex-encoded 16-byte token.
+	if b, err := hex.DecodeString(id); err != nil || len(b) != 16 {
+		t.Errorf("boot-id = %q, want 32 hex chars (got err=%v len=%d)", id, err, len(b))
+	}
+}
+
+func TestEventsBootIDStablePerHandlerDistinctAcross(t *testing.T) {
+	srv := fixture(t)
+	// Same process (Handler) => same id on every connect: a reconnect to the same
+	// serve must not look like a restart.
+	if a, b := bootID(t, srv), bootID(t, srv); a != b {
+		t.Errorf("same Handler gave different boot-ids: %q vs %q", a, b)
+	}
+	// A different Handler (a restarted serve) => a different id: that difference is
+	// exactly what the viewer keys off to reload to the index.
+	if a, b := bootID(t, srv), bootID(t, fixture(t)); a == b {
+		t.Errorf("distinct Handlers shared a boot-id: %q", a)
+	}
+}
+
+func TestEventsParkReleasesOnDisconnect(t *testing.T) {
+	a := archive.New(t.TempDir())
+	if err := a.Write(&snote.Note{FileID: "F_TEST", Source: "x.note", Pages: []snote.Page{{ID: "Pa", Number: 1}}}, map[string][]byte{"Pa": []byte("<svg/>")}); err != nil {
+		t.Fatal(err)
+	}
+	res, err := retrieve.Get(a, []string{"Pa"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(serve.Handler(a, res.Notes, false))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	req, _ := http.NewRequestWithContext(ctx, "GET", srv.URL+"/events", nil)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Read the frame so we know the handler has reached its <-ctx.Done() park.
+	if _, err := bufio.NewReader(resp.Body).ReadString('\n'); err != nil {
+		t.Fatal(err)
+	}
+	cancel()
+	resp.Body.Close()
+
+	// srv.Close waits for in-flight handlers; a park that ignored the client
+	// disconnect would hang it, so guard with a timeout.
+	done := make(chan struct{})
+	go func() { srv.Close(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("/events park did not release on client disconnect")
+	}
 }
 
 func TestIndexListsNotes(t *testing.T) {
