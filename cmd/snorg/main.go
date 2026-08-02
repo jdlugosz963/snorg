@@ -6,15 +6,15 @@
 //
 //	snorg [-a <archive-path>] [-c config.yaml ...] [--no-archive-config] [--no-user-config] <command> [command flags] [args]
 //
-//	snorg -a <archive-path> ingest [-j N] <file-or-dir>
-//	snorg -a <archive-path> list
-//	snorg -a <archive-path> query <filter> [arg]
-//	snorg -a <archive-path> retrieve [PAGEID ...]
-//	snorg -a <archive-path> analyze [--force] [PAGEID ...]
-//	snorg -a <archive-path> analyze-edit <PAGEID>
-//	snorg -a <archive-path> export [PAGEID ...]
-//	snorg -a <archive-path> serve [-l ADDR] [--flat] [PAGEID ...]
-//	snorg -a <archive-path> migrate [PAGEID ...]
+//	snorg [-a <archive-path>] ingest [-j N] <file-or-dir>
+//	snorg [-a <archive-path>] list
+//	snorg [-a <archive-path>] query <filter> [arg]
+//	snorg [-a <archive-path>] retrieve [PAGEID ...]
+//	snorg [-a <archive-path>] analyze [--force] [PAGEID ...]
+//	snorg [-a <archive-path>] analyze-edit <PAGEID>
+//	snorg [-a <archive-path>] export [PAGEID ...]
+//	snorg [-a <archive-path>] serve [-l ADDR] [--flat] [PAGEID ...]
+//	snorg [-a <archive-path>] migrate [PAGEID ...]
 //
 // retrieve, analyze and export take PAGEIDs as arguments or stdin lines, so
 // query pipes into any of them. query itself also reads PAGEIDs from stdin when
@@ -176,9 +176,10 @@ const commandNames = "ingest, list, retrieve, query, analyze, analyze-edit, expo
 
 // root registers the global flags and subcommands and loads the merged config
 // once in its Before hook, which urfave/cli runs as part of the command chain
-// before the matched subcommand's action. Natural subcommand dispatch does the
-// rest: the archive path is a required global flag (-a), so the first positional
-// argument is the command name, as urfave expects.
+// before the matched subcommand's action. The archive path comes from the global
+// -a flag, or falls back to the `archive:` key in the XDG user config when the flag
+// is absent (the flag wins). Since -a is no longer Required, natural subcommand
+// dispatch still routes the first positional as the command name, as urfave expects.
 func root() *cli.Command {
 	a := &app{}
 	return &cli.Command{
@@ -218,7 +219,7 @@ func root() *cli.Command {
 		},
 		Action: func(_ context.Context, cmd *cli.Command) error {
 			// Reached only with -a given but no (or an unknown) command.
-			return fmt.Errorf("usage: snorg -a <archive-path> <command> [args]\n  commands: %s", commandNames)
+			return fmt.Errorf("usage: snorg [-a <archive-path>] <command> [args]\n  commands: %s", commandNames)
 		},
 	}
 }
@@ -233,7 +234,7 @@ func ingestCmd(a *app) *cli.Command {
 		},
 		Action: func(_ context.Context, cmd *cli.Command) error {
 			if cmd.Args().Len() != 1 {
-				return fmt.Errorf("usage: snorg -a <archive-path> ingest [-j N] <file-or-dir>")
+				return fmt.Errorf("usage: snorg [-a <archive-path>] ingest [-j N] <file-or-dir>")
 			}
 			if err := a.cfg.ValidateIngest(); err != nil {
 				return err
@@ -492,7 +493,7 @@ func queryPredicate(a *archive.Archive, filter string, args []string) (query.Pre
 	// inner filter's own arg parsing/arity apply verbatim) and negates the result.
 	if filter == "not" {
 		if len(args) < 1 {
-			return nil, fmt.Errorf("usage: snorg -a <archive-path> query not <filter> [arg]\n  filters: %s", queryFilters)
+			return nil, fmt.Errorf("usage: snorg [-a <archive-path>] query not <filter> [arg]\n  filters: %s", queryFilters)
 		}
 		inner, err := queryPredicate(a, args[0], args[1:])
 		if err != nil {
@@ -660,7 +661,7 @@ func analyzeEditCmd(a *app) *cli.Command {
 			// needs the terminal, not a pipe. Needs no provider config —
 			// pages can be transcribed by hand without any LLM involved.
 			if cmd.Args().Len() != 1 {
-				return fmt.Errorf("usage: snorg -a <archive-path> analyze-edit <PAGEID>")
+				return fmt.Errorf("usage: snorg [-a <archive-path>] analyze-edit <PAGEID>")
 			}
 			editor, err := edit.EditorFromEnv()
 			if err != nil {

@@ -8,9 +8,9 @@ through the CLI process boundary and stable JSON below.
 ## Commands
 
 ```
-snorg -a <archive-path> list                  # one FILE_ID per line
-snorg -a <archive-path> query <filter> [arg]  # one PAGEID per line
-snorg -a <archive-path> retrieve [PAGEID ...] # assembled notes as indented JSON
+snorg [-a <archive-path>] list                  # one FILE_ID per line
+snorg [-a <archive-path>] query <filter> [arg]  # one PAGEID per line
+snorg [-a <archive-path>] retrieve [PAGEID ...] # assembled notes as indented JSON
 ```
 
 `list` enumerates notes; `query` enumerates pages (`all`, `note <FILE_ID>`,

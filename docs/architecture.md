@@ -3,21 +3,22 @@
 ## CLI
 
 ```
-snorg -a <archive-path> [-c config.yaml ...] [--no-archive-config] <command> [command flags] [args]
+snorg [-a <archive-path>] [-c config.yaml ...] [--no-archive-config] <command> [command flags] [args]
 
-snorg -a <archive-path> ingest [-j N] <file-or-dir>
-snorg -a <archive-path> list
-snorg -a <archive-path> query <filter> [arg]
-snorg -a <archive-path> retrieve [PAGEID ...]
-snorg -a <archive-path> analyze [--force] [PAGEID ...]
-snorg -a <archive-path> analyze-edit <PAGEID>
-snorg -a <archive-path> export [PAGEID ...]
-snorg -a <archive-path> serve [-l ADDR] [--flat] [PAGEID ...]
-snorg -a <archive-path> migrate [PAGEID ...]
+snorg [-a <archive-path>] ingest [-j N] <file-or-dir>
+snorg [-a <archive-path>] list
+snorg [-a <archive-path>] query <filter> [arg]
+snorg [-a <archive-path>] retrieve [PAGEID ...]
+snorg [-a <archive-path>] analyze [--force] [PAGEID ...]
+snorg [-a <archive-path>] analyze-edit <PAGEID>
+snorg [-a <archive-path>] export [PAGEID ...]
+snorg [-a <archive-path>] serve [-l ADDR] [--flat] [PAGEID ...]
+snorg [-a <archive-path>] migrate [PAGEID ...]
 ```
 
-The archive path is a required global flag (`-a`/`--archive`, never hardcoded) and
-comes before the command, together with the global config flags: the root's `Before`
+The archive path comes from the `-a`/`--archive` global flag (optional when the XDG
+user config sets `archive:`; the flag wins) and comes before the command, together
+with the global config flags: the root's `Before`
 hook loads the merged config once (see [config.md](config.md)) and hands it to the
 command, which picks and validates only the sections it uses. The CLI is built on
 `urfave/cli/v3`. `ingest` takes
