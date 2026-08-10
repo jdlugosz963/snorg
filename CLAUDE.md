@@ -44,7 +44,21 @@ Read `docs/principles.md` (project rules), `docs/architecture.md` (modules/CLI),
 
 ## Architecture
 
-Flow: `cmd/snorg` → `internal/ingest` orchestrates `snote.Source.Read` → render SVGs → `archive.Write`.
+Flow: `cmd/snorg` → `pkg/snorg` (public API) → `internal/ingest` orchestrates `snote.Source.Read` → render SVGs → `archive.Write`.
+
+- `pkg/snorg` — the **public Go API** (`github.com/jdlugosz963/snorg/pkg/snorg`), the
+  only importable surface (everything else is `internal/`). A `Client` (from `Open`
+  or `Resolve`) bundles archive + merged config and exposes every capability as a
+  method (`List`/`Query`/`Retrieve`/`Export`/`ServeHandler`/`Ingest`/`Migrate`/
+  `Analyze`/`PageBuffer`+`ApplyPage` programmatic-edit/`EditPage` interactive); it
+  imports the internal packages and re-exports their returned types as **aliases**
+  (`Result`, `Match`, `Spec`, `Config`, …) so an external caller names them without
+  an `internal/*` import. `cmd/snorg` is a thin CLI over this package (flag parsing +
+  PAGEID stdin conventions + formatting stay in `cmd`); the config layering, `~`
+  expansion, date-spec and query-filter DSL live here (`Resolve`, `ParseFilter`,
+  `ParseDateSpec`). See `docs/library.md`. **When adding or changing a capability,
+  keep the facade in sync** (a new returned type needs an alias, or an external
+  consumer can't name it).
 
 - `internal/snote` — device-agnostic domain model (`Note`/`Page`/`Title`/`Keyword`/`Link`)
   and the `Source` interface, the **seam isolating the format**. A native-Go parser would

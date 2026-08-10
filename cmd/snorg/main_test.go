@@ -5,109 +5,16 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"reflect"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/jdlugosz963/snorg/internal/archive"
 	"github.com/jdlugosz963/snorg/internal/snote"
 )
 
-func TestConfigPaths(t *testing.T) {
-	dir := t.TempDir()
-	archiveCfg := filepath.Join(dir, archiveConfigName)
-	if err := os.WriteFile(archiveCfg, []byte("provider:\n  model: archive\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	userCfg := filepath.Join(t.TempDir(), archiveConfigName)
-	if err := os.WriteFile(userCfg, []byte("archive: /somewhere\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	cli := []string{"/tmp/a.yaml", "/tmp/b.yaml"}
-
-	// All layers present: XDG user config, then archive config, then -c files
-	// (each later layer wins the merge).
-	got := configPaths(userCfg, dir, cli, false, false)
-	want := append([]string{userCfg, archiveCfg}, cli...)
-	if !reflect.DeepEqual(got, want) {
-		t.Errorf("all layers: got %v, want %v", got, want)
-	}
-
-	// Opt-outs are independent.
-	if got := configPaths(userCfg, dir, cli, true, false); !reflect.DeepEqual(got, append([]string{archiveCfg}, cli...)) {
-		t.Errorf("no-user-config: got %v", got)
-	}
-	if got := configPaths(userCfg, dir, cli, false, true); !reflect.DeepEqual(got, append([]string{userCfg}, cli...)) {
-		t.Errorf("no-archive-config: got %v", got)
-	}
-	if got := configPaths(userCfg, dir, cli, true, true); !reflect.DeepEqual(got, cli) {
-		t.Errorf("both opt-outs: got %v, want %v", got, cli)
-	}
-
-	// Empty user path and missing archive config: only the -c files, no error.
-	if got := configPaths("", t.TempDir(), cli, false, false); !reflect.DeepEqual(got, cli) {
-		t.Errorf("missing files: got %v, want %v", got, cli)
-	}
-
-	// A directory named config.yaml is not treated as a config file.
-	dir2 := t.TempDir()
-	if err := os.Mkdir(filepath.Join(dir2, archiveConfigName), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if got := configPaths("", dir2, cli, false, false); !reflect.DeepEqual(got, cli) {
-		t.Errorf("config.yaml dir: got %v, want %v", got, cli)
-	}
-}
-
-func TestExpandHome(t *testing.T) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		t.Skipf("no home dir: %v", err)
-	}
-	cases := map[string]string{
-		"~":          home,
-		"~/notes/sn": filepath.Join(home, "notes/sn"),
-		"/abs/notes": "/abs/notes",
-		"rel/notes":  "rel/notes",
-		"~notuser/x": "~notuser/x", // ~ not followed by / is left alone
-	}
-	for in, want := range cases {
-		if got := expandHome(in); got != want {
-			t.Errorf("expandHome(%q) = %q, want %q", in, got, want)
-		}
-	}
-}
-
-func TestParseDateSpec(t *testing.T) {
-	today := time.Now().Format("20060102")
-	yesterday := time.Now().AddDate(0, 0, -1).Format("20060102")
-	cases := []struct {
-		spec     string
-		from, to string
-		wantErr  bool
-	}{
-		{"today", today, today, false},
-		{"yesterday", yesterday, yesterday, false},
-		{"2026-07-22", "20260722", "20260722", false},
-		{"2026-07-01..2026-07-22", "20260701", "20260722", false},
-		{"..2026-07-22", "", "20260722", false},
-		{"2026-07-01..", "20260701", "", false},
-		{"..", "", "", true},
-		{"2026-13-01", "", "", true},
-		{"not-a-date", "", "", true},
-	}
-	for _, tc := range cases {
-		from, to, err := parseDateSpec(tc.spec)
-		if (err != nil) != tc.wantErr {
-			t.Errorf("parseDateSpec(%q) err = %v, wantErr %v", tc.spec, err, tc.wantErr)
-			continue
-		}
-		if err == nil && (from != tc.from || to != tc.to) {
-			t.Errorf("parseDateSpec(%q) = (%q,%q), want (%q,%q)", tc.spec, from, to, tc.from, tc.to)
-		}
-	}
-}
+// The config-layering, ~ expansion and date-spec helpers moved into the public
+// snorg package (with snorg.Resolve and snorg.ParseFilter); their unit tests live
+// there now (pkg/snorg). These tests exercise the CLI wiring end-to-end.
 
 func TestRootDispatch(t *testing.T) {
 	ctx := context.Background()
@@ -158,7 +65,7 @@ func TestArchiveFromUserConfig(t *testing.T) {
 		t.Fatal(err)
 	}
 	arch := t.TempDir()
-	if err := os.WriteFile(filepath.Join(xdg, "snorg", archiveConfigName), []byte("archive: "+arch+"\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(xdg, "snorg", "config.yaml"), []byte("archive: "+arch+"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 

@@ -43,9 +43,65 @@ func EditorFromEnv() (string, error) {
 // and any changed title/link name becomes a user override (Edited) in the page
 // JSON. It returns the content Outcome and how many names changed. The editor
 // runs on a temp copy, so aborting it (non-zero exit) leaves the page untouched.
+// Page is Serialize → run editor → Apply; a non-interactive caller uses those two
+// directly (see the public snorg package).
 func Page(a *archive.Archive, pageID, editor string) (Outcome, int, error) {
 	// A missing git must surface before the editor opens, not after the user
 	// has finished an edit that then cannot be saved.
+	if err := textmerge.Available(); err != nil {
+		return "", 0, err
+	}
+	buf, err := Serialize(a, pageID)
+	if err != nil {
+		return "", 0, err
+	}
+
+	dir, err := os.MkdirTemp("", "snorg-edit-")
+	if err != nil {
+		return "", 0, err
+	}
+	defer os.RemoveAll(dir)
+	// The real PAGEID plus .md gives the editor a meaningful buffer name and
+	// its Markdown mode.
+	tmp := filepath.Join(dir, pageID+".md")
+	if err := os.WriteFile(tmp, []byte(buf), 0o600); err != nil {
+		return "", 0, err
+	}
+	if err := runEditor(editor, tmp); err != nil {
+		return "", 0, err
+	}
+	b, err := os.ReadFile(tmp)
+	if err != nil {
+		return "", 0, err
+	}
+	return Apply(a, pageID, string(b))
+}
+
+// Serialize renders pageID's editable buffer: the per-region title/link name header
+// (only when the page has regions) followed by the current transcription content.
+// It is the input side of the buffer round-trip; feed an edited buffer to Apply.
+func Serialize(a *archive.Archive, pageID string) (string, error) {
+	fileID, err := a.FindPage(pageID)
+	if err != nil {
+		return "", err
+	}
+	pd, err := a.ReadPage(fileID, pageID)
+	if err != nil {
+		return "", err
+	}
+	cur, err := a.ReadAnalysisMD(fileID, pageID)
+	if err != nil {
+		return "", err
+	}
+	return serialize(pd, cur), nil
+}
+
+// Apply stores an edited buffer (as produced by Serialize) for pageID: the content
+// section becomes the edited md (its divergence from the AI base lands in the
+// edit-diff sidecar) and each changed title/link name becomes a user override
+// (Edited) in the page JSON. It returns the content Outcome and how many names
+// changed. A malformed header writes nothing. Needs git on PATH.
+func Apply(a *archive.Archive, pageID, buffer string) (Outcome, int, error) {
 	if err := textmerge.Available(); err != nil {
 		return "", 0, err
 	}
@@ -66,26 +122,7 @@ func Page(a *archive.Archive, pageID, editor string) (Outcome, int, error) {
 		return "", 0, err
 	}
 
-	dir, err := os.MkdirTemp("", "snorg-edit-")
-	if err != nil {
-		return "", 0, err
-	}
-	defer os.RemoveAll(dir)
-	// The real PAGEID plus .md gives the editor a meaningful buffer name and
-	// its Markdown mode.
-	tmp := filepath.Join(dir, pageID+".md")
-	if err := os.WriteFile(tmp, []byte(serialize(pd, cur)), 0o600); err != nil {
-		return "", 0, err
-	}
-	if err := runEditor(editor, tmp); err != nil {
-		return "", 0, err
-	}
-	b, err := os.ReadFile(tmp)
-	if err != nil {
-		return "", 0, err
-	}
-
-	titleNames, linkNames, content, err := parse(string(b), len(pd.Titles), len(pd.Links))
+	titleNames, linkNames, content, err := parse(buffer, len(pd.Titles), len(pd.Links))
 	if err != nil {
 		return "", 0, fmt.Errorf("page %s: %w (no changes saved)", pageID, err)
 	}

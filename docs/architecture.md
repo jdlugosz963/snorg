@@ -192,10 +192,22 @@ stdin / bare = whole archive), but a page selection also migrates its owning
 ## Packages
 
 - `cmd/snorg` — CLI entry: one `urfave/cli/v3` command tree, thin actions over the
-  internal packages. The root action loads the merged
-  config once into an `app` shared by every command and dispatches by hand
-  (the archive path precedes the command name, which the library's own
-  subcommand matching cannot express).
+  public `pkg/snorg` package (not the internal packages directly). The root `Before`
+  hook builds one `snorg.Client` (via `snorg.Resolve`) shared by every command; the
+  actions parse flags, source PAGEIDs from args or stdin, and format results. What
+  stays CLI-only: flag parsing, the PAGEID stdin conventions, and result formatting
+  (`printQueryLong`, JSON, progress/exit codes).
+- `pkg/snorg` — the **public Go API** (import `github.com/jdlugosz963/snorg/pkg/snorg`).
+  A `Client` (built by `Open` — explicit root + optional config — or `Resolve` — the
+  CLI's config layering) bundles an archive with merged config and exposes every
+  capability as a method: `List`/`Query`/`Retrieve`/`Export`/`ServeHandler` (read),
+  `Ingest`/`Migrate` (write), `Analyze`/`AnalyzePage` (LLM), `PageBuffer`/`ApplyPage`
+  (programmatic, no-`$EDITOR` edit) and `EditPage` (the interactive convenience the
+  CLI uses). It imports the internal packages and re-exports, as type **aliases**,
+  every type its signatures return (`Result`, `NoteView`, `Match`, `Spec`, config
+  types, …) so an external consumer that imports only this package can name and
+  traverse them — the sole seam that lets snorg be used as a library. See
+  [library.md](library.md).
 - `internal/snote` — device-agnostic domain model (`Note`/`Page`/`Title`/`Keyword`/`Link`)
   and the `Source` interface (the format seam).
 - `internal/snote/sntool` — `Source` impl shelling out to `supernote-tool`

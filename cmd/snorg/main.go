@@ -1,8 +1,13 @@
-// Command snorg is the supernote-organizer CLI. The archive path is the global
-// -a/--archive flag, optional when the XDG user config
+// Command snorg is the supernote-organizer CLI. It is a thin front-end over the
+// public snorg package (github.com/jdlugosz963/snorg/pkg/snorg): the commands parse
+// flags, source PAGEIDs from arguments or stdin, and format results, delegating every
+// capability to a snorg.Client.
+//
+// The archive path is the global -a/--archive flag, optional when the XDG user config
 // ($XDG_CONFIG_HOME/snorg/config.yaml) sets `archive:` (the flag wins). The merged
 // config (XDG user config, overridden by the archive's config.yaml, overridden by
-// -c files) is loaded once in the root Before hook and shared by every command:
+// -c files) is loaded once in the root Before hook via snorg.Resolve and shared by
+// every command:
 //
 //	snorg [-a <archive-path>] [-c config.yaml ...] [--no-archive-config] [--no-user-config] <command> [command flags] [args]
 //
@@ -33,23 +38,11 @@ import (
 	"fmt"
 	"net/http"
 	"os"
-	"path/filepath"
-	"regexp"
 	"strings"
-	"time"
 
 	"github.com/urfave/cli/v3"
 
-	"github.com/jdlugosz963/snorg/internal/analyze"
-	"github.com/jdlugosz963/snorg/internal/archive"
-	"github.com/jdlugosz963/snorg/internal/config"
-	"github.com/jdlugosz963/snorg/internal/edit"
-	"github.com/jdlugosz963/snorg/internal/export"
-	"github.com/jdlugosz963/snorg/internal/ingest"
-	"github.com/jdlugosz963/snorg/internal/query"
-	"github.com/jdlugosz963/snorg/internal/retrieve"
-	"github.com/jdlugosz963/snorg/internal/serve"
-	"github.com/jdlugosz963/snorg/internal/snote/sntool"
+	snorg "github.com/jdlugosz963/snorg/pkg/snorg"
 )
 
 func main() {
@@ -59,13 +52,10 @@ func main() {
 	}
 }
 
-// app is the state shared by every command, built by the root Before hook: the
-// archive and the merged config, loaded once. Commands pick the config sections
-// they need and validate only those.
+// app is the state shared by every command, built by the root Before hook: a
+// snorg.Client for the resolved archive and merged config.
 type app struct {
-	path string // archive path from the -a/--archive flag
-	arch *archive.Archive
-	cfg  *config.Config
+	client *snorg.Client
 }
 
 // archiveFlag is the global flag naming the archive root. Being on the root, it
@@ -79,24 +69,8 @@ func archiveFlag() *cli.StringFlag {
 	}
 }
 
-// archiveConfigName is the per-archive default config, loaded from the archive
-// root and merged over the XDG user config, under any -c files (which override it).
-const archiveConfigName = "config.yaml"
-
-// userConfigPath returns the XDG user config file
-// ($XDG_CONFIG_HOME/snorg/config.yaml, i.e. ~/.config/snorg/config.yaml), the
-// lowest-precedence config layer and the natural home for a default `archive:`.
-// Empty when the user config dir can't be resolved.
-func userConfigPath() string {
-	dir, err := os.UserConfigDir()
-	if err != nil {
-		return ""
-	}
-	return filepath.Join(dir, "snorg", archiveConfigName)
-}
-
 // configFlag is the repeatable global config flag; later files override earlier
-// ones (see config.Load).
+// ones (see snorg.LoadConfig).
 func configFlag() *cli.StringSliceFlag {
 	return &cli.StringSliceFlag{
 		Name:    "config",
@@ -121,43 +95,9 @@ func noUserConfigFlag() *cli.BoolFlag {
 	}
 }
 
-// configPaths orders the config layers lowest-precedence first for config.Load's
-// later-wins merge: the XDG user config, then the archive's config.yaml, then the
-// -c files. A file layer is skipped when absent, a directory, or opted out.
-func configPaths(userPath, archivePath string, cliPaths []string, noUser, noArchive bool) []string {
-	var paths []string
-	isFile := func(p string) bool {
-		st, err := os.Stat(p)
-		return err == nil && !st.IsDir()
-	}
-	if !noUser && userPath != "" && isFile(userPath) {
-		paths = append(paths, userPath)
-	}
-	if !noArchive {
-		if p := filepath.Join(archivePath, archiveConfigName); isFile(p) {
-			paths = append(paths, p)
-		}
-	}
-	return append(paths, cliPaths...)
-}
-
-// expandHome expands a leading ~ or ~/ in a path to the user's home directory, so
-// a config `archive: ~/notes/sn` resolves like the shell would (YAML/Go do not).
-// Returns p unchanged when it has no ~ prefix or the home dir can't be resolved.
-func expandHome(p string) string {
-	if p != "~" && !strings.HasPrefix(p, "~/") {
-		return p
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return p
-	}
-	return filepath.Join(home, strings.TrimPrefix(p[1:], "/"))
-}
-
 // commands builds the subcommands, closed over the shared app state. The root
-// Before hook populates the app (config + archive) before any command action
-// runs, so the actions can rely on a.cfg being set.
+// Before hook populates the app (the client) before any command action runs, so the
+// actions can rely on a.client being set.
 func commands(a *app) []*cli.Command {
 	return []*cli.Command{
 		ingestCmd(a),
@@ -174,12 +114,11 @@ func commands(a *app) []*cli.Command {
 
 const commandNames = "ingest, list, retrieve, query, analyze, analyze-edit, export, serve, migrate"
 
-// root registers the global flags and subcommands and loads the merged config
-// once in its Before hook, which urfave/cli runs as part of the command chain
-// before the matched subcommand's action. The archive path comes from the global
-// -a flag, or falls back to the `archive:` key in the XDG user config when the flag
-// is absent (the flag wins). Since -a is no longer Required, natural subcommand
-// dispatch still routes the first positional as the command name, as urfave expects.
+// root registers the global flags and subcommands and builds the shared client once
+// in its Before hook (which urfave/cli runs before the matched subcommand's action).
+// The archive path and merged config are resolved by snorg.Resolve, mirroring the
+// -a/-c flags. Since -a is not Required, natural subcommand dispatch still routes the
+// first positional as the command name, as urfave expects.
 func root() *cli.Command {
 	a := &app{}
 	return &cli.Command{
@@ -190,31 +129,16 @@ func root() *cli.Command {
 		Commands:              commands(a),
 		EnableShellCompletion: true,
 		Before: func(ctx context.Context, cmd *cli.Command) (context.Context, error) {
-			userPath := userConfigPath()
-			noUser, noArchive := cmd.Bool("no-user-config"), cmd.Bool("no-archive-config")
-			cliPaths := cmd.StringSlice("config")
-
-			// Resolve the archive path before we can locate the archive's own
-			// config: the -a flag wins, else the `archive:` key from the layers
-			// that don't depend on the archive path (XDG user config + -c files).
-			archivePath := cmd.String("archive")
-			if archivePath == "" {
-				preCfg, err := config.Load(configPaths(userPath, "", cliPaths, noUser, true))
-				if err != nil {
-					return ctx, err
-				}
-				archivePath = preCfg.Archive
-			}
-			if archivePath == "" {
-				return ctx, fmt.Errorf("no archive path: pass -a/--archive or set archive: in %s", userPath)
-			}
-			archivePath = expandHome(archivePath)
-
-			cfg, err := config.Load(configPaths(userPath, archivePath, cliPaths, noUser, noArchive))
+			client, err := snorg.Resolve(snorg.ResolveOptions{
+				ArchivePath:     cmd.String("archive"),
+				ConfigFiles:     cmd.StringSlice("config"),
+				NoUserConfig:    cmd.Bool("no-user-config"),
+				NoArchiveConfig: cmd.Bool("no-archive-config"),
+			})
 			if err != nil {
 				return ctx, err
 			}
-			a.path, a.arch, a.cfg = archivePath, archive.New(archivePath), cfg
+			a.client = client
 			return ctx, nil
 		},
 		Action: func(_ context.Context, cmd *cli.Command) error {
@@ -236,9 +160,6 @@ func ingestCmd(a *app) *cli.Command {
 			if cmd.Args().Len() != 1 {
 				return fmt.Errorf("usage: snorg [-a <archive-path>] ingest [-j N] <file-or-dir>")
 			}
-			if err := a.cfg.ValidateIngest(); err != nil {
-				return err
-			}
 
 			inputPath := cmd.Args().Get(0)
 			info, err := os.Stat(inputPath)
@@ -247,7 +168,7 @@ func ingestCmd(a *app) *cli.Command {
 			}
 			var paths []string
 			if info.IsDir() {
-				paths, err = ingest.NoteFiles(inputPath)
+				paths, err = snorg.NoteFiles(inputPath)
 				if err != nil {
 					return err
 				}
@@ -258,15 +179,10 @@ func ingestCmd(a *app) *cli.Command {
 				paths = []string{inputPath}
 			}
 
-			s := a.cfg.Ingest.SVG
-			a.arch.SVG = archive.SVGPipeline{
-				Links:      *s.Links,
-				Navigation: *s.Navigation,
-				Format:     *s.Format,
-				Background: archive.BackgroundMode(s.Background),
-				Colors:     s.Colors,
+			results, err := a.client.Ingest(paths, cmd.Int("jobs"))
+			if err != nil {
+				return err
 			}
-			results := ingest.RunMany(sntool.New(), a.arch, paths, cmd.Int("jobs"))
 			failed := 0
 			for _, r := range results {
 				if r.Err != nil {
@@ -274,7 +190,7 @@ func ingestCmd(a *app) *cli.Command {
 					fmt.Fprintf(os.Stderr, "failed %s: %v\n", r.Path, r.Err)
 					continue
 				}
-				fmt.Printf("ingested %s (%d pages) -> %s/%s\n", r.Note.Source, len(r.Note.Pages), a.path, r.Note.FileID)
+				fmt.Printf("ingested %s (%d pages) -> %s/%s\n", r.Note.Source, len(r.Note.Pages), a.client.ArchivePath(), r.Note.FileID)
 			}
 			if len(paths) > 1 || failed > 0 {
 				fmt.Printf("ingested %d, failed %d of %d\n", len(results)-failed, failed, len(results))
@@ -302,7 +218,7 @@ func listCmd(a *app) *cli.Command {
 			if cmd.Args().Len() != 0 {
 				return fmt.Errorf("usage: snorg [-a <archive-path>] list")
 			}
-			ids, err := retrieve.List(a.arch)
+			ids, err := a.client.List()
 			if err != nil {
 				return err
 			}
@@ -313,7 +229,7 @@ func listCmd(a *app) *cli.Command {
 				return nil
 			}
 			for _, id := range ids {
-				nd, err := a.arch.ReadNote(id)
+				nd, err := a.client.ReadNote(id)
 				if err != nil {
 					return fmt.Errorf("note %s: %w", id, err)
 				}
@@ -338,7 +254,7 @@ func retrieveCmd(a *app) *cli.Command {
 			if err != nil {
 				return err
 			}
-			res, err := retrieve.Get(a.arch, pageIDs)
+			res, err := a.client.Retrieve(pageIDs)
 			if err != nil {
 				return err
 			}
@@ -368,13 +284,11 @@ func pageIDArgs(cmd *cli.Command) ([]string, error) {
 	return pageIDs, nil
 }
 
-const queryFilters = "all, note <FILE_ID>, unanalyzed, keyword <regexp>, content <regexp>, starred, date <spec>, not <filter> (inverse)"
-
 func queryCmd(a *app) *cli.Command {
 	return &cli.Command{
 		Name:      "query",
 		Usage:     "print PAGEIDs of matching pages, one per line (pipe into retrieve/analyze/export); -l/--long annotates them (browse-only, not pipe-safe)",
-		ArgsUsage: "<filter> [arg]   (filters: " + queryFilters + ")",
+		ArgsUsage: "<filter> [arg]   (filters: " + snorg.QueryFilters + ")",
 		Flags: []cli.Flag{
 			&cli.BoolFlag{
 				Name:    "long",
@@ -384,45 +298,35 @@ func queryCmd(a *app) *cli.Command {
 		},
 		Action: func(_ context.Context, cmd *cli.Command) error {
 			args := cmd.Args().Slice()
-			if len(args) < 1 {
-				return fmt.Errorf("usage: snorg [-a <archive-path>] query <filter> [arg]\n  filters: %s", queryFilters)
+			if len(args) == 0 {
+				return fmt.Errorf("usage: snorg [-a <archive-path>] query <filter> [arg]\n  filters: %s", snorg.QueryFilters)
 			}
-			pred, err := queryPredicate(a.arch, args[0], args[1:])
+			pred, err := a.client.ParseFilter(args[0], args[1:])
 			if err != nil {
 				return err
 			}
-			// Piped PAGEIDs (query A | query B) restrict the filter to that set,
-			// so filters intersect. A terminal stdin is left alone (no blocking).
+			// When PAGEIDs are piped in, restrict the filter to that set so
+			// successive queries intersect (query A | query B == A∩B).
 			if stdinPiped() {
 				ids, err := readLines(os.Stdin)
 				if err != nil {
 					return err
 				}
-				pred = query.And(query.InSet(ids), pred)
+				pred = snorg.And(snorg.InSet(ids), pred)
 			}
-			matches, err := query.Pages(a.arch, pred)
+			matches, err := a.client.Query(pred)
 			if err != nil {
 				return err
 			}
-			if !cmd.Bool("long") {
-				for _, m := range matches {
-					fmt.Println(m.PageID)
-				}
-				return nil
+			if cmd.Bool("long") {
+				return printQueryLong(a.client, matches)
 			}
-			return printQueryLong(a.arch, matches)
+			for _, m := range matches {
+				fmt.Println(m.PageID)
+			}
+			return nil
 		},
 	}
-}
-
-// queryRow is one assembled line of the browse-only `query -l` view.
-type queryRow struct {
-	pageID   string
-	note     string // source filename sans ".note" (FILE_ID fallback)
-	number   int    // 1-based page number from note.json placement
-	starred  bool
-	headings []string // analyzed title names (empty until analyze runs)
-	keywords []string // device keyword text (present without analysis)
 }
 
 // printQueryLong emits the human-readable, browse-only form of a query result:
@@ -435,12 +339,12 @@ type queryRow struct {
 // it for the fzf → serve workflow). Fixed \t separators keep the columns machine-
 // splittable (cut -f) regardless of value widths. This is deliberately NOT the
 // bare-PAGEID pipe contract, so it is never fed downstream.
-func printQueryLong(a *archive.Archive, matches []query.Match) error {
-	notes := make(map[string]*archive.NoteDoc)
+func printQueryLong(c *snorg.Client, matches []snorg.Match) error {
+	notes := make(map[string]*snorg.NoteDoc)
 	for _, m := range matches {
 		nd, ok := notes[m.FileID]
 		if !ok {
-			read, err := a.ReadNote(m.FileID)
+			read, err := c.ReadNote(m.FileID)
 			if err != nil {
 				return fmt.Errorf("note %s: %w", m.FileID, err)
 			}
@@ -458,138 +362,28 @@ func printQueryLong(a *archive.Archive, matches []query.Match) error {
 				break
 			}
 		}
-		pd, err := a.ReadPage(m.FileID, m.PageID)
+		pd, err := c.ReadPage(m.FileID, m.PageID)
 		if err != nil {
 			return fmt.Errorf("note %s page %s: %w", m.FileID, m.PageID, err)
 		}
-		row := queryRow{pageID: m.PageID, note: name, number: number, starred: pd.Starred}
+		var headings, keywords []string
 		for _, t := range pd.Titles {
 			if t.Analysis != nil {
-				row.headings = append(row.headings, t.Analysis.Name)
+				headings = append(headings, t.Analysis.Name)
 			}
 		}
 		for _, k := range pd.Keywords {
-			row.keywords = append(row.keywords, "#"+k.Text)
+			keywords = append(keywords, "#"+k.Text)
 		}
 		star := ""
-		if row.starred {
+		if pd.Starred {
 			star = "*"
 		}
 		fmt.Printf("%s\t%s\tp%d\t%s\t%s\t%s\n",
-			row.pageID, row.note, row.number, star,
-			strings.Join(row.headings, " / "), strings.Join(row.keywords, " "))
+			m.PageID, name, number, star,
+			strings.Join(headings, " / "), strings.Join(keywords, " "))
 	}
 	return nil
-}
-
-func queryPredicate(a *archive.Archive, filter string, args []string) (query.Predicate, error) {
-	arity := func(n int, usage string) error {
-		if len(args) != n {
-			return fmt.Errorf("usage: snorg [-a <archive-path>] query %s", usage)
-		}
-		return nil
-	}
-	// "not" is a prefix that inverts any filter: it recurses on the rest (so the
-	// inner filter's own arg parsing/arity apply verbatim) and negates the result.
-	if filter == "not" {
-		if len(args) < 1 {
-			return nil, fmt.Errorf("usage: snorg [-a <archive-path>] query not <filter> [arg]\n  filters: %s", queryFilters)
-		}
-		inner, err := queryPredicate(a, args[0], args[1:])
-		if err != nil {
-			return nil, err
-		}
-		return query.Not(inner), nil
-	}
-	switch filter {
-	case "all":
-		return query.All, arity(0, "all")
-	case "starred":
-		return query.Starred, arity(0, "starred")
-	case "unanalyzed":
-		return query.Unanalyzed, arity(0, "unanalyzed")
-	case "note":
-		if err := arity(1, "note <FILE_ID>"); err != nil {
-			return nil, err
-		}
-		return query.InNote(args[0]), nil
-	case "keyword":
-		if err := arity(1, "keyword <regexp>"); err != nil {
-			return nil, err
-		}
-		re, err := regexp.Compile(args[0])
-		if err != nil {
-			return nil, fmt.Errorf("invalid keyword regexp: %w", err)
-		}
-		return query.Keyword(re), nil
-	case "content":
-		if err := arity(1, "content <regexp>"); err != nil {
-			return nil, err
-		}
-		re, err := regexp.Compile(args[0])
-		if err != nil {
-			return nil, fmt.Errorf("invalid content regexp: %w", err)
-		}
-		return query.Content(a, re), nil
-	case "date":
-		if err := arity(1, "date <spec>   (today|yesterday|YYYY-MM-DD|FROM..TO, open ends ok)"); err != nil {
-			return nil, err
-		}
-		from, to, err := parseDateSpec(args[0])
-		if err != nil {
-			return nil, err
-		}
-		return query.Date(from, to), nil
-	default:
-		return nil, fmt.Errorf("unknown filter: %q (want: %s)", filter, queryFilters)
-	}
-}
-
-// parseDateSpec turns a date filter argument into an inclusive [from, to] range
-// formatted "YYYYMMDD" (an empty bound is open). Accepts "today"/"yesterday", a
-// single "YYYY-MM-DD" day, and "FROM..TO" ranges with either end omitted.
-func parseDateSpec(spec string) (from, to string, err error) {
-	day := func(s string) (string, error) {
-		t, err := time.Parse("2006-01-02", s)
-		if err != nil {
-			return "", fmt.Errorf("invalid date %q (want YYYY-MM-DD): %w", s, err)
-		}
-		return t.Format("20060102"), nil
-	}
-	switch spec {
-	case "today":
-		d := time.Now().Format("20060102")
-		return d, d, nil
-	case "yesterday":
-		d := time.Now().AddDate(0, 0, -1).Format("20060102")
-		return d, d, nil
-	}
-	lo, hi, isRange := strings.Cut(spec, "..")
-	if !isRange {
-		d, err := day(spec)
-		return d, d, err
-	}
-	if lo != "" {
-		if from, err = day(lo); err != nil {
-			return "", "", err
-		}
-	}
-	if hi != "" {
-		if to, err = day(hi); err != nil {
-			return "", "", err
-		}
-	}
-	if from == "" && to == "" {
-		return "", "", fmt.Errorf("empty date range %q", spec)
-	}
-	return from, to, nil
-}
-
-// stdinPiped reports whether stdin is a pipe or redirect (not a terminal), i.e.
-// PAGEIDs are being piped into query. Reading a terminal stdin would block.
-func stdinPiped() bool {
-	fi, err := os.Stdin.Stat()
-	return err == nil && fi.Mode()&os.ModeCharDevice == 0
 }
 
 func analyzeCmd(a *app) *cli.Command {
@@ -601,47 +395,28 @@ func analyzeCmd(a *app) *cli.Command {
 			&cli.BoolFlag{Name: "force", Usage: "re-analyze even when the page is unchanged"},
 		},
 		Action: func(ctx context.Context, cmd *cli.Command) error {
-			cfg := a.cfg
-			if err := cfg.ResolveAPIKey(); err != nil {
-				return err
-			}
-			if err := cfg.ValidateProvider(); err != nil {
-				return err
-			}
 			pageIDs, err := pageIDArgs(cmd)
 			if err != nil {
 				return err
 			}
-
-			tr, err := analyze.NewOpenAI(cfg.Provider.Endpoint, cfg.Provider.APIKey, cfg.Provider.Model)
+			results, err := a.client.Analyze(ctx, pageIDs, snorg.AnalyzeOptions{Force: cmd.Bool("force")})
 			if err != nil {
 				return err
 			}
-			spec := analyze.Spec{
-				Content: cfg.Analysis.Content.Prompt,
-				Update:  cfg.Analysis.Content.UpdatePrompt,
-				Title:   cfg.Analysis.Titles.Prompt,
-				Link:    cfg.Analysis.Links.Prompt,
-			}
-			for name, t := range cfg.Analysis.Fields {
-				spec.Fields = append(spec.Fields, analyze.Field{Name: name, Prompt: t.Prompt})
-			}
-
-			// Sequential on purpose (LLM rate limits); one failure never aborts
-			// the batch — analysis of the rest is still worth the wait.
+			// One failure never aborts the batch — analysis of the rest is still
+			// worth the wait.
 			failed, conflicted := 0, false
-			for _, pageID := range pageIDs {
-				outcome, err := analyze.Page(ctx, a.arch, tr, tr, spec, pageID, cmd.Bool("force"))
-				if err != nil {
+			for _, r := range results {
+				if r.Err != nil {
 					failed++
-					fmt.Fprintf(os.Stderr, "failed %s: %v\n", pageID, err)
+					fmt.Fprintf(os.Stderr, "failed %s: %v\n", r.PageID, r.Err)
 					continue
 				}
-				conflicted = conflicted || outcome == analyze.Conflicted
-				fmt.Printf("%s: %s\n", pageID, outcome)
+				conflicted = conflicted || r.Outcome == snorg.Conflicted
+				fmt.Printf("%s: %s\n", r.PageID, r.Outcome)
 			}
 			if conflicted {
-				fmt.Fprintf(os.Stderr, "conflict markers written; resolve with: snorg -a %s analyze-edit <PAGEID>\n", a.path)
+				fmt.Fprintf(os.Stderr, "conflict markers written; resolve with: snorg -a %s analyze-edit <PAGEID>\n", a.client.ArchivePath())
 			}
 			if failed > 0 {
 				return fmt.Errorf("%d of %d pages failed", failed, len(pageIDs))
@@ -663,12 +438,12 @@ func analyzeEditCmd(a *app) *cli.Command {
 			if cmd.Args().Len() != 1 {
 				return fmt.Errorf("usage: snorg [-a <archive-path>] analyze-edit <PAGEID>")
 			}
-			editor, err := edit.EditorFromEnv()
+			editor, err := snorg.EditorFromEnv()
 			if err != nil {
 				return err
 			}
 			pageID := cmd.Args().Get(0)
-			outcome, namesChanged, err := edit.Page(a.arch, pageID, editor)
+			outcome, namesChanged, err := a.client.EditPage(pageID, editor)
 			if err != nil {
 				return err
 			}
@@ -700,18 +475,11 @@ func exportCmd(a *app) *cli.Command {
 		Usage:     "render the retrieved pages through the config's pongo2 template (no PAGEIDs = read them from stdin)",
 		ArgsUsage: "[PAGEID ...]",
 		Action: func(_ context.Context, cmd *cli.Command) error {
-			if a.cfg.Export.Template == "" {
-				return fmt.Errorf("export.template is required")
-			}
 			pageIDs, err := pageIDArgs(cmd)
 			if err != nil {
 				return err
 			}
-			res, err := retrieve.Get(a.arch, pageIDs)
-			if err != nil {
-				return err
-			}
-			out, err := export.Render(res, a.cfg.Export.Template)
+			out, err := a.client.Export(pageIDs)
 			if err != nil {
 				return err
 			}
@@ -744,7 +512,11 @@ func serveCmd(a *app) *cli.Command {
 			if err != nil {
 				return err
 			}
-			res, err := retrieve.Get(a.arch, pageIDs)
+			res, err := a.client.Retrieve(pageIDs)
+			if err != nil {
+				return err
+			}
+			handler, err := a.client.ServeHandler(pageIDs, cmd.Bool("flat"))
 			if err != nil {
 				return err
 			}
@@ -754,7 +526,7 @@ func serveCmd(a *app) *cli.Command {
 				pages += len(n.Pages)
 			}
 			fmt.Fprintf(os.Stderr, "snorg: serving %d page(s) across %d note(s) on http://%s/\n", pages, len(res.Notes), addr)
-			return http.ListenAndServe(addr, serve.Handler(a.arch, res.Notes, cmd.Bool("flat")))
+			return http.ListenAndServe(addr, handler)
 		},
 	}
 }
@@ -769,7 +541,7 @@ func servePageIDs(a *app, cmd *cli.Command) ([]string, error) {
 	if stdinPiped() {
 		return readLines(os.Stdin)
 	}
-	matches, err := query.Pages(a.arch, query.All)
+	matches, err := a.client.Query(snorg.All)
 	if err != nil {
 		return nil, err
 	}
@@ -789,18 +561,18 @@ func migrateCmd(a *app) *cli.Command {
 			// Selection mirrors serve, but routes to the archive's un-gated
 			// migrator (not query): migrate must read the stale grammars it exists
 			// to repair, which the gated readers refuse.
-			var results []archive.MigrateResult
+			var results []snorg.MigrateResult
 			var err error
 			switch {
 			case cmd.Args().Len() > 0:
-				results, err = a.arch.MigratePages(cmd.Args().Slice())
+				results, err = a.client.Migrate(cmd.Args().Slice())
 			case stdinPiped():
 				var ids []string
 				if ids, err = readLines(os.Stdin); err == nil {
-					results, err = a.arch.MigratePages(ids)
+					results, err = a.client.Migrate(ids)
 				}
 			default:
-				results, err = a.arch.MigrateAll()
+				results, err = a.client.MigrateAll()
 			}
 			if err != nil {
 				return err
@@ -812,7 +584,7 @@ func migrateCmd(a *app) *cli.Command {
 				case r.Err != nil:
 					failed++
 					fmt.Fprintf(os.Stderr, "failed %s %s: %v\n", r.Kind, r.ID, r.Err)
-				case r.Outcome == archive.MigrateUpgraded:
+				case r.Outcome == snorg.MigrateUpgraded:
 					migrated++
 					fmt.Printf("%s %s: %s\n", r.Kind, r.ID, r.Outcome)
 				default:
@@ -820,11 +592,18 @@ func migrateCmd(a *app) *cli.Command {
 				}
 			}
 			fmt.Printf("migrated %d, current %d, failed %d of %d file(s) -> schema v%d\n",
-				migrated, current, failed, len(results), archive.CurrentSchemaVersion)
+				migrated, current, failed, len(results), snorg.CurrentSchemaVersion)
 			if failed > 0 {
 				return fmt.Errorf("%d of %d file(s) failed to migrate", failed, len(results))
 			}
 			return nil
 		},
 	}
+}
+
+// stdinPiped reports whether stdin is a pipe or redirect (not a terminal), i.e.
+// PAGEIDs are being piped in. Reading a terminal stdin would block.
+func stdinPiped() bool {
+	fi, err := os.Stdin.Stat()
+	return err == nil && fi.Mode()&os.ModeCharDevice == 0
 }
