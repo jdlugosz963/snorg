@@ -2,7 +2,6 @@ package snorg
 
 import (
 	"os"
-	"os/exec"
 	"path/filepath"
 	"reflect"
 	"testing"
@@ -16,7 +15,7 @@ import (
 const testSVG = `<svg xmlns="http://www.w3.org/2000/svg" width="1920" height="2560"><path d="M10 10 L100 100"/></svg>`
 
 // seedArchive writes a two-page note directly through the archive layer (no
-// supernote-tool needed) and returns an opened Client rooted there.
+// .note parsing/rendering needed) and returns an opened Client rooted there.
 func seedArchive(t *testing.T) *Client {
 	t.Helper()
 	root := t.TempDir()
@@ -125,9 +124,6 @@ func TestParseFilter(t *testing.T) {
 }
 
 func TestPageBufferApplyRoundTrip(t *testing.T) {
-	if _, err := exec.LookPath("git"); err != nil {
-		t.Skip("git not on PATH")
-	}
 	c := seedArchive(t)
 
 	// A never-analyzed page with no regions serializes to empty content.

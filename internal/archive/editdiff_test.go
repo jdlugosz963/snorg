@@ -2,17 +2,9 @@ package archive
 
 import (
 	"os"
-	"os/exec"
 	"strings"
 	"testing"
 )
-
-func requireGit(t *testing.T) {
-	t.Helper()
-	if _, err := exec.LookPath("git"); err != nil {
-		t.Skipf("git not on PATH: %v", err)
-	}
-}
 
 // editArchive builds an archive holding one note with one page Pa.
 func editArchive(t *testing.T) *Archive {
@@ -42,7 +34,6 @@ func TestReadAnalysisBaseWithoutEdits(t *testing.T) {
 }
 
 func TestWriteAnalysisEditRoundTrip(t *testing.T) {
-	requireGit(t)
 	a := editArchive(t)
 	if err := a.WriteAnalysisMD("F_TEST", "Pa", "# ai output\n\nbody"); err != nil {
 		t.Fatal(err)
@@ -64,7 +55,6 @@ func TestWriteAnalysisEditRoundTrip(t *testing.T) {
 }
 
 func TestWriteAnalysisEditRevertRemovesDiff(t *testing.T) {
-	requireGit(t)
 	a := editArchive(t)
 	base := "# ai output\n"
 	if err := a.WriteAnalysisMD("F_TEST", "Pa", base); err != nil {
@@ -105,7 +95,6 @@ func TestMergeAnalysisWithoutEdits(t *testing.T) {
 }
 
 func TestMergeAnalysisRebasesEdits(t *testing.T) {
-	requireGit(t)
 	a := editArchive(t)
 	base := "intro\nline one\nline two\noutro\n"
 	if err := a.WriteAnalysisMD("F_TEST", "Pa", base); err != nil {
@@ -134,7 +123,6 @@ func TestMergeAnalysisRebasesEdits(t *testing.T) {
 }
 
 func TestMergeAnalysisDropsDiffWhenAbsorbed(t *testing.T) {
-	requireGit(t)
 	a := editArchive(t)
 	base := "line\n"
 	if err := a.WriteAnalysisMD("F_TEST", "Pa", base); err != nil {
@@ -159,7 +147,6 @@ func TestMergeAnalysisDropsDiffWhenAbsorbed(t *testing.T) {
 }
 
 func TestMergeAnalysisConflict(t *testing.T) {
-	requireGit(t)
 	a := editArchive(t)
 	base := "line\n"
 	if err := a.WriteAnalysisMD("F_TEST", "Pa", base); err != nil {
@@ -191,7 +178,6 @@ func TestMergeAnalysisConflict(t *testing.T) {
 }
 
 func TestReadAnalysisBaseRejectsForeignMDEdit(t *testing.T) {
-	requireGit(t)
 	a := editArchive(t)
 	base := "line one\nline two\n"
 	if err := a.WriteAnalysisMD("F_TEST", "Pa", base); err != nil {
@@ -214,7 +200,6 @@ func TestReadAnalysisBaseRejectsForeignMDEdit(t *testing.T) {
 // TestWritePrunesEditDiff: removing a page from the note removes its edit diff
 // with every other page artifact; a re-ingest keeping the page preserves it.
 func TestWritePrunesEditDiff(t *testing.T) {
-	requireGit(t)
 	a := editArchive(t)
 	base := "line\n"
 	if err := a.WriteAnalysisMD("F_TEST", "Pa", base); err != nil {

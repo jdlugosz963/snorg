@@ -1,20 +1,11 @@
 package textmerge
 
 import (
-	"os/exec"
 	"strings"
 	"testing"
 )
 
-func requireGit(t *testing.T) {
-	t.Helper()
-	if _, err := exec.LookPath("git"); err != nil {
-		t.Skipf("git not on PATH: %v", err)
-	}
-}
-
 func TestDiffEqual(t *testing.T) {
-	requireGit(t)
 	d, err := Diff("same\n", "same\n")
 	if err != nil {
 		t.Fatal(err)
@@ -25,7 +16,6 @@ func TestDiffEqual(t *testing.T) {
 }
 
 func TestDiffUnapplyRoundTrip(t *testing.T) {
-	requireGit(t)
 	cases := map[string][2]string{
 		"edit":       {"a\nb\nc\n", "a\nB\nc\n"},
 		"from empty": {"", "written by hand\n"},
@@ -65,7 +55,6 @@ func TestUnapplyEmptyDiff(t *testing.T) {
 }
 
 func TestUnapplyMismatchedDiff(t *testing.T) {
-	requireGit(t)
 	d, err := Diff("a\n", "b\n")
 	if err != nil {
 		t.Fatal(err)
@@ -76,7 +65,6 @@ func TestUnapplyMismatchedDiff(t *testing.T) {
 }
 
 func TestMergeClean(t *testing.T) {
-	requireGit(t)
 	base := "intro\nline one\nline two\noutro\n"
 	mine := "intro\nline one, edited by hand\nline two\noutro\n"
 	theirs := "intro\nline one\nline two\noutro, reanalyzed\n"
@@ -94,7 +82,6 @@ func TestMergeClean(t *testing.T) {
 }
 
 func TestMergeConflict(t *testing.T) {
-	requireGit(t)
 	merged, conflicts, err := Merge("line\n", "line edited\n", "line reanalyzed\n")
 	if err != nil {
 		t.Fatal(err)
@@ -110,7 +97,6 @@ func TestMergeConflict(t *testing.T) {
 }
 
 func TestMergeEmptyBaseConflicts(t *testing.T) {
-	requireGit(t)
 	// Both sides added content over nothing: human transcription vs first AI
 	// analysis. This must conflict, never silently pick a side.
 	merged, conflicts, err := Merge("", "written by hand\n", "transcribed by AI\n")

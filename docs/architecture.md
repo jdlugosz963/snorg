@@ -24,7 +24,7 @@ command, which picks and validates only the sections it uses. The CLI is built o
 `urfave/cli/v3`. `ingest` takes
 a single `.note` or a directory (walked recursively for `*.note`) and ingests
 notes through a worker pool: `-j N` caps concurrent notes, default
-`runtime.NumCPU()` (work is CPU-bound supernote-tool rendering); `-c` config
+`runtime.NumCPU()` (work is CPU-bound native SVG rendering); `-c` config
 controls the SVG pipeline (see below). A failed note never aborts the batch — all
 are attempted and failures summarized (non-zero exit). Re-ingest reconciles the
 note's directory in place (see Archive layout); it is the update path.
@@ -103,7 +103,7 @@ Stable filenames + indented JSON → clean VCS diffs. The page transcription liv
 in the `<PAGEID>.md` sidecar — multiline Markdown diffs like prose, not like a
 JSON string. SVGs are reflowed so each `<path>` and each `d` command sits on its
 own line (`archive.formatSVG`), so a changed stroke touches only its own lines
-instead of one giant line. supernote-tool embeds the same template background
+instead of one giant line. The renderer embeds the same template background
 inline in every page; `archive.extractBackground` lifts it into the note's
 `backgrounds/` subfolder and the SVG references it by descendant href
 (`backgrounds/<sha256>.png`), so the giant base64 line is gone and one PNG is
@@ -148,15 +148,15 @@ the analyze fingerprint (path geometry only). See [config.md](config.md).
 `<PAGEID>.md` always holds the *effective* content — what `retrieve`/`export`
 show — while `<PAGEID>.md.diff` records how it diverges from the last
 AI-produced transcription (the *base*, reconstructed by reverse-applying the
-diff; the file exists iff they diverge). On re-analysis the LLM is prompted
+patch; the file exists iff they diverge). On re-analysis the LLM is prompted
 with the base — **user edits never reach the LLM** — and the fresh output is
-3-way merged (`git merge-file`: base, user's md, new transcription); the md
-becomes the merge result and the diff is rebased onto the new base. Overlaps
-leave standard conflict markers (`<<<<<<< edited` / `>>>>>>> reanalyzed`) in
-the md and the `conflict` outcome; resolving is another `analyze-edit`. A page
-never analyzed by AI has an empty base, so a hand-written transcription meets
-its first AI run as one conflict to resolve once. git is a PATH tool here
-(like supernote-tool and pandoc), isolated in `internal/textmerge`.
+3-way merged (base, user's md, new transcription); the md becomes the merge
+result and the diff is rebased onto the new base. Overlaps leave standard
+conflict markers (`<<<<<<< edited` / `>>>>>>> reanalyzed`) in the md and the
+`conflict` outcome; resolving is another `analyze-edit`. A page never analyzed
+by AI has an empty base, so a hand-written transcription meets its first AI run
+as one conflict to resolve once. The diff/merge is pure Go (no PATH tool),
+isolated in `internal/textmerge`.
 
 **Incremental update.** Re-ingest does not rebuild the directory (that would discard
 expensive per-page LLM analyses). Instead `archive.Write` reconciles: pages dropped
@@ -209,10 +209,11 @@ stdin / bare = whole archive), but a page selection also migrates its owning
   traverse them — the sole seam that lets snorg be used as a library. See
   [library.md](library.md).
 - `internal/snote` — device-agnostic domain model (`Note`/`Page`/`Title`/`Keyword`/`Link`)
-  and the `Source` interface (the format seam).
-- `internal/snote/sntool` — `Source` impl shelling out to `supernote-tool`
-  (`analyze` + `convert -t svg`). `footer.go` parses page association from footer keys.
-  Replaceable by a native-Go parser without touching callers.
+  and the `Source` interface (the format seam); the concrete impl sits behind it.
+- `internal/snote/sntool` — the `Source` impl: the native-Go
+  `github.com/jdlugosz963/sntool` library (`sntool.Open` + `render.SVG`), pure Go, no
+  external tool. sntool resolves footer-key page association itself, so this adapter just
+  maps its domain model onto snorg's and renders each page to SVG in-process.
 - `internal/archive` — owns the on-disk layout; `doc.go` is the JSON serialization boundary
   (per-title/per-link `analysis` nested on the items; page-level `analysis` holds
   `source_hash` + `fields`; both docs carry `schema_version` = `CurrentSchemaVersion`);
@@ -248,9 +249,10 @@ stdin / bare = whole archive), but a page selection also migrates its owning
 - `internal/edit` — the `analyze-edit` command's orchestration: opens the page's
   transcription in the user's editor (`sh -c`, terminal inherited, temp copy so an
   aborted editor changes nothing) and stores the result via `archive.WriteAnalysisEdit`.
-- `internal/textmerge` — unified-diff/3-way-merge plumbing shelling out to `git`
-  (`Diff`/`Unapply`/`Merge`); pure text-in/text-out, the only place that executes git.
-  PATH tool: `git`.
+- `internal/textmerge` — diff/patch and 3-way-merge plumbing, pure Go (no PATH tool):
+  `Diff`/`Unapply` (line diff + reverse-apply of a serialized patch) via
+  `github.com/njchilds90/go-diffpatch`, `Merge` (3-way merge, git-standard conflict
+  markers) via `github.com/epiclabs-io/diff3`; pure text-in/text-out.
 - `internal/export` — renders the retrieved `[]*retrieve.NoteView` through one pongo2
   template in a single pass (`export` cmd): views → JSON → context under the `notes`
   key, so templates bind to the `retrieve` json array verbatim and can span notes;

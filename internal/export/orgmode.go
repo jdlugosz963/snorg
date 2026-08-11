@@ -1,7 +1,7 @@
 // Org-mode-exclusive template filters. They only matter to users exporting into
 // org-mode (see examples/emacs/orgmode.yaml); every other export format ignores
-// them. The org filter shells out to pandoc — an external PATH tool like
-// supernote-tool, not a go.mod dependency.
+// them. The org filter shells out to pandoc — an external PATH tool, not a
+// go.mod dependency.
 package export
 
 import (

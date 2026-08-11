@@ -3,7 +3,7 @@ package archive
 // User edits on a page's transcription. <PAGEID>.md always holds the effective
 // content — what retrieve and export show. When the user edits it (the
 // analyze-edit command), the divergence from the last AI-produced transcription
-// (the base) is kept in the <PAGEID>.md.diff sidecar as a unified diff base→md,
+// (the base) is kept in the <PAGEID>.md.diff sidecar as a serialized patch base→md,
 // so the base can be reconstructed (ReadAnalysisBase) and a re-analysis can
 // 3-way merge the fresh AI output with the user's edits (MergeAnalysis) instead
 // of overwriting them. The diff exists iff md diverges from base. Ingest needs

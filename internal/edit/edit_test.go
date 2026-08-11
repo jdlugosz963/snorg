@@ -2,20 +2,12 @@ package edit
 
 import (
 	"os"
-	"os/exec"
 	"path/filepath"
 	"testing"
 
 	"github.com/jdlugosz963/snorg/internal/archive"
 	"github.com/jdlugosz963/snorg/internal/snote"
 )
-
-func requireGit(t *testing.T) {
-	t.Helper()
-	if _, err := exec.LookPath("git"); err != nil {
-		t.Skipf("git not on PATH: %v", err)
-	}
-}
 
 // editArchive builds an archive holding one note with one page Pa.
 func editArchive(t *testing.T) *archive.Archive {
@@ -40,7 +32,6 @@ func fakeEditor(t *testing.T, script string) string {
 }
 
 func TestPageEditCreatesDiffAndKeepsBase(t *testing.T) {
-	requireGit(t)
 	a := editArchive(t)
 	base := "# ai output\n\nbody\n"
 	if err := a.WriteAnalysisMD("F_TEST", "Pa", base); err != nil {
@@ -64,7 +55,6 @@ func TestPageEditCreatesDiffAndKeepsBase(t *testing.T) {
 }
 
 func TestPageUnchangedWritesNothing(t *testing.T) {
-	requireGit(t)
 	a := editArchive(t)
 	if err := a.WriteAnalysisMD("F_TEST", "Pa", "# ai output\n"); err != nil {
 		t.Fatal(err)
@@ -80,7 +70,6 @@ func TestPageUnchangedWritesNothing(t *testing.T) {
 }
 
 func TestPageRevertRemovesDiff(t *testing.T) {
-	requireGit(t)
 	a := editArchive(t)
 	base := "# ai output\n"
 	if err := a.WriteAnalysisMD("F_TEST", "Pa", base); err != nil {
@@ -103,7 +92,6 @@ func TestPageRevertRemovesDiff(t *testing.T) {
 }
 
 func TestPageEditorFailureLeavesPageUntouched(t *testing.T) {
-	requireGit(t)
 	a := editArchive(t)
 	if err := a.WriteAnalysisMD("F_TEST", "Pa", "# ai output\n"); err != nil {
 		t.Fatal(err)
@@ -118,7 +106,6 @@ func TestPageEditorFailureLeavesPageUntouched(t *testing.T) {
 }
 
 func TestPageHumanTranscription(t *testing.T) {
-	requireGit(t)
 	a := editArchive(t)
 
 	// Never analyzed: the editor opens empty and the saved text becomes the
@@ -140,7 +127,6 @@ func TestPageHumanTranscription(t *testing.T) {
 }
 
 func TestPageEmptySaveOnEmptyPage(t *testing.T) {
-	requireGit(t)
 	a := editArchive(t)
 
 	// Editors like vim save an "empty" buffer as a single newline; that must
@@ -158,7 +144,6 @@ func TestPageEmptySaveOnEmptyPage(t *testing.T) {
 }
 
 func TestPageClearingHumanTranscriptionRemovesFiles(t *testing.T) {
-	requireGit(t)
 	a := editArchive(t)
 	if _, _, err := Page(a, "Pa", fakeEditor(t, `printf 'written by hand\n' > "$1"`)); err != nil {
 		t.Fatal(err)
@@ -181,7 +166,6 @@ func TestPageClearingHumanTranscriptionRemovesFiles(t *testing.T) {
 }
 
 func TestPageUnknownPageID(t *testing.T) {
-	requireGit(t)
 	a := editArchive(t)
 	if _, _, err := Page(a, "Pmissing", fakeEditor(t, "true")); err == nil {
 		t.Fatal("expected error for unknown PAGEID")
@@ -206,7 +190,6 @@ func regionArchive(t *testing.T) *archive.Archive {
 }
 
 func TestPageEditsNames(t *testing.T) {
-	requireGit(t)
 	a := regionArchive(t)
 
 	// The content section carries a blank line, which must survive verbatim.
@@ -238,7 +221,6 @@ func TestPageEditsNames(t *testing.T) {
 }
 
 func TestPageNameOnlyEditKeepsContent(t *testing.T) {
-	requireGit(t)
 	a := regionArchive(t)
 	if err := a.WriteAnalysisMD("F_TEST", "Pa", "the body\n"); err != nil {
 		t.Fatal(err)
@@ -262,7 +244,6 @@ func TestPageNameOnlyEditKeepsContent(t *testing.T) {
 }
 
 func TestPageBadHeaderSavesNothing(t *testing.T) {
-	requireGit(t)
 	a := regionArchive(t)
 
 	// Drop the required title marker: parse must fail and nothing is written.

@@ -15,7 +15,6 @@ import (
 	"path/filepath"
 
 	"github.com/jdlugosz963/snorg/internal/archive"
-	"github.com/jdlugosz963/snorg/internal/textmerge"
 )
 
 // Outcome says what Page did with the editor's result.
@@ -46,11 +45,6 @@ func EditorFromEnv() (string, error) {
 // Page is Serialize → run editor → Apply; a non-interactive caller uses those two
 // directly (see the public snorg package).
 func Page(a *archive.Archive, pageID, editor string) (Outcome, int, error) {
-	// A missing git must surface before the editor opens, not after the user
-	// has finished an edit that then cannot be saved.
-	if err := textmerge.Available(); err != nil {
-		return "", 0, err
-	}
 	buf, err := Serialize(a, pageID)
 	if err != nil {
 		return "", 0, err
@@ -100,11 +94,8 @@ func Serialize(a *archive.Archive, pageID string) (string, error) {
 // section becomes the edited md (its divergence from the AI base lands in the
 // edit-diff sidecar) and each changed title/link name becomes a user override
 // (Edited) in the page JSON. It returns the content Outcome and how many names
-// changed. A malformed header writes nothing. Needs git on PATH.
+// changed. A malformed header writes nothing.
 func Apply(a *archive.Archive, pageID, buffer string) (Outcome, int, error) {
-	if err := textmerge.Available(); err != nil {
-		return "", 0, err
-	}
 	fileID, err := a.FindPage(pageID)
 	if err != nil {
 		return "", 0, err

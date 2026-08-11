@@ -3,16 +3,9 @@
 Supernote organizer: ingests Supernote `.note` files into a plaintext,
 machine-readable, VCS-friendly archive for later retrieval, analysis and export.
 
-The `.note` binary format is handled by shelling out to
-[`supernote-tool`](https://github.com/jya-dev/supernote-tool) (must be on `PATH`);
-the org-mode export filter shells out to `pandoc`, and `analyze-edit` uses `git`
-for its diff/merge plumbing. Written in Go.
-
 ## Quick start
 
-Prerequisites: [`supernote-tool`](https://github.com/jya-dev/supernote-tool) on
-`PATH` (required for ingest); `pandoc` only if you export to org-mode; `git`
-only if you edit transcriptions with `analyze-edit`.
+Prerequisites: none, except `pandoc` if you use the `org` or `html` export filters.
 
 Install the CLI (puts `snorg` on your `PATH` via `$GOBIN`/`$GOPATH/bin`):
 
@@ -21,51 +14,69 @@ go install github.com/jdlugosz963/snorg/cmd/snorg@latest
 # or, from a clone:  go build -o snorg ./cmd/snorg
 ```
 
-Then archive a note and read it back:
+snorg targets one archive. Pass `-a <path>` to every command, or set
+`archive: <path>` in `~/.config/snorg/config.yaml` once and omit `-a` — the examples
+below assume the latter.
 
 ```sh
-snorg -a ~/notes/archive ingest ~/supernote/Note/idea.note   # register (a dir works too)
-snorg -a ~/notes/archive list                                # FILE_IDs, one per line
-snorg -a ~/notes/archive query note <FILE_ID> | \
-  snorg -a ~/notes/archive retrieve                          # assembled notes as JSON
+snorg ingest ~/supernote/Note/idea.note   # register one note (a directory works too)
+snorg list                                # FILE_IDs, one per line
+snorg serve                               # browse the whole archive at http://127.0.0.1:8080
+```
+
+```sh
+# Assemble notes as JSON for your own tooling.
+snorg query note <FILE_ID> | snorg retrieve
 
 # Optional AI pass: transcribe pages with a vision LLM (needs a provider config).
-snorg -a ~/notes/archive query all | \
-  snorg -c config.yaml -a ~/notes/archive analyze            # skips unchanged pages
+snorg query all | snorg -c config.yaml analyze      # skips unchanged pages
 
-# Fix a transcription by hand — or write one without any LLM at all.
-# Edits are stored as a diff and survive re-analysis via a 3-way merge.
-snorg -a ~/notes/archive analyze-edit <PAGEID>               # opens $VISUAL/$EDITOR
+# Fix a transcription by hand — or write one without any LLM. Edits survive re-analysis.
+snorg analyze-edit <PAGEID>                          # opens $VISUAL/$EDITOR
 
 # Export through a template (see examples/config.yaml).
-snorg -a ~/notes/archive query note <FILE_ID> | \
-  snorg -c examples/config.yaml -a ~/notes/archive export
+snorg query note <FILE_ID> | snorg -c examples/config.yaml export
 ```
 
 ## Usage
 
-Global flags and the archive path come first, then the command; the config
-(`<archive>/config.yaml`, overridden by `-c` files) is loaded once and shared:
-
 ```
-snorg -a <archive> ingest <file.note>    # register a note (dir works too)
-snorg -a <archive> list                  # list FILE_IDs
-snorg -a <archive> query all             # PAGEIDs of matching pages
-snorg -a <archive> query all | \
-  snorg -a <archive> retrieve            # assembled notes as JSON (grouped per note)
-snorg -a <archive> query all | \
-  snorg -c cfg.yaml -a <archive> analyze # LLM analysis (skips unchanged pages)
-snorg -a <archive> analyze-edit <PAGEID> # edit a transcription in $VISUAL/$EDITOR
-snorg -a <archive> query note <FILE_ID> | \
-  snorg -c examples/config.yaml -a <archive> export  # render a template per note
+snorg ingest <file.note|dir>   register note(s) into the archive
+snorg list [-l]                FILE_IDs (-l appends the note name)
+snorg query <filter> [arg]     PAGEIDs of matching pages; filters: all, note <FILE_ID>,
+                               starred, keyword <re>, content <re>, date <spec>,
+                               unanalyzed, and a `not <filter>` prefix. -l = annotated
+                               browse form (tab-separated, PAGEID first)
+snorg retrieve [PAGEID...]     assemble pages into JSON, grouped per note
+snorg serve [-f] [PAGEID...]   built-in HTTP viewer (whole archive if no PAGEIDs; -f = flat)
+snorg analyze [PAGEID...]      vision-LLM transcription (skips unchanged pages)
+snorg analyze-edit <PAGEID>    edit a transcription in $VISUAL/$EDITOR
+snorg export [PAGEID...]       render pages through a pongo2/Jinja2 template
 ```
 
-`retrieve`, `analyze` and `export` take PAGEIDs as arguments or stdin lines, so
-`query` pipes into any of them. `analyze-edit` takes exactly one PAGEID (the
-editor needs the terminal); manual edits survive re-analysis — overlaps surface
-as merge conflict markers to resolve with another `analyze-edit`.
+`retrieve`, `serve`, `analyze` and `export` take PAGEIDs as arguments **or** stdin
+lines, so `query` pipes into any of them. Because every step is just lines of PAGEIDs,
+you compose selections with ordinary shell tools (`sort -u`, `comm`, `grep`, `fzf`).
+`query` itself reads PAGEIDs from stdin when piped, so filters intersect:
+`snorg query keyword foo | snorg query date today` == foo ∩ today.
 
 Archive layout: `<archive>/<FILE_ID>/{note.json,<PAGEID>.json,<PAGEID>.md[.diff],<PAGEID>.svg,backgrounds/}`.
+
+## Browse and pick pages with fzf
+
+`query -l` prints one page per line — PAGEID first, then note name, page number, a
+`*` for starred and `#tags` for keywords — so a fuzzy finder can filter on any of it.
+Pick pages, keep the PAGEID with `cut -f1`, and open just those in the flat viewer:
+
+```sh
+snorg query all -l | fzf -m | cut -f1 | snorg serve -f
+```
+
+Or pick a whole note by name and pipe it into any consumer — here `retrieve`:
+
+```sh
+snorg query note $(snorg list -l | fzf | cut -f1) | snorg retrieve
+```
 
 ## Shell completion
 
@@ -83,47 +94,6 @@ snorg completion fish > ~/.config/fish/completions/snorg.fish
 
 # Powershell: write `snorg completion powershell` to a file on your autocomplete path and run it.
 ```
-
-## Example: Emacs / denote client
-
-[`examples/emacs/`](examples/emacs/) is a worked end-to-end use case: it exports a
-snorg archive into a human-readable, organized form — one org note per archived
-note under a [denote](https://protesilaos.com/emacs/denote) directory, with
-cross-note links resolving inside [Emacs](https://www.gnu.org/software/emacs/). It
-pairs an org-mode export template (`examples/emacs/orgmode.yaml`) with `snorg.el`,
-which drives the `snorg` CLI to import notes as denote org files and adds org links
-that open a page's SVG or jump between notes. See `examples/emacs/README.md`.
-
-## Example: static HTML site
-
-[`examples/web/`](examples/web/) turns a selection of pages into a servable,
-static HTML site: `export.sh` reads PAGEIDs on stdin, renders one listing page
-(`index.html`) and one page per note over the pages you picked, and copies each
-page's SVG so the `<img>` references resolve. Nothing to host but files.
-
-```sh
-# Select pages, then build + serve the site.
-sort -u \
-  <(snorg -a ~/notes/sn query starred) \
-  <(snorg -a ~/notes/sn query keyword 'TODO') \
-  | snorg -a ~/notes/sn query date 2026-07-01.. \
-  | ./examples/web/export.sh -y ~/notes/sn /tmp/snorg-web-export/
-
-python -m http.server -d /tmp/snorg-web-export/   # then open http://localhost:8000
-```
-
-The selection is plain set algebra over PAGEID lists — this pipeline builds
-**(is starred OR has keyword `TODO`) AND is newer than 2026-07-01**:
-
-Because every step is just lines of PAGEIDs, you compose selections with ordinary
-shell tools (`sort -u`, `comm`, `grep`) and feed the result to `export.sh`,
-`retrieve`, `analyze`, or `export`. See `examples/web/README.md`.
-
-## More
-
-See `docs/` for principles, architecture, the `.note` format, configuration and
-the read contract; `examples/config.yaml` for an annotated config with a Markdown
-export template.
 
 ## Contributing
 

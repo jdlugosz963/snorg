@@ -43,7 +43,7 @@ The predicate constructors (`All`, `Starred`, `Unanalyzed`, `Not`, `And`, `InSet
 Editing: `PageBuffer`/`ApplyPage` are the library edit path (round-trip the buffer
 yourself). `EditPage(id, editor)` and `EditorFromEnv()` are the interactive
 convenience the CLI's `analyze-edit` uses — they spawn `$EDITOR`, so a library that
-supplies its own UI should use `PageBuffer`/`ApplyPage` instead. Both need `git`.
+supplies its own UI should use `PageBuffer`/`ApplyPage` instead.
 
 ## Example
 

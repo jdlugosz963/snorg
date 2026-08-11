@@ -2,20 +2,12 @@ package analyze
 
 import (
 	"context"
-	"os/exec"
 	"strings"
 	"testing"
 
 	"github.com/jdlugosz963/snorg/internal/archive"
 	"github.com/jdlugosz963/snorg/internal/snote"
 )
-
-func requireGit(t *testing.T) {
-	t.Helper()
-	if _, err := exec.LookPath("git"); err != nil {
-		t.Skipf("git not on PATH: %v", err)
-	}
-}
 
 // fakeTranscriber returns a canned reply per prompt prefix and records every
 // prompt it saw. It implements both Transcriber and Generator.
@@ -217,7 +209,6 @@ func TestPageForceReanalyzes(t *testing.T) {
 // re-analysis — the LLM sees the AI base, never the user's text, and the 3-way
 // merge re-applies the edit onto the fresh transcription.
 func TestPageMergePreservesUserEdits(t *testing.T) {
-	requireGit(t)
 	a := archive.New(t.TempDir())
 	if err := a.Write(sampleNote(), map[string][]byte{"Pa": []byte(sampleSVG)}); err != nil {
 		t.Fatal(err)
@@ -267,7 +258,6 @@ func TestPageMergePreservesUserEdits(t *testing.T) {
 // TestPageMergeConflict: user edit and new analysis touching the same line
 // leave conflict markers and report the Conflicted outcome, not an error.
 func TestPageMergeConflict(t *testing.T) {
-	requireGit(t)
 	a := archive.New(t.TempDir())
 	if err := a.Write(sampleNote(), map[string][]byte{"Pa": []byte(sampleSVG)}); err != nil {
 		t.Fatal(err)
@@ -307,7 +297,6 @@ func TestPageMergeConflict(t *testing.T) {
 // base) gets a fresh transcription — the human text is never sent to the LLM —
 // and the two sides land in a conflict for the user to resolve once.
 func TestPageHumanTranscriptionStaysOffLLM(t *testing.T) {
-	requireGit(t)
 	a := archive.New(t.TempDir())
 	if err := a.Write(sampleNote(), map[string][]byte{"Pa": []byte(sampleSVG)}); err != nil {
 		t.Fatal(err)
@@ -345,7 +334,6 @@ func TestPageHumanTranscriptionStaysOffLLM(t *testing.T) {
 // survives re-analysis untouched and its region is not re-transcribed, even
 // under --force.
 func TestPageKeepsEditedRegionNames(t *testing.T) {
-	requireGit(t)
 	a := archive.New(t.TempDir())
 	if err := a.Write(sampleNote(), map[string][]byte{"Pa": []byte(sampleSVG)}); err != nil {
 		t.Fatal(err)
