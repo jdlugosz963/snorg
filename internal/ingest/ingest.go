@@ -53,7 +53,7 @@ type Result struct {
 
 // RunMany ingests paths into store concurrently, one note per worker. jobs caps
 // the worker count; jobs <= 0 falls back to runtime.NumCPU() (the work is
-// CPU-bound supernote-tool rendering, so more workers than cores only thrashes).
+// CPU-bound native SVG rendering (potrace tracing), so more workers than cores only thrashes).
 // A failed note never aborts the batch — every path yields a Result, in input
 // order. Concurrency is safe because src is stateless and each note writes to its
 // own <FILE_ID>/ directory under the shared store.

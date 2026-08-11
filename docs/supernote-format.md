@@ -2,7 +2,13 @@
 
 Working notes for SNORG. Sample: `note.note` (6 pages), device `N5`, renders 1920×2560.
 
-## Tool: `supernote-tool` (supernotelib 0.7.1)
+SNORG parses and renders `.note` files **natively** via the pure-Go
+`github.com/jdlugosz963/sntool` library (`internal/snote/sntool` wraps it) — no external
+tool at runtime. `supernote-tool` below is documented as an external **reference** for
+inspecting `.note` files (sntool is a clean-room reimplementation of it and cross-checks
+against it); its output shape and the format facts here still describe what sntool produces.
+
+## Reference tool: `supernote-tool` (supernotelib 0.7.1)
 
 - `analyze <file>` → JSON: `__signature__`, `__header__`, `__footer__`, `__pages__`.
 - `convert -n N -t {png,svg,pdf,txt} <in> <out>` — **`-n` is 0-indexed**, `-a` = all pages.
@@ -23,14 +29,14 @@ if drawn with different shades.
 - **Default palette** (supernotelib `color.py`) → SVG `fill`: black `#000000`, dark-gray
   `#9d9d9d`, gray `#c9c9c9`, white/eraser `#fefefe`. (X-series compat: dark-gray `#303030`,
   gray `#505050`.)
-- **Set/change**: `convert -c black,darkgray,gray,white …` — 4 comma-separated colors in
-  that fixed order, each a CSS name or hex (parsed by the `colour` lib), e.g.
-  `-c '#1a1aff',red,green,white`. **SNORG renders without `-c`** (`internal/snote/sntool`)
-  and instead recolors *downstream* in the SVG pipeline (`archive.recolor`, driven by
-  `ingest.svg.colors`): it substitutes the 4 default `fill=` values verbatim. Doing it
-  in-app (not via `-c`) is deliberate — the analyze fingerprint is path geometry, which
-  ignores `fill`, so recolor never dirties an analysis (a `-c` re-render would still be
-  byte-identical here, but keeping the render seam `-c`-free avoids depending on that).
+- sntool's `render.SVG` emits these same default fills (its `decoder.DefaultPalette` →
+  `grayWeb` hex) with **no color knob** (`Options.Palette` affects only the background).
+  **SNORG recolors *downstream*** in the SVG pipeline (`archive.recolor`, driven by
+  `ingest.svg.colors`): it substitutes the 4 default `fill=` values verbatim. Doing it in
+  the pipeline (not in the renderer) is deliberate — the analyze fingerprint is path
+  geometry, which ignores `fill`, so recolor never dirties an analysis. (Note: high-res
+  grayscale pages carry intermediate shades → more than 4 `<path>`; recolor touches only
+  the 4 canonical fills, as before.)
 
 ## Identifiers
 

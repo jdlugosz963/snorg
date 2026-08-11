@@ -39,8 +39,8 @@ var (
 	svgNumHeight = regexp.MustCompile(`\sheight="([0-9.]+)"`)
 )
 
-// responsiveSVGRoot makes the page SVG scale to its container. supernote-tool
-// emits a root <svg> with a fixed pixel width/height (1920x2560); embedded in an
+// responsiveSVGRoot makes the page SVG scale to its container. The renderer
+// emits a root <svg> with a fixed pixel width/height (1920x2560 for N5); embedded in an
 // <object> that renders it as a document (not scaled like an <img>), those fixed
 // dimensions make it draw at native size and clip to a corner. Giving the root a
 // viewBox (so it has intrinsic coordinates) and width/height="100%" lets it fill —

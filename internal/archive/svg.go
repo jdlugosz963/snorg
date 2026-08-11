@@ -5,8 +5,8 @@ import "strings"
 // formatSVG rewrites a rendered SVG into a diff-friendly layout: each <path>
 // element starts on its own line, and inside a path the `d` attribute is broken
 // so every drawing command (M/L/C/Z/...) sits on its own line, aligned under the
-// start of the path data. supernote-tool emits the whole SVG as a single huge
-// line, so editing one stroke rewrote everything; with this layout a changed
+// start of the path data. The renderer emits the whole SVG as one dense line,
+// so editing one stroke rewrote everything; with this layout a changed
 // stroke touches only its own lines, keeping VCS diffs small. The transform is
 // deterministic and idempotent, so unchanged content re-renders byte-identically.
 func formatSVG(b []byte) []byte {

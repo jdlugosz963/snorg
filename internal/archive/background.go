@@ -67,7 +67,7 @@ func backgroundImageSpan(s string) (start, end int, ok bool) {
 }
 
 // backgroundsDir is the per-note subfolder holding content-addressed page
-// backgrounds (<root>/<FILE_ID>/backgrounds/<sha256>.<ext>). supernote-tool embeds
+// backgrounds (<root>/<FILE_ID>/backgrounds/<sha256>.<ext>). The renderer embeds
 // the same template background inline in every page SVG; extracting it here
 // deduplicates that heavy raster (all of a note's pages share one file) and keeps
 // the SVG text small.

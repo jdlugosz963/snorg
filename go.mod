@@ -1,9 +1,10 @@
 module github.com/jdlugosz963/snorg
 
-go 1.24
+go 1.24.13
 
 require (
 	github.com/flosch/pongo2/v6 v6.1.0
+	github.com/jdlugosz963/sntool v1.1.0
 	github.com/openai/openai-go v1.12.0
 	github.com/srwiley/oksvg v0.0.0-20221011165216-be6e8873101c
 	github.com/srwiley/rasterx v0.0.0-20220730225603-2ab79fcdd4ef
@@ -12,6 +13,8 @@ require (
 )
 
 require (
+	github.com/gotranspile/cxgo v0.5.2 // indirect
+	github.com/gotranspile/gotrace v0.0.0-20230726133510-8c9665a39b09 // indirect
 	github.com/tidwall/gjson v1.14.4 // indirect
 	github.com/tidwall/match v1.1.1 // indirect
 	github.com/tidwall/pretty v1.2.1 // indirect

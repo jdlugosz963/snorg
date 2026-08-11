@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -21,9 +20,6 @@ import (
 // End-to-end ingest against the sample note.note at the repo root, asserting the
 // known ground truth (see docs/supernote-format.md).
 func TestIngestSampleNote(t *testing.T) {
-	if _, err := exec.LookPath(sntool.Binary); err != nil {
-		t.Skipf("%s not in PATH", sntool.Binary)
-	}
 	notePath := filepath.Join("..", "..", "note.note")
 	if _, err := os.Stat(notePath); err != nil {
 		t.Skipf("sample note not found: %v", err)
@@ -129,9 +125,6 @@ const (
 // new pages, reorder — while preserving expensive per-page analyses of pages that
 // carried over.
 func TestIngestUpdatesArchive(t *testing.T) {
-	if _, err := exec.LookPath(sntool.Binary); err != nil {
-		t.Skipf("%s not in PATH", sntool.Binary)
-	}
 	repo := filepath.Join("..", "..")
 	for _, f := range []string{"note.note", "note2.note", "note3.note"} {
 		if _, err := os.Stat(filepath.Join(repo, f)); err != nil {
@@ -223,7 +216,7 @@ func readJSON(t *testing.T, path string, v any) {
 }
 
 // fakeSource is an in-memory snote.Source for the concurrency tests, so they need
-// no supernote-tool. Each path becomes a one-page note keyed by its basename;
+// no real .note parsing. Each path becomes a one-page note keyed by its basename;
 // paths in failOn error from Read. It records peak concurrent RenderSVGs calls.
 type fakeSource struct {
 	failOn    map[string]bool

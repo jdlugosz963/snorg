@@ -1,198 +1,112 @@
-// Package sntool implements snote.Source by shelling out to the `supernote-tool`
-// CLI (supernotelib). It is one interchangeable adapter behind the snote.Source
-// seam; a native-Go parser could replace it without touching callers.
+// Package sntool implements snote.Source with the pure-Go
+// github.com/jdlugosz963/sntool library: it parses the .note metadata and renders
+// each page to SVG in-process, needing no external tool. It is the concrete adapter
+// behind the snote.Source seam.
 package sntool
 
 import (
-	"encoding/base64"
-	"encoding/json"
 	"fmt"
-	"os"
-	"os/exec"
-	"path"
-	"path/filepath"
-	"strconv"
-	"strings"
+
+	sn "github.com/jdlugosz963/sntool"
+	"github.com/jdlugosz963/sntool/notebook"
+	"github.com/jdlugosz963/sntool/render"
 
 	"github.com/jdlugosz963/snorg/internal/snote"
 )
 
-// Binary is the external tool invoked for parsing and rendering.
-const Binary = "supernote-tool"
-
-// Source is the supernote-tool backed implementation of snote.Source.
+// Source is the sntool-library backed implementation of snote.Source.
 type Source struct{}
 
-// New returns a supernote-tool backed Source.
+// New returns an sntool-library backed Source.
 func New() *Source { return &Source{} }
 
-type analyzeOut struct {
-	Signature string                       `json:"__signature__"`
-	Header    map[string]string            `json:"__header__"`
-	Footer    json.RawMessage              `json:"__footer__"`
-	Pages     []map[string]json.RawMessage `json:"__pages__"`
-}
-
-type footerArrays struct {
-	Titles   []map[string]string `json:"__titles__"`
-	Keywords []map[string]string `json:"__keywords__"`
-	Links    []map[string]string `json:"__links__"`
-}
-
-// Read runs `supernote-tool analyze` and maps the result into the domain model.
+// Read parses the note at path with sntool and maps it into the domain model.
+// sntool already resolves each title/keyword/link to its owning page (0-based
+// Annotation.PageNumber), so association is a straight bucket onto the pages.
 func (s *Source) Read(path string) (*snote.Note, error) {
-	out, err := exec.Command(Binary, "analyze", path).Output()
+	nb, err := sn.Open(path)
 	if err != nil {
-		return nil, fmt.Errorf("%s analyze: %w", Binary, err)
-	}
-
-	var a analyzeOut
-	if err := json.Unmarshal(out, &a); err != nil {
-		return nil, fmt.Errorf("parse analyze output: %w", err)
-	}
-	var fa footerArrays
-	if err := json.Unmarshal(a.Footer, &fa); err != nil {
-		return nil, fmt.Errorf("parse footer arrays: %w", err)
-	}
-	footerMap := map[string]json.RawMessage{}
-	if err := json.Unmarshal(a.Footer, &footerMap); err != nil {
-		return nil, fmt.Errorf("parse footer keys: %w", err)
-	}
-	footerKeys := make([]string, 0, len(footerMap))
-	for k := range footerMap {
-		footerKeys = append(footerKeys, k)
+		return nil, fmt.Errorf("open note: %w", err)
 	}
 
 	note := &snote.Note{
-		FileID:    a.Header["FILE_ID"],
-		Signature: a.Signature,
-		Device:    a.Header["APPLY_EQUIPMENT"],
+		FileID:    nb.FileID(),
+		Signature: nb.Signature,
+		Device:    nb.Device(),
 	}
-	for i, p := range a.Pages {
+	for i, p := range nb.Pages {
 		note.Pages = append(note.Pages, snote.Page{
-			ID:      rawString(p["PAGEID"]),
+			ID:      p.PageID(),
 			Number:  i + 1,
-			Starred: isStarred(p["FIVESTAR"]),
+			Starred: p.Starred(),
 		})
 	}
-	pageAt := func(n int) *snote.Page {
-		if n < 1 || n > len(note.Pages) {
+	pageAt := func(n int) *snote.Page { // n is 0-based
+		if n < 0 || n >= len(note.Pages) {
 			return nil
 		}
-		return &note.Pages[n-1]
+		return &note.Pages[n]
 	}
 
-	titlePages := pageByPoint(footerKeys, prefixTitle)
-	for _, t := range fa.Titles {
-		r, ok := parseRectCSV(t["TITLERECT"])
+	for _, t := range nb.Titles {
+		r, ok := t.Rect()
 		if !ok {
 			continue
 		}
-		p := pageAt(titlePages[pointOf(r)])
+		p := pageAt(t.PageNumber)
 		if p == nil {
 			continue
 		}
-		level, _ := strconv.Atoi(t["TITLELEVEL"])
-		seq, _ := strconv.Atoi(t["TITLESEQNO"])
-		p.Titles = append(p.Titles, snote.Title{Rect: r, Level: level, Seq: seq})
+		p.Titles = append(p.Titles, snote.Title{
+			Rect:  snote.Rect{X: r.X, Y: r.Y, W: r.W, H: r.H},
+			Level: t.Level(),
+			Seq:   t.Seq(),
+		})
 	}
 
-	linkPages := pageByPoint(footerKeys, prefixLink)
-	for _, l := range fa.Links {
-		r, ok := parseRectCSV(l["LINKRECT"])
+	for _, k := range nb.Keywords {
+		p := pageAt(k.PageNumber)
+		if p == nil {
+			continue
+		}
+		p.Keywords = append(p.Keywords, snote.Keyword{Text: k.Text()})
+	}
+
+	for _, l := range nb.Links {
+		r, ok := l.Rect()
 		if !ok {
 			continue
 		}
-		p := pageAt(linkPages[pointOf(r)])
+		p := pageAt(l.PageNumber)
 		if p == nil {
 			continue
 		}
 		p.Links = append(p.Links, snote.Link{
-			Rect:         r,
-			TargetPageID: l["PAGEID"],
-			TargetFileID: l["LINKFILEID"],
-			Name:         linkName(l["LINKFILE"]),
+			Rect:         snote.Rect{X: r.X, Y: r.Y, W: r.W, H: r.H},
+			TargetPageID: l.TargetPageID(),
+			TargetFileID: l.TargetFileID(),
+			Name:         notebook.LinkName(l.FilePathB64()),
 		})
-	}
-
-	kwPages := keywordPages(footerKeys)
-	for i, k := range fa.Keywords {
-		if i >= len(kwPages) {
-			break
-		}
-		p := pageAt(kwPages[i])
-		if p == nil {
-			continue
-		}
-		p.Keywords = append(p.Keywords, snote.Keyword{Text: k["KEYWORD"]})
 	}
 
 	return note, nil
 }
 
-// RenderSVGs renders every page of the note to SVG in one `supernote-tool convert
-// -a` pass (a single parse of the .note), returning the pages in order (index 0 =
-// first page). `-a` writes one file per page, suffixing the output basename with
-// the 0-based page index (page.svg -> page_0.svg, page_1.svg, …); we read them back
-// ordered by that suffix.
-func (s *Source) RenderSVGs(notePath string) ([][]byte, error) {
-	dir, err := os.MkdirTemp("", "snorg-svg")
+// RenderSVGs renders every page of the note at path to SVG in page order (index 0 =
+// first page). The file is parsed once and each page is traced from that in-memory
+// notebook.
+func (s *Source) RenderSVGs(path string) ([][]byte, error) {
+	nb, err := sn.Open(path)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("open note: %w", err)
 	}
-	defer os.RemoveAll(dir)
-	cmd := exec.Command(Binary, "convert", "-a", "-t", "svg", notePath, filepath.Join(dir, "page.svg"))
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return nil, fmt.Errorf("%s convert -a: %w: %s", Binary, err, out)
-	}
-
-	files, err := filepath.Glob(filepath.Join(dir, "page_*.svg"))
-	if err != nil {
-		return nil, err
-	}
-	svgs := make([][]byte, len(files))
-	for _, f := range files {
-		// page_<i>.svg — index between the "page_" prefix and the ".svg" suffix.
-		idx, err := strconv.Atoi(strings.TrimSuffix(strings.TrimPrefix(filepath.Base(f), "page_"), ".svg"))
-		if err != nil || idx < 0 || idx >= len(files) {
-			return nil, fmt.Errorf("%s convert -a: unexpected output file %q", Binary, filepath.Base(f))
-		}
-		data, err := os.ReadFile(f)
+	svgs := make([][]byte, len(nb.Pages))
+	for i := range nb.Pages {
+		svg, err := render.SVG(nb, i, render.Options{})
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("render page %d: %w", i+1, err)
 		}
-		svgs[idx] = data
+		svgs[i] = []byte(svg)
 	}
 	return svgs, nil
-}
-
-func rawString(r json.RawMessage) string {
-	if len(r) == 0 {
-		return ""
-	}
-	var s string
-	if err := json.Unmarshal(r, &s); err == nil {
-		return s
-	}
-	return ""
-}
-
-func isStarred(r json.RawMessage) bool {
-	s := rawString(r)
-	return s != "" && s != "0"
-}
-
-// linkName decodes LINKFILE (base64 of an on-device path like
-// "/storage/emulated/0/Note/linked-note.note") into the bare note name
-// "linked-note". It returns "" when b64 is empty or undecodable.
-func linkName(b64 string) string {
-	if b64 == "" {
-		return ""
-	}
-	raw, err := base64.StdEncoding.DecodeString(b64)
-	if err != nil {
-		return ""
-	}
-	base := path.Base(string(raw))
-	return base[:len(base)-len(path.Ext(base))]
 }
