@@ -1,6 +1,7 @@
 package archive
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
@@ -432,6 +433,58 @@ func TestSchemaVersionGate(t *testing.T) {
 	bumpVersion(t, filepath.Join(dir, "note.json"))
 	if _, err := a.ReadNote("F_TEST"); !errors.Is(err, ErrSchemaVersion) {
 		t.Errorf("ReadNote on stale note: err = %v, want ErrSchemaVersion", err)
+	}
+}
+
+// TestReingestOverStaleArchiveIsAtomic verifies that when re-ingest aborts on a stale
+// page (schema mismatch), it leaves note.json untouched — the schema gate now runs in
+// a preflight pass before any write, so the archive is never half-migrated. A
+// future-version bump alone can't catch this (note.json would serialize identically
+// and be skipped), so we first make the on-disk note.json diverge from what Write
+// regenerates.
+func TestReingestOverStaleArchiveIsAtomic(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "F_TEST")
+	a := New(root)
+	if err := a.Write(note("Pa"), svgMap(map[string]string{"Pa": "<svg/>"})); err != nil {
+		t.Fatal(err)
+	}
+
+	// Make note.json differ from what a fresh Write would produce (device sentinel),
+	// keeping schema_version current so ReadNote still succeeds.
+	notePath := filepath.Join(dir, "note.json")
+	b, err := os.ReadFile(notePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(b, &m); err != nil {
+		t.Fatal(err)
+	}
+	m["device"] = json.RawMessage(`"OLD-SENTINEL"`)
+	out, err := json.MarshalIndent(m, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(notePath, append(out, '\n'), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Corrupt the page JSON to a future grammar version, then re-ingest.
+	bumpVersion(t, filepath.Join(dir, "Pa.json"))
+	before, err := os.ReadFile(notePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Write(note("Pa"), svgMap(map[string]string{"Pa": "<svg/>"})); !errors.Is(err, ErrSchemaVersion) {
+		t.Fatalf("re-ingest over stale page: err = %v, want ErrSchemaVersion", err)
+	}
+	after, err := os.ReadFile(notePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Errorf("aborted re-ingest rewrote note.json:\nbefore: %s\nafter:  %s", before, after)
 	}
 }
 

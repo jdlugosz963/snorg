@@ -69,9 +69,6 @@ func (a *Archive) Write(n *snote.Note, svgs map[string][]byte) error {
 		return fmt.Errorf("note has empty file id")
 	}
 	dir := filepath.Join(a.Root, n.FileID)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return fmt.Errorf("create %s: %w", dir, err)
-	}
 
 	current := make(map[string]bool, len(n.Pages))
 	for _, p := range n.Pages {
@@ -79,6 +76,18 @@ func (a *Archive) Write(n *snote.Note, svgs map[string][]byte) error {
 			return fmt.Errorf("page %d has empty id", p.Number)
 		}
 		current[p.ID] = true
+	}
+
+	// Preflight the kept pages through the schema-gated reader before any write, so a
+	// stale-schema page aborts (ErrSchemaVersion) with the archive untouched rather
+	// than after note.json is already rewritten. The map carries analyses forward.
+	oldPages, err := a.preflight(n.FileID, n.Pages)
+	if err != nil {
+		return err
+	}
+
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("create %s: %w", dir, err)
 	}
 
 	// Prune pages that disappeared from the note (with all their artifacts).
@@ -99,19 +108,12 @@ func (a *Archive) Write(n *snote.Note, svgs map[string][]byte) error {
 	}
 	for i, p := range n.Pages {
 		pd := pageDoc(p)
-		// Re-ingest must not discard a page's derived AI analysis: carry it over
-		// from the existing page JSON (ingest itself never produces one). A missing
-		// file is the normal first-ingest case; any other error (notably a stale
-		// schema version) must abort rather than silently clobber the old file.
-		old, err := a.ReadPage(n.FileID, p.ID)
-		switch {
-		case err == nil:
+		// Re-ingest must not discard a page's derived AI analysis: carry it over from
+		// the existing page doc gathered in the preflight (ingest itself never
+		// produces one). Absent = the normal first-ingest case, nothing to carry.
+		if old, ok := oldPages[p.ID]; ok {
 			pd.Analysis = old.Analysis
 			carryRegionAnalyses(&pd, old)
-		case errors.Is(err, os.ErrNotExist):
-			// first ingest of this page — nothing to carry
-		default:
-			return err
 		}
 		if err := writeJSONIfChanged(filepath.Join(dir, p.ID+".json"), pd); err != nil {
 			return err
@@ -152,6 +154,27 @@ func (a *Archive) Write(n *snote.Note, svgs map[string][]byte) error {
 		}
 	}
 	return nil
+}
+
+// preflight reads the note's kept pages through the schema-gated reader before Write
+// mutates anything, so a stale-schema page aborts (ErrSchemaVersion) with no partial
+// write. It returns the old page docs keyed by id for the analysis carry-forward;
+// os.ErrNotExist is the normal first-ingest case for a page (and for the whole note
+// dir, so it is safe to call before MkdirAll).
+func (a *Archive) preflight(fileID string, pages []snote.Page) (map[string]PageDoc, error) {
+	old := make(map[string]PageDoc, len(pages))
+	for _, p := range pages {
+		pd, err := a.ReadPage(fileID, p.ID)
+		switch {
+		case err == nil:
+			old[p.ID] = pd
+		case errors.Is(err, os.ErrNotExist):
+			// first ingest of this page — nothing to carry
+		default:
+			return nil, err
+		}
+	}
+	return old, nil
 }
 
 // carryRegionAnalyses copies per-title/per-link analyses from old into pd,
