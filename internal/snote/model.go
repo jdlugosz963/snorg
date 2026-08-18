@@ -25,13 +25,29 @@ type Keyword struct {
 	Text string
 }
 
-// Link is a tap-target region pointing at another page or note.
-// The link is internal iff TargetFileID == Note.FileID.
+// LinkKind classifies a tap-target's destination, mirroring the device LINKTYPE.
+// Only note/file/web are known device values; anything else is LinkUnknown.
+type LinkKind string
+
+const (
+	LinkUnknown LinkKind = "unknown"
+	LinkNote    LinkKind = "note" // another .note (internal jump iff TargetFileID == Note.FileID)
+	LinkFile    LinkKind = "file" // non-note document on device (pdf, epub, …)
+	LinkWeb     LinkKind = "web"  // web URL (http/https)
+)
+
+// Link is a tap-target region pointing at another page, note, document or URL.
+// Kind classifies the destination; a note link is internal iff TargetFileID ==
+// Note.FileID. TargetPageID/TargetFileID are meaningful only for note links;
+// file/web links carry the destination in Target instead.
 type Link struct {
-	Rect         Rect
-	TargetPageID string // PAGEID of the target page (stable across reorder, unlike a number)
-	TargetFileID string
-	Name         string // human name of the target note (decoded from LINKFILE), "" if unknown
+	Rect          Rect
+	Kind          LinkKind
+	TargetPageID  string // PAGEID of the target page (note links; stable across reorder)
+	TargetFileID  string // FILE_ID of the target note (note links)
+	Target        string // decoded LINKFILE: device path (file) or URL (web), "" for note/absent
+	TargetDocPage int    // page within the linked external document (file links; OBJPAGE), 0 otherwise
+	Name          string // human label per kind (URL, file basename with ext, or note name), "" if unknown
 }
 
 // Page is one page of a note in its placement order.

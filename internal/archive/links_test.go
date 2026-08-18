@@ -16,6 +16,7 @@ func linkedNote(fileID, src, targetFileID, targetPageID string) *snote.Note {
 			Number: 1,
 			Links: []snote.Link{{
 				Rect:         snote.Rect{X: 10, Y: 20, W: 30, H: 40},
+				Kind:         snote.LinkNote,
 				TargetPageID: targetPageID,
 				TargetFileID: targetFileID,
 			}},
@@ -69,6 +70,58 @@ func TestInjectLinksMissingTargetStillBaked(t *testing.T) {
 	}
 	if want := `xlink:href="../F_GONE/Pb.svg"`; !strings.Contains(string(svg), want) {
 		t.Fatalf("dangling cross-note link should still be baked %q in:\n%s", want, svg)
+	}
+}
+
+// noteWithLink is a one-page note whose page holds a single link l.
+func noteWithLink(fileID, pageID string, l snote.Link) *snote.Note {
+	return &snote.Note{
+		FileID: fileID,
+		Pages:  []snote.Page{{ID: pageID, Number: 1, Links: []snote.Link{l}}},
+	}
+}
+
+func TestInjectLinksWebBakedExternal(t *testing.T) {
+	a := New(t.TempDir())
+	n := noteWithLink("F_SRC", "Pa", snote.Link{
+		Rect:   snote.Rect{X: 10, Y: 20, W: 30, H: 40},
+		Kind:   snote.LinkWeb,
+		Target: "https://example.com/x?a=1&b=2",
+		Name:   "https://example.com/x?a=1&b=2",
+	})
+	if err := a.Write(n, svgMap(map[string]string{"Pa": "<svg>a</svg>"})); err != nil {
+		t.Fatal(err)
+	}
+	svg, err := a.ReadSVG("F_SRC", "Pa")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// URL opens externally and its & is XML-escaped in the attribute.
+	want := `<a xlink:href="https://example.com/x?a=1&amp;b=2" target="_blank">`
+	if !strings.Contains(string(svg), want) {
+		t.Fatalf("missing external web link overlay\nwant: %s\ngot:  %s", want, svg)
+	}
+}
+
+func TestInjectLinksFileAndUnknownNotBaked(t *testing.T) {
+	for _, kind := range []snote.LinkKind{snote.LinkFile, snote.LinkUnknown} {
+		a := New(t.TempDir())
+		n := noteWithLink("F_SRC", "Pa", snote.Link{
+			Rect:   snote.Rect{X: 10, Y: 20, W: 30, H: 40},
+			Kind:   kind,
+			Target: "/storage/emulated/0/Document/Book.pdf",
+			Name:   "Book.pdf",
+		})
+		if err := a.Write(n, svgMap(map[string]string{"Pa": "<svg>a</svg>"})); err != nil {
+			t.Fatal(err)
+		}
+		svg, err := a.ReadSVG("F_SRC", "Pa")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(svg), "<a ") {
+			t.Fatalf("kind %q is device-local and must not be baked, got:\n%s", kind, svg)
+		}
 	}
 }
 

@@ -56,10 +56,18 @@ if drawn with different shades.
 
 - **Titles** `get_titles()`: `TITLERECT="x,y,w,h"`, `TITLEBITMAP` (own RLE bitmap of the region), `TITLELEVEL`, `TITLESEQNO`.
 - **Keywords** `get_keywords()`: `KEYWORD` is **already decoded text** (e.g. `"fizyka"`). Keywords are **invisible page-level metadata** — no handwritten counterpart, so `KEYWORDRECT` is meaningless (parser even copies the title rect). Use text + page only.
-- **Links** `get_links()`: `LINKRECT`, `PAGEID` (target page id — **preferred**, stable across reorder),
-  `OBJPAGE` (target page number, 1-based — derived/volatile, **not stored**), `LINKFILE` (**base64** of an
-  absolute path `/storage/emulated/0/Note/...`), `LINKFILEID` (target file id), `LINKINOUT`, `LINKTYPE`.
-  - **Internal vs external**: `LINKFILEID == FILE_ID` → internal (jump within same note); else external (other `.note`).
+- **Links** `get_links()`: `LINKRECT`, `PAGEID` (target page id — **preferred** for note links, stable
+  across reorder), `OBJPAGE` (page number of the target; for note links it's volatile so it's **dropped**
+  in favor of `PAGEID`, but for **file** links — which have no `PAGEID` — it's the sole page indicator and
+  is **stored** as `target_doc_page`), `LINKFILE` (**base64** of an absolute path
+  `/storage/emulated/0/Note/...` or a URL), `LINKFILEID` (target file id), `LINKINOUT`, `LINKTYPE`.
+  - **Kind** (`LINKTYPE`): `1`=note (another `.note`), `2`=file (non-note document, pdf/epub), `4`=web URL;
+    anything else is treated as `unknown`. Stored as `kind` (`note`/`file`/`web`/`unknown`).
+  - **Internal vs external** (note links only): `LINKFILEID == FILE_ID` → internal (jump within same note);
+    else external (other `.note`). File/web links carry `LINKFILEID`/`PAGEID` = the literal `none`
+    (normalized to empty → `target_page_id`/`target_file_id` omitted; they're note-link-only) and put
+    the destination (device path or URL) in the decoded `LINKFILE` (stored as `target`); a file link's
+    target page in that document is `OBJPAGE` (stored as `target_doc_page`).
 
 ## Element extraction
 
@@ -68,8 +76,8 @@ if drawn with different shades.
 - **Star / favorite page** → `__pages__[i].FIVESTAR`: present only on starred pages (page 3 in sample),
   absent/null otherwise. Value = star stroke coords + trailing flag. Criterion: `FIVESTAR` not null.
 - **Keyword** → invisible metadata: take text from `KEYWORD`, page from footer key; no region to crop.
-- **Link region** → crop page PNG at `(x,y,x+w,y+h)` from `LINKRECT`. **VERIFIED**: p5 → "link" box, p6 → "link to another note" box. Target: `PAGEID` + `LINKFILEID` (internal) or decode `LINKFILE` base64 (external).
-- **Link name** → base64-decode `LINKFILE` to the device path, take the basename without extension (e.g. `…/linked-note.note` → `linked-note`); used as the target note's human name.
+- **Link region** → crop page PNG at `(x,y,x+w,y+h)` from `LINKRECT`. **VERIFIED**: p5 → "link" box, p6 → "link to another note" box. Target: `PAGEID` + `LINKFILEID` (note links) or decode `LINKFILE` base64 (file/web).
+- **Link name** (per kind) → base64-decode `LINKFILE`: the full URL for a web link, the file basename **with** extension for a file link (e.g. `Book.pdf`), or the basename **without** `.note` for a note link (e.g. `…/linked-note.note` → `linked-note`).
 
 ## Sample ground truth
 

@@ -68,8 +68,9 @@ Flow: `cmd/snorg` → `pkg/snorg` (public API) → `internal/ingest` orchestrate
 - `internal/snote/sntool` — the `Source` impl: wraps the native-Go
   `github.com/jdlugosz963/sntool` library (`sntool.Open` → domain model, `render.SVG` per
   page), pure Go, no external tool. sntool resolves each title/keyword/link to its owning
-  page itself (`Annotation.PageNumber`), so this adapter is a straight mapping — no
-  footer-key parsing here. Its SVG (pen-shade fills `#000000/#9d9d9d/#c9c9c9/#fefefe`,
+  page itself (`Annotation.PageNumber`) and classifies each link (`Link.Kind()` →
+  note/file/web/unknown, `Link.Target()` decoded LINKFILE, `Link.Name()` per-kind label),
+  so this adapter is a straight mapping — no footer-key parsing here. Its SVG (pen-shade fills `#000000/#9d9d9d/#c9c9c9/#fefefe`,
   inline `xlink:href="data:image/…"` background, `xmlns:xlink` root, `<path fill d>`) is
   exactly what the archive SVG pipeline (recolor/background/nav/links/pathHash) expects.
 - `internal/archive` — owns the on-disk layout `<archive>/<FILE_ID>/{note.json,<PAGEID>.json,<PAGEID>.md[.diff],<PAGEID>.svg}`;
@@ -79,11 +80,13 @@ Flow: `cmd/snorg` → `pkg/snorg` (public API) → `internal/ingest` orchestrate
   sidecar); both `note.json`/`<PAGEID>.json` carry `schema_version` (= `CurrentSchemaVersion`,
   stamped by every writer): `ReadNote`/`ReadPage` **hard-reject** a mismatch (`ErrSchemaVersion`,
   "run `snorg migrate`") so no command touches a grammar it doesn't understand and re-ingest aborts
-  rather than clobbering a stale page — a future `migrate` command (not built) reads old files raw
+  rather than clobbering a stale page — the `migrate` command reads old files raw
   and walks them forward one version per step (v→v+1→…→current); bump the constant + add a step on any
   contract change; `Write` runs the config-driven
   SVG pipeline (background mode `extract`/`inline`/`blank`/`remove` → `recolor` pen-shade fills →
-  `injectNav` prev/next half-page zones → `injectLinks` note links → `formatSVG`; nav is emitted
+  `injectNav` prev/next half-page zones → `injectLinks` (bakes navigable links: note→page-SVG jumps
+  and web→`<a target="_blank">` URLs via `linkAnchor`; file/unknown links carry only a device-local
+  path so they bake nothing) → `formatSVG`; nav is emitted
   before links so links win hit-testing — SVG picks the later element);
   `read.go` are layout-aware accessors (`List`/`ReadNote`/`ReadPage`/`ReadSVG`/`SVGRel`/`FindPage`)
   plus `WritePage` and `ReadAnalysisMD`/`WriteAnalysisMD` (the sidecar pair; `NormMD` is the stored
@@ -199,6 +202,14 @@ Flow: `cmd/snorg` → `pkg/snorg` (public API) → `internal/ingest` orchestrate
   structured records; `KEYWORDPAGE` is unreliable (yields -1 on the sample).
 - Keywords are invisible page-level metadata (no handwriting/region); text is in the `KEYWORD` field.
 - Pages render **1920×2560**; all `*RECT` values are in that pixel space (crop = `x,y,x+w,y+h`).
-- Star = per-page `FIVESTAR`; a link is internal iff `LINKFILEID == FILE_ID`; `LINKFILE` is a base64 path.
-  Link target page = `PAGEID` (stable id, stored) not `OBJPAGE` (volatile number, dropped).
-  Link `name` = base64-decoded `LINKFILE` basename without ext (target note's human name).
+- Star = per-page `FIVESTAR`. Link **kind** is `LINKTYPE`: `1`=note (another `.note`; internal iff
+  `LINKFILEID == FILE_ID`), `2`=file (non-note document, pdf/epub), `4`=web URL — anything else is
+  `unknown`. sntool exposes it as `Link.Kind()`; snorg stores it as `LinkDoc.kind`/`retrieve` `kind`.
+  Note links carry a target page = `PAGEID` (stable id, stored) not `OBJPAGE` (volatile, dropped) and
+  `LINKFILEID`; file/web links carry `Target` = decoded `LINKFILE` (device path / URL) — their
+  `LINKFILEID`/`PAGEID` are the literal `none`, which the adapter normalizes to empty, so
+  `target_page_id`/`target_file_id` are **omitted** (note-link-only). A **file** link also stores `OBJPAGE` as `target_doc_page`
+  (the page within the linked document; `Link.TargetDocPage()`) — the sole page indicator when there's no
+  `PAGEID`; note links drop it. Link `name` (`Link.Name()`) = the URL (web), file
+  basename with ext (file), or note name (basename without `.note`). Only note + web links bake a
+  clickable SVG anchor; file/unknown links are metadata-only (their path isn't in the archive).

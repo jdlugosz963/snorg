@@ -101,8 +101,6 @@ Contributions are welcome — issues and pull requests both. Known limitations a
 open problems worth tackling:
 
 - **Only tested on the Supernote Manta.**
-- **Links only resolve between `.note` files.** Other link kinds (web URLs, links to
-  non-note files) are not handled yet.
 - **Analysis prompts need fine-tuning.** The vision-LLM prompts could interpret notes
   more deeply — reconstructing tables, diagrams, etc. — and should emit Markdown that
   survives the `pandoc` conversion to org (and other formats) cleanly.

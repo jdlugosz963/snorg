@@ -8,7 +8,6 @@ import (
 	"fmt"
 
 	sn "github.com/jdlugosz963/sntool"
-	"github.com/jdlugosz963/sntool/notebook"
 	"github.com/jdlugosz963/sntool/render"
 
 	"github.com/jdlugosz963/snorg/internal/snote"
@@ -81,12 +80,26 @@ func (s *Source) Read(path string) (*snote.Note, error) {
 		if p == nil {
 			continue
 		}
-		p.Links = append(p.Links, snote.Link{
-			Rect:         snote.Rect{X: r.X, Y: r.Y, W: r.W, H: r.H},
-			TargetPageID: l.TargetPageID(),
-			TargetFileID: l.TargetFileID(),
-			Name:         notebook.LinkName(l.FilePathB64()),
-		})
+		link := snote.Link{
+			Rect:   snote.Rect{X: r.X, Y: r.Y, W: r.W, H: r.H},
+			Kind:   snote.LinkKind(l.Kind().String()),
+			Target: l.Target(),
+			Name:   l.Name(),
+		}
+		// Target page/file ids exist only for note links; the device writes the
+		// literal "none" otherwise — normalize that to empty at this format seam.
+		if v := l.TargetPageID(); v != "none" {
+			link.TargetPageID = v
+		}
+		if v := l.TargetFileID(); v != "none" {
+			link.TargetFileID = v
+		}
+		// OBJPAGE is the target page only for a file link (a document); for note
+		// links it is volatile (we key off the stable PAGEID instead), so skip it.
+		if link.Kind == snote.LinkFile {
+			link.TargetDocPage = l.TargetDocPage()
+		}
+		p.Links = append(p.Links, link)
 	}
 
 	return note, nil

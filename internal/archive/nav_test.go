@@ -73,6 +73,7 @@ func TestNavZonesSitBehindLinkOverlays(t *testing.T) {
 	n := note("Pa", "Pb")
 	n.Pages[0].Links = []snote.Link{{
 		Rect:         snote.Rect{X: 100, Y: 100, W: 300, H: 100},
+		Kind:         snote.LinkNote,
 		TargetPageID: "Pb", TargetFileID: "F_TEST",
 	}}
 	if err := a.Write(n, svgMap(map[string]string{"Pa": "<svg>a</svg>", "Pb": "<svg>b</svg>"})); err != nil {

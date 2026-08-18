@@ -77,16 +77,21 @@ type KeywordView struct {
 	Text string `json:"text"`
 }
 
-// LinkView is a tap-target. Internal is derived: the link stays within this note
-// iff TargetFileID equals the note's FileID. TargetPageID is the destination page's
-// stable id (resolve a heading by page_id rather than a shifting page number).
+// LinkView is a tap-target. Kind classifies the destination (note/file/web/unknown).
+// Internal is derived: a note link stays within this note iff TargetFileID equals the
+// note's FileID. TargetPageID is the destination page's stable id (resolve a heading
+// by page_id rather than a shifting page number); Target is the decoded device path
+// (file) or URL (web); TargetDocPage is the page within the linked document (file links).
 type LinkView struct {
-	Rect         snote.Rect        `json:"rect"`
-	TargetPageID string            `json:"target_page_id"`
-	TargetFileID string            `json:"target_file_id"`
-	Name         string            `json:"name"`
-	Internal     bool              `json:"internal"`
-	Analysis     *NameAnalysisView `json:"analysis,omitempty"`
+	Rect          snote.Rect        `json:"rect"`
+	Kind          string            `json:"kind"`
+	TargetPageID  string            `json:"target_page_id,omitempty"`
+	TargetFileID  string            `json:"target_file_id,omitempty"`
+	Target        string            `json:"target,omitempty"`
+	TargetDocPage int               `json:"target_doc_page,omitempty"`
+	Name          string            `json:"name"`
+	Internal      bool              `json:"internal"`
+	Analysis      *NameAnalysisView `json:"analysis,omitempty"`
 }
 
 // List returns the FILE_IDs available in the archive.
@@ -195,12 +200,15 @@ func pageView(fileID string, ref archive.NotePageRef, pd archive.PageDoc, svg st
 			an = &NameAnalysisView{Name: l.Analysis.Name}
 		}
 		links = append(links, LinkView{
-			Rect:         l.Rect,
-			TargetPageID: l.TargetPageID,
-			TargetFileID: l.TargetFileID,
-			Name:         l.Name,
-			Internal:     l.TargetFileID == fileID,
-			Analysis:     an,
+			Rect:          l.Rect,
+			Kind:          l.Kind,
+			TargetPageID:  l.TargetPageID,
+			TargetFileID:  l.TargetFileID,
+			Target:        l.Target,
+			TargetDocPage: l.TargetDocPage,
+			Name:          l.Name,
+			Internal:      l.TargetFileID == fileID,
+			Analysis:      an,
 		})
 	}
 	return PageView{

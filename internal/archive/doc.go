@@ -11,7 +11,7 @@ import "github.com/jdlugosz963/snorg/internal/snote"
 // migration step) whenever the JSON contract changes; a future `migrate` command
 // walks stale files forward one version at a time. 0 (absent field) is
 // pre-versioning, and is also stale.
-const CurrentSchemaVersion = 1
+const CurrentSchemaVersion = 2
 
 // NoteDoc is note.json — file metadata plus ordered page placement.
 type NoteDoc struct {
@@ -79,11 +79,14 @@ type KeywordDoc struct {
 }
 
 type LinkDoc struct {
-	Rect         snote.Rect    `json:"rect"`
-	TargetPageID string        `json:"target_page_id"`
-	TargetFileID string        `json:"target_file_id"`
-	Name         string        `json:"name"`
-	Analysis     *LinkAnalysis `json:"analysis,omitempty"`
+	Rect          snote.Rect    `json:"rect"`
+	Kind          string        `json:"kind"`
+	TargetPageID  string        `json:"target_page_id,omitempty"`
+	TargetFileID  string        `json:"target_file_id,omitempty"`
+	Target        string        `json:"target,omitempty"`
+	TargetDocPage int           `json:"target_doc_page,omitempty"`
+	Name          string        `json:"name"`
+	Analysis      *LinkAnalysis `json:"analysis,omitempty"`
 }
 
 func noteDoc(n *snote.Note) NoteDoc {
@@ -113,10 +116,13 @@ func pageDoc(p snote.Page) PageDoc {
 	links := make([]LinkDoc, 0, len(p.Links))
 	for _, l := range p.Links {
 		links = append(links, LinkDoc{
-			Rect:         l.Rect,
-			TargetPageID: l.TargetPageID,
-			TargetFileID: l.TargetFileID,
-			Name:         l.Name,
+			Rect:          l.Rect,
+			Kind:          string(l.Kind),
+			TargetPageID:  l.TargetPageID,
+			TargetFileID:  l.TargetFileID,
+			Target:        l.Target,
+			TargetDocPage: l.TargetDocPage,
+			Name:          l.Name,
 		})
 	}
 	return PageDoc{SchemaVersion: CurrentSchemaVersion, PageID: p.ID, Starred: p.Starred, Titles: titles, Keywords: keywords, Links: links}

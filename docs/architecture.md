@@ -117,13 +117,14 @@ scripts depend on.
 
 **Clickable links.** Each page's tap-targets are also baked into the SVG as real
 hyperlinks (`archive.injectLinks`): an invisible `<a>`-wrapped `<rect>` at the link's
-pixel rect, so the region navigates without altering the note's appearance. The href is
+pixel rect, so the region navigates without altering the note's appearance. Resolution
+branches on the link **kind** (`archive.linkAnchor`): a **note** link's href is
 **relative to the page SVG** — `<PAGEID>.svg` for a same-note jump, `../<FILE_ID>/<PAGEID>.svg`
 for another note. A same-note jump resolves only to a page written in this `Write`;
 a cross-note jump is baked **unconditionally** to its deterministic archive-relative path,
 so it works regardless of ingest order — the href simply dangles until the target note is
-ingested. Resolution is a small ordered pipeline (`archive.linkHref`) so other link kinds
-(e.g. web links) can be added later without touching callers; today only note-page targets resolve.
+ingested. A **web** link bakes the URL as an external `<a target="_blank">`. **File** and
+**unknown** links carry only a device-local path (not in the archive), so they bake nothing.
 
 **Page navigation.** `archive.injectNav` additionally bakes two invisible
 half-page zones into each SVG: tapping the left half opens the previous page,
@@ -283,5 +284,5 @@ New retrieval/export commands add cases in `cmd/snorg` and read via `archive`
 accessors, projecting into a `retrieve` view. Analysis enriches the `Doc`
 JSON schemas (and the views) with new fields (free to add — no backcompat). A native
 parser is a new `snote.Source` implementation. New link kinds extend
-`archive.linkHref`; new export filters register in their own file in
+`archive.linkAnchor`; new export filters register in their own file in
 `internal/export` (grouped by target format, like `orgmode.go`).

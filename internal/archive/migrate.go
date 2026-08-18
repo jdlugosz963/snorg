@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+
+	"github.com/jdlugosz963/snorg/internal/snote"
 )
 
 // Schema migration: the one place allowed to read stale on-disk grammars. Every
@@ -42,6 +44,43 @@ var schemaMigrations = []func(migKind, map[string]any) error{
 	// the two grammars, and the framework stamps the field, so this step only has to
 	// exist to establish the chain.
 	func(migKind, map[string]any) error { return nil },
+	// v1 → v2: links gained a `kind` (note/file/web/unknown). Pre-v2 links were all
+	// treated as note jumps, so stamp `note` on any link that carries a real target
+	// file+page id (the shape only note links produce) and `unknown` otherwise. The
+	// decoded `target` was never captured pre-v2; re-ingest repopulates it.
+	func(k migKind, m map[string]any) error {
+		if k != kindPage {
+			return nil
+		}
+		links, _ := m["links"].([]any)
+		for _, raw := range links {
+			l, ok := raw.(map[string]any)
+			if !ok {
+				continue
+			}
+			if realID(l["target_file_id"]) && realID(l["target_page_id"]) {
+				l["kind"] = string(snote.LinkNote)
+			} else {
+				l["kind"] = string(snote.LinkUnknown)
+			}
+			// Drop the device "none"/empty sentinels so migrated links match a
+			// fresh ingest (target ids are note-link-only, now omitempty).
+			if !realID(l["target_file_id"]) {
+				delete(l, "target_file_id")
+			}
+			if !realID(l["target_page_id"]) {
+				delete(l, "target_page_id")
+			}
+		}
+		return nil
+	},
+}
+
+// realID reports whether a decoded JSON value is a present, non-"none" id string —
+// the device writes the literal "none" for a link with no note target.
+func realID(v any) bool {
+	s, ok := v.(string)
+	return ok && s != "" && s != "none"
 }
 
 // MigrateOutcome reports what happened to one file.

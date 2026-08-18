@@ -2,6 +2,7 @@ package archive
 
 import (
 	"fmt"
+	"html"
 	"strings"
 
 	"github.com/jdlugosz963/snorg/internal/snote"
@@ -14,10 +15,10 @@ import (
 // appearance untouched while making the region navigable in a browser/viewer.
 //
 // fromFileID is the note owning this page; inNote is that note's page-id set (its
-// SVGs are all written in the same Write call). Links that no handler can resolve
-// yet — e.g. a target note not ingested, or a kind we don't handle — are skipped.
-// Each overlay sits on its own line and the output is deterministic, so
-// writeFileIfChanged stays churn-free across re-ingest.
+// SVGs are all written in the same Write call). Links that no handler can resolve —
+// a note target not ingested, or a kind that isn't navigable from the archive
+// (file/unknown) — are skipped. Each overlay sits on its own line and the output is
+// deterministic, so writeFileIfChanged stays churn-free across re-ingest.
 func (a *Archive) injectLinks(svg []byte, fromFileID string, inNote map[string]bool, links []snote.Link) []byte {
 	if len(links) == 0 {
 		return svg
@@ -29,12 +30,16 @@ func (a *Archive) injectLinks(svg []byte, fromFileID string, inNote map[string]b
 	}
 	var b strings.Builder
 	for _, l := range links {
-		href, ok := a.linkHref(fromFileID, inNote, l)
+		an, ok := a.linkAnchor(fromFileID, inNote, l)
 		if !ok {
 			continue
 		}
-		fmt.Fprintf(&b, "\n<a xlink:href=%q><rect x=\"%d\" y=\"%d\" width=\"%d\" height=\"%d\" fill=\"none\" pointer-events=\"all\" /></a>",
-			href, l.Rect.X, l.Rect.Y, l.Rect.W, l.Rect.H)
+		target := ""
+		if an.external {
+			target = ` target="_blank"`
+		}
+		fmt.Fprintf(&b, "\n<a xlink:href=\"%s\"%s><rect x=\"%d\" y=\"%d\" width=\"%d\" height=\"%d\" fill=\"none\" pointer-events=\"all\" /></a>",
+			html.EscapeString(an.href), target, l.Rect.X, l.Rect.Y, l.Rect.W, l.Rect.H)
 	}
 	if b.Len() == 0 {
 		return svg
@@ -42,17 +47,30 @@ func (a *Archive) injectLinks(svg []byte, fromFileID string, inNote map[string]b
 	return []byte(s[:end] + b.String() + s[end:])
 }
 
-// linkHref resolves a tap-target to an href usable from the page SVG at
-// <fromFileID>/<page>.svg, or returns ok=false when nothing resolves it yet.
-// Resolution is a small ordered pipeline so new target kinds (e.g. web links,
-// external resources) can be added without touching callers; today only links to
-// another note page resolve.
-func (a *Archive) linkHref(fromFileID string, inNote map[string]bool, l snote.Link) (string, bool) {
-	if href, ok := a.noteSVGHref(fromFileID, inNote, l); ok {
-		return href, true
+// anchor is a resolved link destination: an href plus whether it opens outside the
+// archive (a web URL → target="_blank").
+type anchor struct {
+	href     string
+	external bool
+}
+
+// linkAnchor resolves a tap-target to an anchor usable from the page SVG at
+// <fromFileID>/<page>.svg, or returns ok=false when the kind isn't navigable from
+// the archive. Resolution branches on the link kind: note links jump to another
+// page's SVG, web links open the URL externally; file/unknown links only carry a
+// device-local path we cannot resolve, so they bake no anchor.
+func (a *Archive) linkAnchor(fromFileID string, inNote map[string]bool, l snote.Link) (anchor, bool) {
+	switch l.Kind {
+	case snote.LinkNote:
+		if href, ok := a.noteSVGHref(fromFileID, inNote, l); ok {
+			return anchor{href: href}, true
+		}
+	case snote.LinkWeb:
+		if l.Target != "" {
+			return anchor{href: l.Target, external: true}, true
+		}
 	}
-	// future: web links, external resources, ...
-	return "", false
+	return anchor{}, false
 }
 
 // noteSVGHref resolves a link to another page's SVG, as a path relative to the

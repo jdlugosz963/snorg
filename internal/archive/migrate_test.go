@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/jdlugosz963/snorg/internal/snote"
 )
 
 // stripVersion rewrites the JSON file at path with schema_version removed,
@@ -185,5 +187,79 @@ func TestMigratePagesSelection(t *testing.T) {
 	// Pb was left stale (still v0), proving the selection was respected.
 	if _, err := a.ReadPage("F_TEST", "Pb"); err == nil {
 		t.Error("unselected page Pb should still be stale after selective migrate")
+	}
+}
+
+// downgradeLinksToV1 rewrites a page JSON as a genuine v1 file: schema_version=1
+// and every link stripped of its v2-only kind/target fields.
+func downgradeLinksToV1(t *testing.T, path string) {
+	t.Helper()
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(b, &m); err != nil {
+		t.Fatal(err)
+	}
+	m["schema_version"] = 1
+	if links, ok := m["links"].([]any); ok {
+		for _, raw := range links {
+			if l, ok := raw.(map[string]any); ok {
+				delete(l, "kind")
+				delete(l, "target")
+			}
+		}
+	}
+	out, err := json.Marshal(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, out, 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestMigrateV1LinkKinds: the v1→v2 step stamps `note` on a link with real target
+// ids and `unknown` on one whose ids are the device sentinel "none".
+func TestMigrateV1LinkKinds(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "F_TEST")
+	a := New(root)
+	n := &snote.Note{
+		FileID: "F_TEST",
+		Pages: []snote.Page{{ID: "Pa", Number: 1, Links: []snote.Link{
+			{Rect: snote.Rect{W: 1, H: 1}, Kind: snote.LinkNote, TargetPageID: "Pb", TargetFileID: "F_TEST"},
+			{Rect: snote.Rect{W: 1, H: 1}, Kind: snote.LinkFile, TargetPageID: "none", TargetFileID: "none", Target: "/x/y.pdf"},
+		}}, {ID: "Pb", Number: 2}},
+	}
+	if err := a.Write(n, svgMap(map[string]string{"Pa": "<svg/>", "Pb": "<svg/>"})); err != nil {
+		t.Fatal(err)
+	}
+	downgradeLinksToV1(t, filepath.Join(dir, "Pa.json"))
+
+	if _, err := a.MigratePages([]string{"Pa"}); err != nil {
+		t.Fatal(err)
+	}
+
+	pd, err := a.ReadPage("F_TEST", "Pa")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pd.Links) != 2 {
+		t.Fatalf("got %d links, want 2", len(pd.Links))
+	}
+	if got := pd.Links[0].Kind; got != "note" {
+		t.Errorf("link with real target ids: kind %q, want note", got)
+	}
+	if pd.Links[0].TargetFileID != "F_TEST" || pd.Links[0].TargetPageID != "Pb" {
+		t.Errorf("note link should keep its real ids, got %+v", pd.Links[0])
+	}
+	if got := pd.Links[1].Kind; got != "unknown" {
+		t.Errorf("link with none ids: kind %q, want unknown", got)
+	}
+	// The "none" sentinels are blanked so they drop out of the JSON.
+	if pd.Links[1].TargetFileID != "" || pd.Links[1].TargetPageID != "" {
+		t.Errorf("unknown link should drop its \"none\" ids, got %+v", pd.Links[1])
 	}
 }

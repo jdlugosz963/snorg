@@ -47,7 +47,7 @@ consumer never needs to know the on-disk file split. A whole note is
       "titles":   [{"rect": {"x":0,"y":0,"w":0,"h":0}, "level": 1,
                     "analysis": {"name": "Chapter 1"}}],
       "keywords": [{"text": "fizyka"}],
-      "links":    [{"rect": {"x":0,"y":0,"w":0,"h":0}, "target_page_id": "P...",
+      "links":    [{"rect": {"x":0,"y":0,"w":0,"h":0}, "kind": "note", "target_page_id": "P...",
                     "target_file_id": "F...", "name": "linked-note", "internal": true,
                     "analysis": {"name": "see also"}}],
       "analysis": {"content": "# Chapter 1\n\n...", "fields": {"description": "..."}}
@@ -60,9 +60,14 @@ consumer never needs to know the on-disk file split. A whole note is
 - `pages` are in placement order (1-based `number`).
 - `svg` is **relative to the archive root**; resolve it as `join(archive, svg)`.
   Per-page paths stay relative (portable); the one absolute root travels in `archive`.
-- `internal` is derived: `target_file_id == file_id` (link stays within this note).
-- link `name` is the target note's human name, decoded from the `.note`'s `LINKFILE`
-  (base64 device path → basename without extension); `""` when unknown.
+- `kind` classifies the link: `note` (another `.note`), `file` (non-note document on
+  device), `web` (URL), or `unknown`. `target_page_id`/`target_file_id` are note-link-only
+  (omitted otherwise); file/web links carry the destination (device path or URL) in
+  `target` instead, and a file link adds `target_doc_page` — the page within the linked
+  document.
+- `internal` is derived: `target_file_id == file_id` (a note link within this note).
+- link `name` is the human label decoded from `LINKFILE`: the full URL (web), the file
+  basename with extension (file), or the note name without `.note` (note); `""` when unknown.
 - derived data sits under `analysis` keys: per-title/per-link `analysis.name`
   (region transcriptions) and the page-level `analysis` — `content` (the Markdown
   transcription, assembled from the `<PAGEID>.md` sidecar) and `fields` (custom

@@ -34,8 +34,10 @@ func TestGetAssemblesOrderedView(t *testing.T) {
 				Titles:   []snote.Title{{Rect: snote.Rect{X: 1, Y: 2, W: 3, H: 4}, Level: 2}},
 				Keywords: []snote.Keyword{{Text: "foo"}},
 				Links: []snote.Link{
-					{Rect: snote.Rect{X: 5}, TargetPageID: "Pb", TargetFileID: "F_TEST"},                      // internal
-					{Rect: snote.Rect{X: 6}, TargetPageID: "Pz", TargetFileID: "F_OTHER", Name: "other-note"}, // external
+					{Rect: snote.Rect{X: 5}, Kind: snote.LinkNote, TargetPageID: "Pb", TargetFileID: "F_TEST"},                      // internal note
+					{Rect: snote.Rect{X: 6}, Kind: snote.LinkNote, TargetPageID: "Pz", TargetFileID: "F_OTHER", Name: "other-note"}, // external note
+					{Rect: snote.Rect{X: 7}, Kind: snote.LinkWeb, Target: "https://example.com", Name: "https://example.com"},       // web
+					{Rect: snote.Rect{X: 8}, Kind: snote.LinkFile, Target: "/x/Book.pdf", TargetDocPage: 12, Name: "Book.pdf"},      // file → doc page 12
 				},
 			},
 			{ID: "Pb", Number: 2},
@@ -78,7 +80,7 @@ func TestGetAssemblesOrderedView(t *testing.T) {
 	if len(p.Keywords) != 1 || p.Keywords[0].Text != "foo" {
 		t.Errorf("keywords = %+v", p.Keywords)
 	}
-	if len(p.Links) != 2 || !p.Links[0].Internal || p.Links[1].Internal {
+	if len(p.Links) != 4 || !p.Links[0].Internal || p.Links[1].Internal || p.Links[2].Internal || p.Links[3].Internal {
 		t.Errorf("link internal flags wrong: %+v", p.Links)
 	}
 	if p.Links[0].TargetPageID != "Pb" || p.Links[1].TargetPageID != "Pz" {
@@ -86,6 +88,25 @@ func TestGetAssemblesOrderedView(t *testing.T) {
 	}
 	if p.Links[1].Name != "other-note" {
 		t.Errorf("link name = %q want other-note", p.Links[1].Name)
+	}
+	// Kind and (for web) the decoded target surface in the view.
+	if p.Links[0].Kind != "note" || p.Links[2].Kind != "web" || p.Links[3].Kind != "file" {
+		t.Errorf("link kinds = %q, %q, %q want note, web, file", p.Links[0].Kind, p.Links[2].Kind, p.Links[3].Kind)
+	}
+	if p.Links[2].Target != "https://example.com" {
+		t.Errorf("web link target = %q want https://example.com", p.Links[2].Target)
+	}
+	// A file link carries the page within the linked document; others carry 0.
+	if p.Links[3].Target != "/x/Book.pdf" || p.Links[3].TargetDocPage != 12 {
+		t.Errorf("file link target=%q docpage=%d want /x/Book.pdf, 12", p.Links[3].Target, p.Links[3].TargetDocPage)
+	}
+	if p.Links[0].TargetDocPage != 0 {
+		t.Errorf("note link should carry no doc page, got %d", p.Links[0].TargetDocPage)
+	}
+	// Target ids are note-link-only; web/file links leave them empty (omitted).
+	if p.Links[2].TargetFileID != "" || p.Links[2].TargetPageID != "" ||
+		p.Links[3].TargetFileID != "" || p.Links[3].TargetPageID != "" {
+		t.Errorf("web/file links should carry no target ids, got %+v %+v", p.Links[2], p.Links[3])
 	}
 }
 
