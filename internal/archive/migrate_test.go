@@ -4,9 +4,11 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/jdlugosz963/snorg/internal/snote"
+	diffpatch "github.com/njchilds90/go-diffpatch"
 )
 
 // stripVersion rewrites the JSON file at path with schema_version removed,
@@ -261,5 +263,94 @@ func TestMigrateV1LinkKinds(t *testing.T) {
 	// The "none" sentinels are blanked so they drop out of the JSON.
 	if pd.Links[1].TargetFileID != "" || pd.Links[1].TargetPageID != "" {
 		t.Errorf("unknown link should drop its \"none\" ids, got %+v", pd.Links[1])
+	}
+}
+
+// legacyDiff returns the pre-unified on-disk sidecar form: a JSON-encoded
+// go-diffpatch patch base→content, exactly what the old textmerge.Diff wrote.
+func legacyDiff(t *testing.T, base, content string) string {
+	t.Helper()
+	p, err := diffpatch.Diff(base, content)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := json.MarshalIndent(p, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
+}
+
+// TestMigrateLegacyEditDiff: a page whose <PAGEID>.md.diff still holds the legacy
+// JSON patch is converted to a unified diff by migrate, keeps reconstructing the
+// AI base, and a second run is a no-op.
+func TestMigrateLegacyEditDiff(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "F_TEST")
+	a := New(root)
+	if err := a.Write(note("Pa"), svgMap(map[string]string{"Pa": "<svg/>"})); err != nil {
+		t.Fatal(err)
+	}
+	base := "old line one\nold line two\n"
+	content := "old line one\nNEW line two\n"
+	if err := a.WriteAnalysisMD("F_TEST", "Pa", content); err != nil {
+		t.Fatal(err)
+	}
+	diffPath := a.editDiffPath("F_TEST", "Pa")
+	if err := os.WriteFile(diffPath, []byte(legacyDiff(t, base, content)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	stripVersion(t, filepath.Join(dir, "Pa.json")) // simulate a stale archive.
+
+	results, err := a.MigrateAll()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var gotDiffResult bool
+	for _, r := range results {
+		if r.Err != nil {
+			t.Errorf("%s %s: unexpected error %v", r.Kind, r.ID, r.Err)
+		}
+		if r.Kind == "diff" && r.ID == "Pa" && r.Outcome == MigrateUpgraded {
+			gotDiffResult = true
+		}
+	}
+	if !gotDiffResult {
+		t.Fatalf("no diff-migration result for Pa: %+v", results)
+	}
+
+	// The sidecar is now a unified diff, not the JSON struct.
+	got, _ := os.ReadFile(diffPath)
+	if !strings.Contains(string(got), "@@") || strings.Contains(string(got), "\"hunks\"") {
+		t.Fatalf("sidecar was not converted to a unified diff:\n%s", got)
+	}
+	// The AI base still reconstructs, and the page reads through the gate.
+	if _, err := a.ReadPage("F_TEST", "Pa"); err != nil {
+		t.Errorf("ReadPage after migrate: %v", err)
+	}
+	base2, err := a.ReadAnalysisBase("F_TEST", "Pa")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if base2 != base {
+		t.Errorf("reconstructed base = %q, want %q", base2, base)
+	}
+
+	// Idempotent: a second run neither reports a diff conversion nor rewrites it.
+	before, err := os.Stat(diffPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	results2, err := a.MigrateAll()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range results2 {
+		if r.Kind == "diff" {
+			t.Errorf("second migrate re-reported a diff conversion: %+v", r)
+		}
+	}
+	if after, _ := os.Stat(diffPath); !after.ModTime().Equal(before.ModTime()) {
+		t.Error("already-unified .md.diff was rewritten (mtime changed)")
 	}
 }

@@ -9,6 +9,7 @@ import (
 	"sort"
 
 	"github.com/jdlugosz963/snorg/internal/snote"
+	"github.com/jdlugosz963/snorg/internal/textmerge"
 )
 
 // Schema migration: the one place allowed to read stale on-disk grammars. Every
@@ -17,7 +18,9 @@ import (
 // schemaMigrations chain, then re-serializes it through the canonical Doc struct so
 // the bytes match what ingest would write. It never uses the gated accessors and
 // enumerates the archive via os.Stat/glob, so it works on exactly the stale archive
-// it exists to repair.
+// it exists to repair. It also normalizes the unversioned <PAGEID>.md.diff sidecar
+// (legacy JSON patch → unified diff) by content detection, since that file carries
+// no schema_version to walk.
 
 // migKind distinguishes the two versioned doc types so a step can transform them
 // differently. The version axis itself is archive-wide (one CurrentSchemaVersion).
@@ -74,6 +77,13 @@ var schemaMigrations = []func(migKind, map[string]any) error{
 		}
 		return nil
 	},
+	// v2 → v3: the <PAGEID>.md.diff sidecar changed from a JSON-encoded
+	// go-diffpatch patch to a normal unified diff. The versioned JSON grammar is
+	// unchanged, so this step is a no-op; the bump exists only to make the gated
+	// readers reject stale archives and funnel to migrate, whose sidecar pass
+	// (migrateEditDiff) does the actual conversion — the .md.diff carries no
+	// schema_version, so it cannot ride this chain.
+	func(migKind, map[string]any) error { return nil },
 }
 
 // realID reports whether a decoded JSON value is a present, non-"none" id string —
@@ -117,7 +127,7 @@ func (a *Archive) MigrateAll() ([]MigrateResult, error) {
 			return nil, err
 		}
 		for _, pid := range pageIDs {
-			out = append(out, a.migratePage(fileID, pid))
+			out = append(out, a.migratePage(fileID, pid)...)
 		}
 	}
 	return out, nil
@@ -155,7 +165,7 @@ func (a *Archive) MigratePages(pageIDs []string) ([]MigrateResult, error) {
 		pages := notes[fileID]
 		sort.Strings(pages)
 		for _, pid := range pages {
-			out = append(out, a.migratePage(fileID, pid))
+			out = append(out, a.migratePage(fileID, pid)...)
 		}
 	}
 	return out, nil
@@ -202,10 +212,52 @@ func (a *Archive) migrateNote(fileID string) MigrateResult {
 	return MigrateResult{Kind: kindNote.String(), ID: fileID, Outcome: outcome, Err: err}
 }
 
-func (a *Archive) migratePage(fileID, pageID string) MigrateResult {
+// migratePage migrates the page's <PAGEID>.json plus, as a second result, its
+// unversioned <PAGEID>.md.diff sidecar when that still holds the legacy JSON form
+// (migrateEditDiff). The sidecar pass is content-sniffed and runs regardless of
+// the JSON outcome, so it is idempotent and self-heals a crash between the two
+// writes; it contributes a result only when it actually converted or failed.
+func (a *Archive) migratePage(fileID, pageID string) []MigrateResult {
 	path := filepath.Join(a.Root, fileID, pageID+".json")
 	outcome, err := a.migrateFile(path, kindPage)
-	return MigrateResult{Kind: kindPage.String(), ID: pageID, Outcome: outcome, Err: err}
+	res := []MigrateResult{{Kind: kindPage.String(), ID: pageID, Outcome: outcome, Err: err}}
+	if r, ok := a.migrateEditDiff(fileID, pageID); ok {
+		res = append(res, r)
+	}
+	return res
+}
+
+// migrateEditDiff converts a page's <PAGEID>.md.diff from the legacy JSON patch to
+// a unified diff. ok is false when there is nothing to report (no sidecar, or it
+// is already unified). It reads/writes the sidecar raw (like every other migrate
+// reader), so it works on a stale archive. A degenerate legacy patch (no hunks)
+// removes the sidecar, since it encodes no divergence.
+func (a *Archive) migrateEditDiff(fileID, pageID string) (MigrateResult, bool) {
+	fail := func(err error) (MigrateResult, bool) {
+		return MigrateResult{Kind: "diff", ID: pageID, Err: err}, true
+	}
+	old, err := a.readEditDiff(fileID, pageID)
+	if err != nil {
+		return fail(err)
+	}
+	if old == "" {
+		return MigrateResult{}, false
+	}
+	unified, wasLegacy, err := textmerge.ConvertLegacyDiff(old)
+	if err != nil {
+		return fail(fmt.Errorf("%s.md.diff: %w", pageID, err))
+	}
+	if !wasLegacy {
+		return MigrateResult{}, false // already a unified diff.
+	}
+	if unified == "" {
+		if err := a.removeEditDiff(fileID, pageID); err != nil {
+			return fail(err)
+		}
+	} else if err := a.writeEditDiff(fileID, pageID, unified); err != nil {
+		return fail(err)
+	}
+	return MigrateResult{Kind: "diff", ID: pageID, Outcome: MigrateUpgraded}, true
 }
 
 // migrateFile walks one JSON file forward to CurrentSchemaVersion and rewrites it in

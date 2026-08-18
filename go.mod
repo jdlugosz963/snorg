@@ -8,6 +8,7 @@ require (
 	github.com/jdlugosz963/sntool v1.3.0
 	github.com/njchilds90/go-diffpatch v1.0.0
 	github.com/openai/openai-go v1.12.0
+	github.com/sourcegraph/go-diff v0.8.0
 	github.com/srwiley/oksvg v0.0.0-20221011165216-be6e8873101c
 	github.com/srwiley/rasterx v0.0.0-20220730225603-2ab79fcdd4ef
 	github.com/urfave/cli/v3 v3.10.1

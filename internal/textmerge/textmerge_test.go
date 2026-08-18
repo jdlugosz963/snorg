@@ -44,6 +44,23 @@ func TestDiffUnapplyRoundTrip(t *testing.T) {
 	}
 }
 
+func TestDiffIsUnifiedNotJSON(t *testing.T) {
+	d, err := Diff("a\nb\nc\n", "a\nB\nc\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"@@", "-b\n", "+B\n"} {
+		if !strings.Contains(d, want) {
+			t.Errorf("diff missing unified marker %q:\n%s", want, d)
+		}
+	}
+	for _, bad := range []string{"\"operation\"", "\"source_start\"", "{"} {
+		if strings.Contains(d, bad) {
+			t.Errorf("diff still looks like the JSON struct (contains %q):\n%s", bad, d)
+		}
+	}
+}
+
 func TestUnapplyEmptyDiff(t *testing.T) {
 	got, err := Unapply("content\n", "")
 	if err != nil {

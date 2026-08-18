@@ -11,7 +11,7 @@ import "github.com/jdlugosz963/snorg/internal/snote"
 // migration step) whenever the JSON contract changes; a future `migrate` command
 // walks stale files forward one version at a time. 0 (absent field) is
 // pre-versioning, and is also stale.
-const CurrentSchemaVersion = 2
+const CurrentSchemaVersion = 3
 
 // NoteDoc is note.json — file metadata plus ordered page placement.
 type NoteDoc struct {

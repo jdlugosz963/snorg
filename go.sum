@@ -4,14 +4,12 @@ github.com/epiclabs-io/diff3 v0.0.0-20260520111523-3b1669897fb1 h1:L5deMJUEMrC2l
 github.com/epiclabs-io/diff3 v0.0.0-20260520111523-3b1669897fb1/go.mod h1:PdN6OIagE78n5wNNOgGb3udE+GAGpST4iGc64ZZ2TFc=
 github.com/flosch/pongo2/v6 v6.1.0 h1:A/NJbrQJJD2B2mbpw3DRFwBYG0xpCr3vwFlEr46y1HQ=
 github.com/flosch/pongo2/v6 v6.1.0/go.mod h1:CuDpFm47R0uGGE7z13/tTlt1Y6zdxvr2RLT5LJhsHEU=
+github.com/google/go-cmp v0.5.2 h1:X2ev0eStA3AbceY54o37/0PQ/UWqKEiiO2dKL5OPaFM=
+github.com/google/go-cmp v0.5.2/go.mod h1:v8dTdLbMG2kIc/vJvl+f65V22dbkXbowE6jgT/gNBxE=
 github.com/gotranspile/cxgo v0.5.2 h1:wjVTZgzKt9OEwCjfXpjOBy8jwoTSHpBDWZHBIO7D0UE=
 github.com/gotranspile/cxgo v0.5.2/go.mod h1:GeAQpkzbCOjnhEutduK/RPrio2NIuy3jPSj8gqzhhwI=
 github.com/gotranspile/gotrace v0.0.0-20230726133510-8c9665a39b09 h1:4eJYLsj99j9Il7Dr8ERot9+/ooLJlNzSkZ2tdNKgaTE=
 github.com/gotranspile/gotrace v0.0.0-20230726133510-8c9665a39b09/go.mod h1:kSTWvjyngl5AGEKydceqXpD7/z9Cn+hbwFklaJhngxU=
-github.com/jdlugosz963/sntool v1.1.0 h1:XEeehmmzreToWm4nkChEAYPYAObMh4q+L5R48h8zF4k=
-github.com/jdlugosz963/sntool v1.1.0/go.mod h1:p7uTOMuyBd2KiX+2M9rcze+NkZozxhTzxUurFDHpKVA=
-github.com/jdlugosz963/sntool v1.2.0 h1:OcN8UWISxUVczYbt++WfrUscGPz//VYpEJz3YkgVcCo=
-github.com/jdlugosz963/sntool v1.2.0/go.mod h1:p7uTOMuyBd2KiX+2M9rcze+NkZozxhTzxUurFDHpKVA=
 github.com/jdlugosz963/sntool v1.3.0 h1:jMF+jKOQ24UTbmxeSo22kOcCobQRU43npRUB8MXkV7M=
 github.com/jdlugosz963/sntool v1.3.0/go.mod h1:p7uTOMuyBd2KiX+2M9rcze+NkZozxhTzxUurFDHpKVA=
 github.com/kr/pretty v0.2.1 h1:Fmg33tUaq4/8ym9TJN1x7sLJnHVwhP33CNkpYV/7rwI=
@@ -24,6 +22,8 @@ github.com/openai/openai-go v1.12.0 h1:NBQCnXzqOTv5wsgNC36PrFEiskGfO5wccfCWDo9S1
 github.com/openai/openai-go v1.12.0/go.mod h1:g461MYGXEXBVdV5SaR/5tNzNbSfwTBBefwc+LlDCK0Y=
 github.com/pmezard/go-difflib v1.0.0 h1:4DBwDE0NGyQoBHbLQYPwSUPoCMWR5BEzIk/f1lZbAQM=
 github.com/pmezard/go-difflib v1.0.0/go.mod h1:iKH77koFhYxTK1pcRnkKkqfTogsbg7gZNVY4sRDYZ/4=
+github.com/sourcegraph/go-diff v0.8.0 h1:ipIyu4cTsLbIrln4l0qtHA3r0a7gyK4ntKjtQytHhvY=
+github.com/sourcegraph/go-diff v0.8.0/go.mod h1:hWlcO7Al+UZStZAP8rBumHpCK5ZHQ5BXsMls8p4+F5E=
 github.com/srwiley/oksvg v0.0.0-20221011165216-be6e8873101c h1:km8GpoQut05eY3GiYWEedbTT0qnSxrCjsVbb7yKY1KE=
 github.com/srwiley/oksvg v0.0.0-20221011165216-be6e8873101c/go.mod h1:cNQ3dwVJtS5Hmnjxy6AgTPd0Inb3pW05ftPSX7NZO7Q=
 github.com/srwiley/rasterx v0.0.0-20220730225603-2ab79fcdd4ef h1:Ch6Q+AZUxDBCVqdkI8FSpFyZDtCVBc2VmejdNrm5rRQ=
