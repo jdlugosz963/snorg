@@ -1,3 +1,4 @@
 /snorg
 /dist/
 *.out
+.claude/
