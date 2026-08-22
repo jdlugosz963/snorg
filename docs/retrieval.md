@@ -9,12 +9,15 @@ through the CLI process boundary and stable JSON below.
 
 ```
 snorg [-a <archive-path>] list                  # one FILE_ID per line
+snorg [-a <archive-path>] list keywords|tags    # distinct labels (-l adds a count)
 snorg [-a <archive-path>] query <filter> [arg]  # one PAGEID per line
 snorg [-a <archive-path>] retrieve [PAGEID ...] # assembled notes as indented JSON
 ```
 
-`list` enumerates notes; `query` enumerates pages (`all`, `note <FILE_ID>`,
-`unanalyzed`, `keyword <regexp>`, `content <regexp>` (matched against the page's
+`list` enumerates notes (or, with the `keywords`/`tags` subcommands, the archive's
+distinct labels); `query` enumerates pages (`all`, `note <FILE_ID>`,
+`unanalyzed`, `keyword <regexp>` (device keywords), `tag <regexp>`
+(snorg-managed tags), `content <regexp>` (matched against the page's
 transcribed `<PAGEID>.md`), `starred`, `date <spec>` where the day is the
 PAGEID's leading 8 digits and spec is `today`/`yesterday`/`YYYY-MM-DD`/`FROM..TO`
 with open ends; a `not <filter>` prefix inverts any filter). `query` also reads
@@ -44,6 +47,7 @@ consumer never needs to know the on-disk file split. A whole note is
     "pages": [{
       "number": 1, "page_id": "P...", "starred": false,
       "svg": "F.../P....svg",
+      "tags": ["exam", "important"],
       "titles":   [{"rect": {"x":0,"y":0,"w":0,"h":0}, "level": 1,
                     "analysis": {"name": "Chapter 1"}}],
       "keywords": [{"text": "fizyka"}],
@@ -60,6 +64,8 @@ consumer never needs to know the on-disk file split. A whole note is
 
 - `archive` is the **absolute archive root** the pages' `svg` paths resolve against.
 - `pages` are in placement order (1-based `number`).
+- `tags` are snorg-managed labels (from the `tag` command), sorted and de-duplicated;
+  omitted when empty. Distinct from device `keywords` (read-only, set on the Supernote).
 - `svg` is **relative to the archive root**; resolve it as `join(archive, svg)`.
   Per-page paths stay relative (portable); the one absolute root travels in `archive`.
 - `kind` classifies the link: `note` (another `.note`), `file` (non-note document on

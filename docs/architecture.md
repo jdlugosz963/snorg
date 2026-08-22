@@ -6,8 +6,9 @@
 snorg [-a <archive-path>] [-c config.yaml ...] [--no-user-config] <command> [command flags] [args]
 
 snorg [-a <archive-path>] ingest [-j N] <file-or-dir>
-snorg [-a <archive-path>] list
+snorg [-a <archive-path>] list [-l] | list keywords|tags [-l]
 snorg [-a <archive-path>] query <filter> [arg]
+snorg [-a <archive-path>] tag [-r] <tag> [PAGEID ...]
 snorg [-a <archive-path>] retrieve [PAGEID ...]
 snorg [-a <archive-path>] analyze [--force] [PAGEID ...]
 snorg [-a <archive-path>] analyze-edit <PAGEID>
@@ -30,14 +31,18 @@ are attempted and failures summarized (non-zero exit). Re-ingest reconciles the
 note's directory in place (see Archive layout); it is the update path.
 
 `list`, `query` and `retrieve` are the read side — the platform-agnostic interface
-external tools build on (see [retrieval.md](retrieval.md)). `query` takes one
-filter per call — `all`, `note <FILE_ID>`, `unanalyzed`, `keyword <regexp>`
-(matched against `Keyword.Text`), `content <regexp>` (matched against the page's
-transcribed `<PAGEID>.md`), `starred`, `date <spec>`, and a `not <filter>`
+external tools build on (see [retrieval.md](retrieval.md)). `list` prints FILE_IDs,
+or (with the `keywords`/`tags` subcommands) the archive's distinct labels. `query`
+takes one filter per call — `all`, `note <FILE_ID>`, `unanalyzed`, `keyword <regexp>`
+(device keywords, matched against `Keyword.Text`), `tag <regexp>` (snorg-managed
+tags), `content <regexp>` (matched against the page's transcribed `<PAGEID>.md`),
+`starred`, `date <spec>`, and a `not <filter>`
 prefix that inverts any of them — and prints the PAGEID of each
 matching page, one per line. `retrieve`, `analyze` and `export` all take PAGEIDs
 as arguments, or read them one-per-line from stdin when none are given, so
-`query` pipes into any of them.
+`query` pipes into any of them. `tag` is the one write on the read side: it adds or
+removes a snorg-managed tag on the PAGEIDs (args or stdin), the archive-side
+organizing mechanism independent of device keywords.
 
 `retrieve` prints the selected pages assembled into a JSON array of `NoteView`s,
 grouped per owning note (full note metadata, only the requested pages); a whole
@@ -92,9 +97,9 @@ migrates its owning `note.json`. Idempotent, needs no provider config.
                               #   image: paths are relative to the declaring config file (see docs/templates.md)
 <archive>/<FILE_ID>/
     note.json          # schema_version + file metadata + ordered page placement (id, number)
-    <PAGEID>.json      # schema_version + per page: starred, background_hash, titles(rect,level,
-                       # analysis), keywords(text), links(...,analysis), analysis{source_hash,
-                       # fields, regions[](id,source_hash)}
+    <PAGEID>.json      # schema_version + per page: starred, background_hash, tags[] (snorg-managed),
+                       # titles(rect,level,analysis), keywords(text), links(...,analysis),
+                       # analysis{source_hash, fields, regions[](id,source_hash)}
     <PAGEID>.md        # per page: the transcription (Markdown), AI-produced and/or
                        # user-edited — always the effective content; for a templated
                        # page this holds the id-keyed per-box region sections instead
@@ -249,8 +254,9 @@ stdin / bare = whole archive), but a page selection also migrates its owning
   content}`, label/rect resolved from the template config) with an empty `analysis.content`.
 - `internal/query` — read-only metadata filter: walks every note/page via the `archive`
   accessors and returns the pages matching a `Predicate` (`All`, `Starred`, `Unanalyzed`,
-  `InNote(fileID)`, `Keyword(regexp)`, `Content(archive, regexp)` — the last reads each
-  page's `<PAGEID>.md`).
+  `InNote(fileID)`, `Keyword(regexp)`, `Tag(regexp)`, `Content(archive, regexp)` — the last reads each
+  page's `<PAGEID>.md`). The same walk backs the inventory aggregators `Keywords(a)`/`Tags(a)`
+  (distinct labels + per-value page counts, behind `list keywords`/`list tags`).
 - `internal/config` — loads + deep-merges YAML config (provider creds, analysis prompts,
   `ingest.svg` toggles, `export.template`, `templates:` regions); `Load` expands each file's
   `include:` list (other configs merged *over* the includer — "above includer" — recursively,

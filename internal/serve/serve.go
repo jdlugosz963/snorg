@@ -259,6 +259,7 @@ func newFlatLayout(views []*retrieve.NoteView) flatLayout {
 				FileID:  v.FileID,
 				PageID:  p.PageID,
 				Content: pageContent(p),
+				Tags:    pageTags(p),
 				Caption: fmt.Sprintf("%s · %d", name, p.Number),
 			})
 		}
@@ -292,6 +293,7 @@ type pageItem struct {
 	FileID  string
 	PageID  string
 	Content string // transcription markdown, shown under the enlarged page
+	Tags    string // "@tag @tag" of the page's snorg tags, shown under the enlarged page
 	Caption string // "<note name> · <page number>", or "" in a note's own gallery
 }
 
@@ -303,12 +305,22 @@ func pageContent(p retrieve.PageView) string {
 	return ""
 }
 
+// pageTags renders a page's snorg tags as a space-joined "@tag" list, or "" when
+// the page has none.
+func pageTags(p retrieve.PageView) string {
+	tags := make([]string, len(p.Tags))
+	for i, t := range p.Tags {
+		tags[i] = "@" + t
+	}
+	return strings.Join(tags, " ")
+}
+
 // notePages is a note's pages as caption-less grid tiles (the note gallery's
 // header already names the note).
 func notePages(v *retrieve.NoteView) []pageItem {
 	items := make([]pageItem, 0, len(v.Pages))
 	for _, p := range v.Pages {
-		items = append(items, pageItem{FileID: v.FileID, PageID: p.PageID, Content: pageContent(p)})
+		items = append(items, pageItem{FileID: v.FileID, PageID: p.PageID, Content: pageContent(p), Tags: pageTags(p)})
 	}
 	return items
 }
@@ -345,6 +357,7 @@ const shell = `<!doctype html>
   #lbtext { white-space: pre-wrap; word-break: break-word; max-width: 900px;
         width: 92vw; color: #eee; background: #1c1c1ccc; padding: .75rem 1rem;
         border-radius: 6px; font-size: .92rem; }
+  #lbtags { color: #9ecbff; font-size: .9rem; letter-spacing: .02em; }
   #lb button { position: fixed; top: 50%; transform: translateY(-50%);
         font-size: 2.5rem; color: #fff; background: none; border: 0;
         cursor: pointer; padding: 0 1rem; }
@@ -356,6 +369,7 @@ const shell = `<!doctype html>
   <button class="prev" aria-label="previous">&#8249;</button>
   <div class="lbinner">
     <object type="image/svg+xml"></object>
+    <div id="lbtags" hidden></div>
     <div id="lbtext" hidden></div>
   </div>
   <button class="next" aria-label="next">&#8250;</button>
@@ -365,14 +379,16 @@ const shell = `<!doctype html>
   var thumbs = Array.prototype.slice.call(document.querySelectorAll('.thumb'));
   if (!thumbs.length) return;
   var lb = document.getElementById('lb'), obj = lb.querySelector('object'),
-      txt = document.getElementById('lbtext'), i = 0;
+      txt = document.getElementById('lbtext'), tags = document.getElementById('lbtags'), i = 0;
   // The enlarged page is an <object> (a live SVG document), so its baked links —
   // retargeted to a viewer route (?page={pid}) with target="_top" — are clickable
   // and navigate the whole viewer; an <img> would render the SVG inertly.
   function show(n) { i = (n + thumbs.length) % thumbs.length;
     obj.data = thumbs[i].dataset.full;
     var el = thumbs[i].querySelector('.txt'), t = el ? el.textContent : '';
-    txt.textContent = t; txt.hidden = (t.trim() === ''); }
+    txt.textContent = t; txt.hidden = (t.trim() === '');
+    var tel = thumbs[i].querySelector('.tags'), tg = tel ? tel.textContent : '';
+    tags.textContent = tg; tags.hidden = (tg.trim() === ''); }
   function open(n) { show(n); lb.classList.add('open'); }
   function close() { lb.classList.remove('open'); obj.removeAttribute('data'); }
   thumbs.forEach(function (t, n) {
@@ -418,6 +434,7 @@ const shell = `<!doctype html>
   <button class="thumb" data-full="/svg/{{$p.FileID}}/{{$p.PageID}}.svg" data-pid="{{$p.PageID}}" aria-label="{{if $p.Caption}}{{$p.Caption}}{{else}}page {{$i}}{{end}}">
     <img src="/thumb/{{$p.FileID}}/{{$p.PageID}}.png" alt="" loading="lazy" decoding="async">
     <span class="txt" hidden>{{$p.Content}}</span>
+    <span class="tags" hidden>{{$p.Tags}}</span>
     {{if $p.Caption}}<div class="cap">{{$p.Caption}}</div>{{end}}
   </button>
   {{else}}

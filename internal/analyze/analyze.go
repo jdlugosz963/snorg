@@ -69,6 +69,22 @@ const (
 	Conflicted Outcome = "conflict" // resolve via analyze-edit
 )
 
+// RegionOutcome is one template box's outcome on a templated page: Skipped means
+// its fingerprint matched and the previous transcription was reused (no LLM call),
+// Analyzed/Updated means it was re-cropped and re-transcribed. Only analyze:true
+// boxes appear.
+type RegionOutcome struct {
+	ID      string
+	Outcome Outcome
+}
+
+// PageResult is what Page did: the page-level Outcome and, for a templated page,
+// the per-box RegionOutcomes (nil for a non-templated page).
+type PageResult struct {
+	Outcome Outcome
+	Regions []RegionOutcome
+}
+
 // Page locates the page owning pageID and analyzes it through t and g per spec:
 // the transcribed content goes to the <PAGEID>.md sidecar, per-region names and
 // custom fields into <PAGEID>.json. A page whose rasterized pixels match the
@@ -77,18 +93,18 @@ const (
 // update prompt so the new content diffs minimally against the old. User edits
 // (analyze-edit) are 3-way merged back onto the new transcription; overlaps
 // leave conflict markers in the md and report the Conflicted outcome.
-func Page(ctx context.Context, a *archive.Archive, t Transcriber, g Generator, spec Spec, pageID string, force bool) (Outcome, error) {
+func Page(ctx context.Context, a *archive.Archive, t Transcriber, g Generator, spec Spec, pageID string, force bool) (PageResult, error) {
 	fileID, err := a.FindPage(pageID)
 	if err != nil {
-		return "", err
+		return PageResult{}, err
 	}
 	pd, err := a.ReadPage(fileID, pageID)
 	if err != nil {
-		return "", err
+		return PageResult{}, err
 	}
 	svg, err := a.ReadSVG(fileID, pageID)
 	if err != nil {
-		return "", err
+		return PageResult{}, err
 	}
 	// A page drawn on a known template is matched to it by its background hash and
 	// analyzed per region (docs/templates); everything else keeps the whole-page
@@ -98,7 +114,7 @@ func Page(ctx context.Context, a *archive.Archive, t Transcriber, g Generator, s
 	// page geometry.
 	templates, err := a.Templates()
 	if err != nil {
-		return "", err
+		return PageResult{}, err
 	}
 	tmpl := templates.MatchBackground(pd.BackgroundHash)
 
@@ -108,7 +124,7 @@ func Page(ctx context.Context, a *archive.Archive, t Transcriber, g Generator, s
 	// check because the fingerprint is the ink mask of this very image.
 	img, err := rasterize(canonicalSVG(svg))
 	if err != nil {
-		return "", err
+		return PageResult{}, err
 	}
 	m := newMask(img)
 	hash := m.hash()
@@ -117,7 +133,7 @@ func Page(ctx context.Context, a *archive.Archive, t Transcriber, g Generator, s
 		// skips only when every analyze box's fingerprint also matches, so a
 		// moved/added box rect (config change, same handwriting) still re-triggers.
 		if tmpl == nil || regionsCurrent(m, tmpl, pd) {
-			return Skipped, nil
+			return PageResult{Outcome: Skipped}, nil
 		}
 	}
 
@@ -125,13 +141,14 @@ func Page(ctx context.Context, a *archive.Archive, t Transcriber, g Generator, s
 	// whole content. Either runs before the title/link regions so the page/content
 	// image is the first LLM call.
 	var outcome Outcome
+	var regions []RegionOutcome
 	if tmpl != nil {
-		outcome, err = analyzeRegions(ctx, a, t, spec, img, m, fileID, pageID, &pd, tmpl, hash, force)
+		outcome, regions, err = analyzeRegions(ctx, a, t, spec, img, m, fileID, pageID, &pd, tmpl, hash, force)
 	} else {
 		outcome, err = analyzeContent(ctx, a, t, g, spec, img, fileID, pageID, &pd, hash)
 	}
 	if err != nil {
-		return "", err
+		return PageResult{}, err
 	}
 
 	// Title/link region transcription is template-independent (device metadata) and
@@ -144,7 +161,7 @@ func Page(ctx context.Context, a *archive.Archive, t Transcriber, g Generator, s
 		}
 		name, err := transcribeRegion(ctx, t, img, title.Rect, spec.Title)
 		if err != nil {
-			return "", fmt.Errorf("title %d: %w", i, err)
+			return PageResult{}, fmt.Errorf("title %d: %w", i, err)
 		}
 		pd.Titles[i].Analysis = &archive.TitleAnalysis{Name: name}
 	}
@@ -154,15 +171,15 @@ func Page(ctx context.Context, a *archive.Archive, t Transcriber, g Generator, s
 		}
 		name, err := transcribeRegion(ctx, t, img, link.Rect, spec.Link)
 		if err != nil {
-			return "", fmt.Errorf("link %d: %w", i, err)
+			return PageResult{}, fmt.Errorf("link %d: %w", i, err)
 		}
 		pd.Links[i].Analysis = &archive.LinkAnalysis{Name: name}
 	}
 
 	if err := a.WritePage(fileID, pd); err != nil {
-		return "", err
+		return PageResult{}, err
 	}
-	return outcome, nil
+	return PageResult{Outcome: outcome, Regions: regions}, nil
 }
 
 // analyzeContent transcribes the whole page into the <PAGEID>.md content sidecar
@@ -226,10 +243,10 @@ func analyzeContent(ctx context.Context, a *archive.Archive, t Transcriber, g Ge
 // changed boxes are cropped and re-transcribed. The assembled document (config box
 // order, then tombstoned sections for ids no longer in the config) is 3-way-merged
 // with any user edits, and pd.Analysis.Regions records each analyze box's new fingerprint.
-func analyzeRegions(ctx context.Context, a *archive.Archive, t Transcriber, spec Spec, img *image.RGBA, m *mask, fileID, pageID string, pd *archive.PageDoc, tmpl *archive.Template, hash string, force bool) (Outcome, error) {
+func analyzeRegions(ctx context.Context, a *archive.Archive, t Transcriber, spec Spec, img *image.RGBA, m *mask, fileID, pageID string, pd *archive.PageDoc, tmpl *archive.Template, hash string, force bool) (Outcome, []RegionOutcome, error) {
 	base, err := a.ReadAnalysisBase(fileID, pageID)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	baseSections := archive.ParseRegions(base)
 
@@ -242,6 +259,7 @@ func analyzeRegions(ctx context.Context, a *archive.Archive, t Transcriber, spec
 
 	var sections []archive.RegionSection
 	var regions []archive.RegionDoc
+	var outcomes []RegionOutcome
 	known := map[string]bool{}
 	for _, box := range tmpl.Boxes {
 		known[box.ID] = true
@@ -255,12 +273,14 @@ func analyzeRegions(ctx context.Context, a *archive.Archive, t Transcriber, spec
 		}
 		rh := m.regionHash(box.Rect)
 		var text string
+		var boxOutcome Outcome
 		if !force && prev[box.ID] == rh {
 			text = archive.RegionText(baseSections, box.ID) // unchanged: reuse AI base
+			boxOutcome = Skipped
 		} else {
 			png, err := crop(img, box.Rect)
 			if err != nil {
-				return "", fmt.Errorf("region %s: %w", box.ID, err)
+				return "", nil, fmt.Errorf("region %s: %w", box.ID, err)
 			}
 			prompt := box.Prompt
 			if prompt == "" {
@@ -268,12 +288,19 @@ func analyzeRegions(ctx context.Context, a *archive.Archive, t Transcriber, spec
 			}
 			out, err := t.Transcribe(ctx, prompt, png)
 			if err != nil {
-				return "", fmt.Errorf("region %s: %w", box.ID, err)
+				return "", nil, fmt.Errorf("region %s: %w", box.ID, err)
 			}
 			text = strings.TrimSpace(out)
+			// Updated when the box had a previous transcription to diff against,
+			// Analyzed when it is a fresh box.
+			boxOutcome = Analyzed
+			if archive.RegionText(baseSections, box.ID) != "" {
+				boxOutcome = Updated
+			}
 		}
 		sections = append(sections, archive.RegionSection{ID: box.ID, Label: box.Label, Text: text})
 		regions = append(regions, archive.RegionDoc{ID: box.ID, SourceHash: rh})
+		outcomes = append(outcomes, RegionOutcome{ID: box.ID, Outcome: boxOutcome})
 	}
 	// Tombstone sections whose id is no longer any config box: keep them at the end
 	// (never delete transcribed text), ignored by export.
@@ -286,7 +313,7 @@ func analyzeRegions(ctx context.Context, a *archive.Archive, t Transcriber, spec
 	theirs := archive.AssembleRegions(sections)
 	_, conflicts, err := a.MergeAnalysis(fileID, pageID, theirs)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 
 	outcome := Analyzed
@@ -300,7 +327,7 @@ func analyzeRegions(ctx context.Context, a *archive.Archive, t Transcriber, spec
 	// still work; the region sections are the md content, so no fields here. The
 	// per-box fingerprints ride along under Analysis (analyze-produced state).
 	pd.Analysis = &archive.PageAnalysis{SourceHash: hash, Regions: regions}
-	return outcome, nil
+	return outcome, outcomes, nil
 }
 
 // regionsCurrent reports whether pd.Analysis.Regions already matches the template's

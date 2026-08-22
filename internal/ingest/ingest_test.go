@@ -26,7 +26,8 @@ func TestIngestSampleNote(t *testing.T) {
 	}
 
 	root := t.TempDir()
-	note, err := ingest.Run(sntool.New(), archive.New(root), notePath)
+	store := archive.New(root)
+	note, report, err := ingest.Run(sntool.New(), store, notePath)
 	if err != nil {
 		t.Fatalf("ingest: %v", err)
 	}
@@ -35,6 +36,15 @@ func TestIngestSampleNote(t *testing.T) {
 	}
 	if len(note.Pages) != 6 {
 		t.Fatalf("pages = %d want 6", len(note.Pages))
+	}
+	// First ingest reports every page newly written.
+	if !report.NoteChanged || len(report.Pages) != 6 {
+		t.Fatalf("first-ingest report = %+v, want note changed + 6 pages", report)
+	}
+	for _, p := range report.Pages {
+		if !p.New {
+			t.Errorf("first-ingest page %s not marked New: %+v", p.PageID, p)
+		}
 	}
 
 	dir := filepath.Join(root, note.FileID)
@@ -98,14 +108,18 @@ func TestIngestSampleNote(t *testing.T) {
 		t.Errorf("page6 link name = %q want external-note", p6.Links[0].Name)
 	}
 
-	// idempotent: re-ingest yields identical note.json
+	// idempotent: re-ingest yields identical note.json and an empty change report.
 	before, _ := os.ReadFile(filepath.Join(dir, "note.json"))
-	if _, err := ingest.Run(sntool.New(), archive.New(root), notePath); err != nil {
+	_, report2, err := ingest.Run(sntool.New(), store, notePath)
+	if err != nil {
 		t.Fatalf("re-ingest: %v", err)
 	}
 	after, _ := os.ReadFile(filepath.Join(dir, "note.json"))
 	if string(before) != string(after) {
 		t.Error("re-ingest changed note.json")
+	}
+	if report2.NoteChanged || len(report2.Pages) != 0 || len(report2.Pruned) != 0 {
+		t.Errorf("unchanged re-ingest report = %+v, want empty", report2)
 	}
 }
 
@@ -133,7 +147,7 @@ func TestIngestUpdatesArchive(t *testing.T) {
 	}
 
 	root := t.TempDir()
-	note, err := ingest.Run(sntool.New(), archive.New(root), filepath.Join(repo, "note.note"))
+	note, _, err := ingest.Run(sntool.New(), archive.New(root), filepath.Join(repo, "note.note"))
 	if err != nil {
 		t.Fatalf("ingest note: %v", err)
 	}
@@ -152,7 +166,7 @@ func TestIngestUpdatesArchive(t *testing.T) {
 	}
 
 	// Update to note2.note: page C92b removed.
-	if _, err := ingest.Run(sntool.New(), archive.New(root), filepath.Join(repo, "note2.note")); err != nil {
+	if _, _, err := ingest.Run(sntool.New(), archive.New(root), filepath.Join(repo, "note2.note")); err != nil {
 		t.Fatalf("ingest note2: %v", err)
 	}
 	for _, suffix := range []string{".json", ".svg", ".analysis.json"} {
@@ -180,7 +194,7 @@ func TestIngestUpdatesArchive(t *testing.T) {
 	}
 
 	// Update to note3.note: new page Q5Fob inserted before the last page.
-	if _, err := ingest.Run(sntool.New(), archive.New(root), filepath.Join(repo, "note3.note")); err != nil {
+	if _, _, err := ingest.Run(sntool.New(), archive.New(root), filepath.Join(repo, "note3.note")); err != nil {
 		t.Fatalf("ingest note3: %v", err)
 	}
 	var newPage archive.PageDoc

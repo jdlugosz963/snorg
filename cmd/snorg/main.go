@@ -11,8 +11,9 @@
 //	snorg [-a <archive-path>] [-c config.yaml ...] [--no-user-config] <command> [command flags] [args]
 //
 //	snorg [-a <archive-path>] ingest [-j N] <file-or-dir>
-//	snorg [-a <archive-path>] list
+//	snorg [-a <archive-path>] list [-l] | list keywords|tags [-l]
 //	snorg [-a <archive-path>] query <filter> [arg]
+//	snorg [-a <archive-path>] tag [-r] <tag> [PAGEID ...]
 //	snorg [-a <archive-path>] retrieve [PAGEID ...]
 //	snorg [-a <archive-path>] analyze [--force] [PAGEID ...]
 //	snorg [-a <archive-path>] analyze-edit <PAGEID>
@@ -95,6 +96,7 @@ func commands(a *app) []*cli.Command {
 		listCmd(a),
 		retrieveCmd(a),
 		queryCmd(a),
+		tagCmd(a),
 		analyzeCmd(a),
 		analyzeEditCmd(a),
 		exportCmd(a),
@@ -103,7 +105,7 @@ func commands(a *app) []*cli.Command {
 	}
 }
 
-const commandNames = "ingest, list, retrieve, query, analyze, analyze-edit, export, serve, migrate"
+const commandNames = "ingest, list, retrieve, query, tag, analyze, analyze-edit, export, serve, migrate"
 
 // root registers the global flags and subcommands and builds the shared client once
 // in its Before hook (which urfave/cli runs before the matched subcommand's action).
@@ -194,9 +196,12 @@ func ingestCmd(a *app) *cli.Command {
 }
 
 func listCmd(a *app) *cli.Command {
+	longFlag := func() cli.Flag {
+		return &cli.BoolFlag{Name: "long", Aliases: []string{"l"}}
+	}
 	return &cli.Command{
 		Name:  "list",
-		Usage: "list archived FILE_IDs, one per line; -l/--long adds the note name (tab-separated)",
+		Usage: "inspect an archive: bare = FILE_IDs; subcommands `keywords`/`tags` enumerate labels",
 		Flags: []cli.Flag{
 			&cli.BoolFlag{
 				Name:    "long",
@@ -204,9 +209,41 @@ func listCmd(a *app) *cli.Command {
 				Usage:   "annotate each FILE_ID with its note name (source sans .note), tab-separated",
 			},
 		},
+		Commands: []*cli.Command{
+			{
+				Name:  "keywords",
+				Usage: "list the archive's distinct device keywords, one per line; -l adds a tab-separated page count",
+				Flags: []cli.Flag{longFlag()},
+				Action: func(_ context.Context, cmd *cli.Command) error {
+					if cmd.Args().Len() != 0 {
+						return fmt.Errorf("usage: snorg [-a <archive-path>] list keywords [-l]")
+					}
+					vals, err := a.client.Keywords()
+					if err != nil {
+						return err
+					}
+					return printValueCounts(vals, cmd.Bool("long"))
+				},
+			},
+			{
+				Name:  "tags",
+				Usage: "list the archive's distinct snorg tags, one per line; -l adds a tab-separated page count",
+				Flags: []cli.Flag{longFlag()},
+				Action: func(_ context.Context, cmd *cli.Command) error {
+					if cmd.Args().Len() != 0 {
+						return fmt.Errorf("usage: snorg [-a <archive-path>] list tags [-l]")
+					}
+					vals, err := a.client.Tags()
+					if err != nil {
+						return err
+					}
+					return printValueCounts(vals, cmd.Bool("long"))
+				},
+			},
+		},
 		Action: func(_ context.Context, cmd *cli.Command) error {
 			if cmd.Args().Len() != 0 {
-				return fmt.Errorf("usage: snorg [-a <archive-path>] list")
+				return fmt.Errorf("usage: snorg [-a <archive-path>] list [-l] | list keywords|tags [-l]")
 			}
 			ids, err := a.client.List()
 			if err != nil {
@@ -232,6 +269,18 @@ func listCmd(a *app) *cli.Command {
 			return nil
 		},
 	}
+}
+
+// printValueCounts prints one label per line, or "<value>\t<count>" with long set.
+func printValueCounts(vals []snorg.ValueCount, long bool) error {
+	for _, v := range vals {
+		if long {
+			fmt.Printf("%s\t%d\n", v.Value, v.Count)
+		} else {
+			fmt.Println(v.Value)
+		}
+	}
+	return nil
 }
 
 func retrieveCmd(a *app) *cli.Command {
@@ -283,7 +332,7 @@ func queryCmd(a *app) *cli.Command {
 			&cli.BoolFlag{
 				Name:    "long",
 				Aliases: []string{"l"},
-				Usage:   "annotate each PAGEID with note, page#, *, headings and #keywords in tab-separated columns (do not pipe downstream)",
+				Usage:   "annotate each PAGEID with note, page#, *, headings, #keywords and @tags in tab-separated columns (do not pipe downstream)",
 			},
 		},
 		Action: func(_ context.Context, cmd *cli.Command) error {
@@ -320,11 +369,12 @@ func queryCmd(a *app) *cli.Command {
 }
 
 // printQueryLong emits the human-readable, browse-only form of a query result:
-// tab-separated columns "<PAGEID>\t<note>\tp<page#>\t<*?>\t<headings ' / '>\t#kw #kw",
+// tab-separated columns "<PAGEID>\t<note>\tp<page#>\t<*?>\t<headings ' / '>\t#kw #kw\t@tag @tag",
 // where note is the source filename sans ".note", page# comes from note.json's
 // placement, * marks a starred page (empty otherwise), headings are the analyzed
-// title names (empty until analyze runs) and keywords (device metadata, present
-// without analysis) are rendered as #tags so a fuzzy finder can filter on them.
+// title names (empty until analyze runs), keywords (device metadata, present
+// without analysis) are rendered as #kw and snorg-managed tags as @tag, so a fuzzy
+// finder can filter on either.
 // PAGEID stays the first whitespace field on purpose (`awk '{print $1}'` extracts
 // it for the fzf → serve workflow). Fixed \t separators keep the columns machine-
 // splittable (cut -f) regardless of value widths. This is deliberately NOT the
@@ -356,7 +406,7 @@ func printQueryLong(c *snorg.Client, matches []snorg.Match) error {
 		if err != nil {
 			return fmt.Errorf("note %s page %s: %w", m.FileID, m.PageID, err)
 		}
-		var headings, keywords []string
+		var headings, keywords, tags []string
 		for _, t := range pd.Titles {
 			if t.Analysis != nil {
 				headings = append(headings, t.Analysis.Name)
@@ -365,15 +415,56 @@ func printQueryLong(c *snorg.Client, matches []snorg.Match) error {
 		for _, k := range pd.Keywords {
 			keywords = append(keywords, "#"+k.Text)
 		}
+		for _, t := range pd.Tags {
+			tags = append(tags, "@"+t)
+		}
 		star := ""
 		if pd.Starred {
 			star = "*"
 		}
-		fmt.Printf("%s\t%s\tp%d\t%s\t%s\t%s\n",
+		fmt.Printf("%s\t%s\tp%d\t%s\t%s\t%s\t%s\n",
 			m.PageID, name, number, star,
-			strings.Join(headings, " / "), strings.Join(keywords, " "))
+			strings.Join(headings, " / "), strings.Join(keywords, " "), strings.Join(tags, " "))
 	}
 	return nil
+}
+
+func tagCmd(a *app) *cli.Command {
+	return &cli.Command{
+		Name:      "tag",
+		Usage:     "add (or -r remove) a snorg-managed tag on pages (no PAGEIDs = read them from stdin)",
+		ArgsUsage: "<tag> [PAGEID ...]",
+		Flags: []cli.Flag{
+			&cli.BoolFlag{Name: "remove", Aliases: []string{"r"}, Usage: "remove the tag instead of adding it"},
+		},
+		Action: func(_ context.Context, cmd *cli.Command) error {
+			args := cmd.Args().Slice()
+			if len(args) == 0 {
+				return fmt.Errorf("usage: snorg [-a <archive-path>] tag [-r] <tag> [PAGEID ...]")
+			}
+			tag, pageIDs := args[0], args[1:]
+			if len(pageIDs) == 0 {
+				var err error
+				if pageIDs, err = readLines(os.Stdin); err != nil {
+					return err
+				}
+				if len(pageIDs) == 0 {
+					return fmt.Errorf("no PAGEIDs given (arguments or stdin lines)")
+				}
+			}
+			remove := cmd.Bool("remove")
+			changed, err := a.client.Tag(tag, pageIDs, remove)
+			if err != nil {
+				return err
+			}
+			verb := "tagged"
+			if remove {
+				verb = "untagged"
+			}
+			fmt.Printf("%s %d of %d pages\n", verb, changed, len(pageIDs))
+			return nil
+		},
+	}
 }
 
 func analyzeCmd(a *app) *cli.Command {

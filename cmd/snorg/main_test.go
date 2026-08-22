@@ -109,7 +109,7 @@ func TestQueryLong(t *testing.T) {
 		},
 	}
 	svg := `<svg xmlns="http://www.w3.org/2000/svg" width="1920" height="2560"><path d="M10 10 L100 100"/></svg>`
-	if err := a.Write(n, map[string][]byte{"P1": []byte(svg), "P2": []byte(svg)}); err != nil {
+	if _, err := a.Write(n, map[string][]byte{"P1": []byte(svg), "P2": []byte(svg)}); err != nil {
 		t.Fatal(err)
 	}
 	// Simulate analyze having transcribed two titles on P1; P2 stays unanalyzed.
@@ -119,6 +119,7 @@ func TestQueryLong(t *testing.T) {
 	}
 	pd.Titles[0].Analysis = &archive.TitleAnalysis{Name: "Agenda"}
 	pd.Titles[1].Analysis = &archive.TitleAnalysis{Name: "Action items"}
+	pd.Tags = []string{"important"}
 	if err := a.WritePage("F_TEST", pd); err != nil {
 		t.Fatal(err)
 	}
@@ -132,13 +133,73 @@ func TestQueryLong(t *testing.T) {
 
 	// Annotated form: tab-separated columns; * marks the starred page (empty
 	// otherwise), analyzed headings join " / " (empty on the unanalyzed page),
-	// keywords render as #tags (present even without analysis).
-	want := "P1\tmeeting-notes\tp1\t*\tAgenda / Action items\t#work #q1\n" +
-		"P2\tmeeting-notes\tp2\t\t\t#notes\n"
+	// keywords render as #kw and snorg tags as @tag (both present without analysis).
+	want := "P1\tmeeting-notes\tp1\t*\tAgenda / Action items\t#work #q1\t@important\n" +
+		"P2\tmeeting-notes\tp2\t\t\t#notes\t\n"
 	if got := captureStdout(t, func() error {
 		return root().Run(ctx, []string{"snorg", "-a", arch, "query", "-l", "all"})
 	}); got != want {
 		t.Errorf("query -l all = %q, want %q", got, want)
+	}
+}
+
+// TestTagCommand drives the tag command end-to-end and confirms the tag is
+// queryable (query tag) and enumerable (list tags) afterwards.
+func TestTagCommand(t *testing.T) {
+	ctx := context.Background()
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	arch := t.TempDir()
+
+	a := archive.New(arch)
+	n := &snote.Note{
+		FileID: "F_TEST",
+		Source: "notes.note",
+		Pages: []snote.Page{
+			{ID: "P1", Number: 1},
+			{ID: "P2", Number: 2},
+		},
+	}
+	svg := `<svg xmlns="http://www.w3.org/2000/svg"><path d="M0 0"/></svg>`
+	if _, err := a.Write(n, map[string][]byte{"P1": []byte(svg), "P2": []byte(svg)}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Tag P1 with "work".
+	if got := captureStdout(t, func() error {
+		return root().Run(ctx, []string{"snorg", "-a", arch, "tag", "work", "P1"})
+	}); !strings.Contains(got, "tagged 1 of 1") {
+		t.Errorf("tag output = %q, want 'tagged 1 of 1'", got)
+	}
+
+	// query tag finds P1 only.
+	if got := captureStdout(t, func() error {
+		return root().Run(ctx, []string{"snorg", "-a", arch, "query", "tag", "work"})
+	}); got != "P1\n" {
+		t.Errorf("query tag work = %q, want %q", got, "P1\n")
+	}
+
+	// list tags enumerates the value; -l adds the count.
+	if got := captureStdout(t, func() error {
+		return root().Run(ctx, []string{"snorg", "-a", arch, "list", "tags"})
+	}); got != "work\n" {
+		t.Errorf("list tags = %q, want %q", got, "work\n")
+	}
+	if got := captureStdout(t, func() error {
+		return root().Run(ctx, []string{"snorg", "-a", arch, "list", "tags", "-l"})
+	}); got != "work\t1\n" {
+		t.Errorf("list tags -l = %q, want %q", got, "work\t1\n")
+	}
+
+	// Removing the tag empties the archive's tag set.
+	if got := captureStdout(t, func() error {
+		return root().Run(ctx, []string{"snorg", "-a", arch, "tag", "-r", "work", "P1"})
+	}); !strings.Contains(got, "untagged 1 of 1") {
+		t.Errorf("tag -r output = %q, want 'untagged 1 of 1'", got)
+	}
+	if got := captureStdout(t, func() error {
+		return root().Run(ctx, []string{"snorg", "-a", arch, "list", "tags"})
+	}); got != "" {
+		t.Errorf("list tags after removal = %q, want empty", got)
 	}
 }
 

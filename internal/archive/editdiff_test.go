@@ -10,7 +10,7 @@ import (
 func editArchive(t *testing.T) *Archive {
 	t.Helper()
 	a := New(t.TempDir())
-	if err := a.Write(note("Pa"), svgMap(map[string]string{"Pa": "<svg/>"})); err != nil {
+	if _, err := a.Write(note("Pa"), svgMap(map[string]string{"Pa": "<svg/>"})); err != nil {
 		t.Fatal(err)
 	}
 	return a
@@ -209,14 +209,14 @@ func TestWritePrunesEditDiff(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := a.Write(note("Pa"), svgMap(map[string]string{"Pa": "<svg/>"})); err != nil {
+	if _, err := a.Write(note("Pa"), svgMap(map[string]string{"Pa": "<svg/>"})); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(a.diffPath("F_TEST", "Pa")); err != nil {
 		t.Errorf("edit diff not preserved across re-ingest: %v", err)
 	}
 
-	if err := a.Write(note("Pb"), svgMap(map[string]string{"Pb": "<svg/>"})); err != nil {
+	if _, err := a.Write(note("Pb"), svgMap(map[string]string{"Pb": "<svg/>"})); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(a.diffPath("F_TEST", "Pa")); !os.IsNotExist(err) {

@@ -19,7 +19,7 @@ func templatedPage(t *testing.T) *archive.Archive {
 	a := archive.New(t.TempDir())
 	note := &snote.Note{FileID: "F_A", Pages: []snote.Page{{ID: "Pa", Number: 1}}}
 	svg := []byte(`<svg xmlns="http://www.w3.org/2000/svg"><path d="M1 1 L2 2"/></svg>`)
-	if err := a.Write(note, map[string][]byte{"Pa": svg}); err != nil {
+	if _, err := a.Write(note, map[string][]byte{"Pa": svg}); err != nil {
 		t.Fatal(err)
 	}
 	img := []byte("tmpl-image")

@@ -40,6 +40,23 @@ func TestPublicSurface(t *testing.T) {
 		t.Errorf("ParseDateSpec = (%q, %q, %v)", from, to, err)
 	}
 
+	// The tag filter and the tag/inventory methods are reachable through the facade.
+	if _, err := c.ParseFilter("tag", []string{"work"}); err != nil {
+		t.Errorf("ParseFilter tag: %v", err)
+	}
+	tags, err := c.Tags()
+	if err != nil {
+		t.Fatalf("Tags: %v", err)
+	}
+	if len(tags) != 0 {
+		t.Errorf("empty archive Tags = %v, want none", tags)
+	}
+	// Name the alias, and prove Tag is callable (an unknown page is an error).
+	var _ []snorg.ValueCount = tags
+	if _, err := c.Tag("work", []string{"Pmissing"}, false); err == nil {
+		t.Error("Tag on an unknown PAGEID should error")
+	}
+
 	// Config is nameable and its sections reachable via fields.
 	cfg, err := snorg.LoadConfig(nil)
 	if err != nil {

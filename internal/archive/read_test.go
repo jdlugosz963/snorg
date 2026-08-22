@@ -14,7 +14,7 @@ func TestListReturnsSortedNoteDirs(t *testing.T) {
 	a := New(root)
 	for _, id := range []string{"F_B", "F_A"} {
 		n := &snote.Note{FileID: id, Pages: []snote.Page{{ID: "Pa", Number: 1}}}
-		if err := a.Write(n, svgMap(map[string]string{"Pa": "<svg/>"})); err != nil {
+		if _, err := a.Write(n, svgMap(map[string]string{"Pa": "<svg/>"})); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -47,7 +47,7 @@ func TestReadNoteAndPageRoundTrip(t *testing.T) {
 			{ID: "Pa", Number: 1, Keywords: []snote.Keyword{{Text: "hello"}}},
 		},
 	}
-	if err := a.Write(n, svgMap(map[string]string{"Pa": "<svg/>"})); err != nil {
+	if _, err := a.Write(n, svgMap(map[string]string{"Pa": "<svg/>"})); err != nil {
 		t.Fatal(err)
 	}
 
@@ -71,7 +71,7 @@ func TestReadNoteAndPageRoundTrip(t *testing.T) {
 func TestAnalysisMDRoundTrip(t *testing.T) {
 	a := New(t.TempDir())
 	n := &snote.Note{FileID: "F_TEST", Pages: []snote.Page{{ID: "Pa", Number: 1}}}
-	if err := a.Write(n, svgMap(map[string]string{"Pa": "<svg/>"})); err != nil {
+	if _, err := a.Write(n, svgMap(map[string]string{"Pa": "<svg/>"})); err != nil {
 		t.Fatal(err)
 	}
 
@@ -90,7 +90,7 @@ func TestAnalysisMDRoundTrip(t *testing.T) {
 
 	// Pruning the page removes the sidecar with the rest of <PAGEID>.*.
 	empty := &snote.Note{FileID: "F_TEST", Pages: []snote.Page{{ID: "Pb", Number: 1}}}
-	if err := a.Write(empty, svgMap(map[string]string{"Pb": "<svg/>"})); err != nil {
+	if _, err := a.Write(empty, svgMap(map[string]string{"Pb": "<svg/>"})); err != nil {
 		t.Fatal(err)
 	}
 	mustNotExist(t, filepath.Join(a.Root, "F_TEST", "Pa.md"))

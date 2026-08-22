@@ -33,7 +33,7 @@ func setTemplate(t *testing.T, a *archive.Archive, boxes ...archive.Box) {
 func setupTemplated(t *testing.T, boxRect snote.Rect) (*archive.Archive, string) {
 	t.Helper()
 	a := archive.New(t.TempDir())
-	if err := a.Write(sampleNote(), map[string][]byte{"Pa": []byte(sampleSVG)}); err != nil {
+	if _, err := a.Write(sampleNote(), map[string][]byte{"Pa": []byte(sampleSVG)}); err != nil {
 		t.Fatal(err)
 	}
 	img := []byte("prawo-template-bytes")
@@ -73,12 +73,12 @@ func regionReplies() map[string]string {
 func TestTemplatedPageWritesRegionsNotContent(t *testing.T) {
 	a, _ := setupTemplated(t, wholePage)
 	tr := &fakeTranscriber{replies: regionReplies()}
-	outcome, err := Page(context.Background(), a, tr, tr, regionSpec(), "Pa", false)
+	res, err := Page(context.Background(), a, tr, tr, regionSpec(), "Pa", false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if outcome != Analyzed {
-		t.Errorf("outcome = %q, want %q", outcome, Analyzed)
+	if res.Outcome != Analyzed {
+		t.Errorf("outcome = %q, want %q", res.Outcome, Analyzed)
 	}
 	// The page md carries the region-section transcription...
 	md, err := a.ReadAnalysisMD("F_A", "Pa")
@@ -108,12 +108,12 @@ func TestTemplatedUnchangedPageSkips(t *testing.T) {
 		t.Fatal(err)
 	}
 	tr.calls = 0
-	outcome, err := Page(context.Background(), a, tr, tr, regionSpec(), "Pa", false)
+	res, err := Page(context.Background(), a, tr, tr, regionSpec(), "Pa", false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if outcome != Skipped {
-		t.Errorf("outcome = %q, want %q", outcome, Skipped)
+	if res.Outcome != Skipped {
+		t.Errorf("outcome = %q, want %q", res.Outcome, Skipped)
 	}
 	if tr.calls != 0 {
 		t.Errorf("skipped page made %d LLM calls", tr.calls)
@@ -133,11 +133,11 @@ func TestMovedBoxReTriggers(t *testing.T) {
 	// stroke. Strokes are untouched; only the rect moved.
 	setTemplate(t, a, bodyBox("body", snote.Rect{X: 960, Y: 1280, W: 960, H: 1280}))
 	tr.calls = 0
-	outcome, err := Page(context.Background(), a, tr, tr, regionSpec(), "Pa", false)
+	res, err := Page(context.Background(), a, tr, tr, regionSpec(), "Pa", false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if outcome == Skipped {
+	if res.Outcome == Skipped {
 		t.Error("a moved box rect must re-trigger analysis, not skip")
 	}
 	if tr.calls == 0 {
@@ -181,7 +181,7 @@ func TestTwoBoxesGetDistinctFingerprints(t *testing.T) {
 	a := archive.New(t.TempDir())
 	// One <path>, two filled shapes: one near the top, one near the bottom.
 	svgTwo := svgDoc(pathEl(filledRect(100, 200, 200, 200)+" "+filledRect(100, 1800, 200, 200), `fill="#000000"`))
-	if err := a.Write(sampleNote(), map[string][]byte{"Pa": svgTwo}); err != nil {
+	if _, err := a.Write(sampleNote(), map[string][]byte{"Pa": svgTwo}); err != nil {
 		t.Fatal(err)
 	}
 	img := []byte("two-band-template")
@@ -208,6 +208,73 @@ func TestTwoBoxesGetDistinctFingerprints(t *testing.T) {
 	}
 	if pd.Analysis.Regions[0].SourceHash == pd.Analysis.Regions[1].SourceHash {
 		t.Errorf("two boxes over different stroke bands share a source hash: %s", pd.Analysis.Regions[0].SourceHash)
+	}
+}
+
+// regionOutcome returns the Outcome reported for box id, or fails.
+func regionOutcome(t *testing.T, res PageResult, id string) Outcome {
+	t.Helper()
+	for _, r := range res.Regions {
+		if r.ID == id {
+			return r.Outcome
+		}
+	}
+	t.Fatalf("no region outcome for %q in %+v", id, res.Regions)
+	return ""
+}
+
+// TestPerRegionOutcomes: on a two-box templated page, a fresh analysis reports both
+// boxes Analyzed; after moving only one box's rect, re-analysis reports that box
+// re-transcribed (Updated) and the untouched box Skipped.
+func TestPerRegionOutcomes(t *testing.T) {
+	a := archive.New(t.TempDir())
+	svgTwo := svgDoc(pathEl(filledRect(100, 200, 200, 200)+" "+filledRect(100, 1800, 200, 200), `fill="#000000"`))
+	if _, err := a.Write(sampleNote(), map[string][]byte{"Pa": svgTwo}); err != nil {
+		t.Fatal(err)
+	}
+	img := []byte("two-band-template")
+	sum := sha256.Sum256(img)
+	hash := hex.EncodeToString(sum[:])
+	if err := os.WriteFile(templateImgPath(a), img, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	setTemplate(t, a,
+		bodyBox("top", snote.Rect{X: 0, Y: 0, W: 1920, H: 800}),
+		bodyBox("bot", snote.Rect{X: 0, Y: 1600, W: 1920, H: 960}),
+	)
+	pd, _ := a.ReadPage("F_A", "Pa")
+	pd.BackgroundHash = hash
+	a.WritePage("F_A", pd)
+
+	tr := &fakeTranscriber{replies: regionReplies()}
+	res, err := Page(context.Background(), a, tr, tr, regionSpec(), "Pa", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Regions) != 2 {
+		t.Fatalf("first analyze regions = %+v want 2", res.Regions)
+	}
+	if o := regionOutcome(t, res, "top"); o != Analyzed {
+		t.Errorf("fresh top outcome = %q want %q", o, Analyzed)
+	}
+	if o := regionOutcome(t, res, "bot"); o != Analyzed {
+		t.Errorf("fresh bot outcome = %q want %q", o, Analyzed)
+	}
+
+	// Move only the top box (its fingerprint changes); bot stays put.
+	setTemplate(t, a,
+		bodyBox("top", snote.Rect{X: 0, Y: 400, W: 1920, H: 800}),
+		bodyBox("bot", snote.Rect{X: 0, Y: 1600, W: 1920, H: 960}),
+	)
+	res, err = Page(context.Background(), a, tr, tr, regionSpec(), "Pa", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if o := regionOutcome(t, res, "top"); o != Updated {
+		t.Errorf("moved top outcome = %q want %q", o, Updated)
+	}
+	if o := regionOutcome(t, res, "bot"); o != Skipped {
+		t.Errorf("untouched bot outcome = %q want %q", o, Skipped)
 	}
 }
 

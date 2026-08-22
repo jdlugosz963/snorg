@@ -32,6 +32,9 @@ func InNote(fileID string) Predicate { return query.InNote(fileID) }
 // Keyword matches pages with a device keyword matching re.
 func Keyword(re *regexp.Regexp) Predicate { return query.Keyword(re) }
 
+// Tag matches pages with a snorg-managed tag matching re.
+func Tag(re *regexp.Regexp) Predicate { return query.Tag(re) }
+
 // Date matches pages whose day (from the PAGEID's leading 8 digits) is within the
 // inclusive [from, to] range, each "YYYYMMDD"; an empty bound is open.
 func Date(from, to string) Predicate { return query.Date(from, to) }
@@ -41,12 +44,12 @@ func Date(from, to string) Predicate { return query.Date(from, to) }
 func (c *Client) Content(re *regexp.Regexp) Predicate { return query.Content(c.arch, re) }
 
 // QueryFilters lists the filter words ParseFilter accepts.
-const QueryFilters = "all, note <FILE_ID>, unanalyzed, keyword <regexp>, content <regexp>, starred, date <spec>, not <filter> (inverse)"
+const QueryFilters = "all, note <FILE_ID>, unanalyzed, keyword <regexp>, tag <regexp>, content <regexp>, starred, date <spec>, not <filter> (inverse)"
 
 // ParseFilter builds a Predicate from a filter word and its arguments — the string
 // DSL behind the CLI's query command: all, starred, unanalyzed, note <FILE_ID>,
-// keyword <regexp>, content <regexp>, date <spec> (today|yesterday|YYYY-MM-DD|
-// FROM..TO with open ends), and a "not" prefix that inverts any filter.
+// keyword <regexp>, tag <regexp>, content <regexp>, date <spec> (today|yesterday|
+// YYYY-MM-DD|FROM..TO with open ends), and a "not" prefix that inverts any filter.
 func (c *Client) ParseFilter(filter string, args []string) (Predicate, error) {
 	arity := func(n int, usage string) error {
 		if len(args) != n {
@@ -87,6 +90,15 @@ func (c *Client) ParseFilter(filter string, args []string) (Predicate, error) {
 			return nil, fmt.Errorf("invalid keyword regexp: %w", err)
 		}
 		return Keyword(re), nil
+	case "tag":
+		if err := arity(1, "tag <regexp>"); err != nil {
+			return nil, err
+		}
+		re, err := regexp.Compile(args[0])
+		if err != nil {
+			return nil, fmt.Errorf("invalid tag regexp: %w", err)
+		}
+		return Tag(re), nil
 	case "content":
 		if err := arity(1, "content <regexp>"); err != nil {
 			return nil, err

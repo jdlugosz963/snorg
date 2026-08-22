@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/jdlugosz963/snorg/internal/snote"
@@ -60,6 +61,40 @@ func DefaultSVGPipeline() SVGPipeline {
 // New returns an Archive rooted at root with the default SVG pipeline.
 func New(root string) *Archive { return &Archive{Root: root, SVG: DefaultSVGPipeline()} }
 
+// WriteReport is what one Write changed on disk: whether note.json was rewritten,
+// the pages that were newly written or changed (Pages), and the ids of pages
+// pruned because they left the note. It is the incremental reconcile made
+// observable — an all-false/empty report means the note was already current.
+type WriteReport struct {
+	FileID      string
+	NoteChanged bool
+	Pages       []PageWriteReport
+	Pruned      []string
+}
+
+// PageWriteReport is one page's change detail from Write. It is present only for a
+// page that was new or whose bytes changed; a page written unchanged produces no
+// entry. New means the page's <PAGEID>.json did not exist before this write.
+// DroppedRegions lists title/link analyses that were not carried forward because
+// their rect moved (empty on a first ingest, where there is nothing to carry).
+type PageWriteReport struct {
+	PageID            string
+	New               bool
+	JSONChanged       bool
+	SVGChanged        bool
+	BackgroundChanged bool
+	DroppedRegions    []DroppedRegion
+}
+
+// DroppedRegion identifies a per-region (title/link) analysis that re-ingest could
+// not carry forward: the old region carried an analysis but its rect no longer
+// matches any region in the re-ingested page, so the analysis is dropped and the
+// region will be re-transcribed by the next analyze run.
+type DroppedRegion struct {
+	Kind string // "title" | "link"
+	Rect snote.Rect
+}
+
 // Write registers a note keyed by its file id, reconciling the note's directory
 // in place rather than rebuilding it. Pages no longer present are pruned (all of
 // their <PAGEID>.* files, including derived analyses); note.json and per-page
@@ -70,16 +105,17 @@ func New(root string) *Archive { return &Archive{Root: root, SVG: DefaultSVGPipe
 // note's backgrounds/ subfolder (extractBackground), prev/next navigation zones
 // (injectNav), clickable note links (injectLinks) and the diff-friendly reflow
 // (formatSVG) — each stage individually toggleable, all on by default.
-func (a *Archive) Write(n *snote.Note, svgs map[string][]byte) error {
+func (a *Archive) Write(n *snote.Note, svgs map[string][]byte) (*WriteReport, error) {
 	if n.FileID == "" {
-		return fmt.Errorf("note has empty file id")
+		return nil, fmt.Errorf("note has empty file id")
 	}
 	dir := filepath.Join(a.Root, n.FileID)
+	report := &WriteReport{FileID: n.FileID}
 
 	current := make(map[string]bool, len(n.Pages))
 	for _, p := range n.Pages {
 		if p.ID == "" {
-			return fmt.Errorf("page %d has empty id", p.Number)
+			return nil, fmt.Errorf("page %d has empty id", p.Number)
 		}
 		current[p.ID] = true
 	}
@@ -89,31 +125,36 @@ func (a *Archive) Write(n *snote.Note, svgs map[string][]byte) error {
 	// than after note.json is already rewritten. The map carries analyses forward.
 	oldPages, err := a.preflight(n.FileID, n.Pages)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return fmt.Errorf("create %s: %w", dir, err)
+		return nil, fmt.Errorf("create %s: %w", dir, err)
 	}
 
 	// Prune pages that disappeared from the note (with all their artifacts).
 	existing, err := archivedPageIDs(dir)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	for id := range existing {
 		if !current[id] {
 			if err := removePageFiles(dir, id); err != nil {
-				return err
+				return nil, err
 			}
+			report.Pruned = append(report.Pruned, id)
 		}
 	}
+	sort.Strings(report.Pruned)
 
-	if err := writeJSONIfChanged(filepath.Join(dir, "note.json"), noteDoc(n)); err != nil {
-		return err
+	noteChanged, err := writeJSONIfChanged(filepath.Join(dir, "note.json"), noteDoc(n))
+	if err != nil {
+		return nil, err
 	}
+	report.NoteChanged = noteChanged
 	for i, p := range n.Pages {
 		pd := pageDoc(p)
+		pc := PageWriteReport{PageID: p.ID}
 		// Stamp the template selector from the source SVG (before the background
 		// pipeline runs), so it is captured under every background mode. Absent
 		// inline background (blank page) leaves it empty.
@@ -128,18 +169,25 @@ func (a *Archive) Write(n *snote.Note, svgs map[string][]byte) error {
 		// Region fingerprints ride along inside Analysis, so this carries them too.
 		if old, ok := oldPages[p.ID]; ok {
 			pd.Analysis = old.Analysis
-			carryRegionAnalyses(&pd, old)
+			pd.Tags = old.Tags
+			pc.DroppedRegions = carryRegionAnalyses(&pd, old)
+		} else {
+			pc.New = true
 		}
-		if err := writeJSONIfChanged(filepath.Join(dir, p.ID+".json"), pd); err != nil {
-			return err
+		jsonChanged, err := writeJSONIfChanged(filepath.Join(dir, p.ID+".json"), pd)
+		if err != nil {
+			return nil, err
 		}
+		pc.JSONChanged = jsonChanged
 		if svg, ok := svgs[p.ID]; ok {
 			if a.SVG.Background == BackgroundExtract {
 				rewritten, img, name, hasBG := extractBackground(svg)
 				if hasBG {
-					if err := writeBackground(dir, name, img); err != nil {
-						return fmt.Errorf("write background for page %s: %w", p.ID, err)
+					bgChanged, err := writeBackground(dir, name, img)
+					if err != nil {
+						return nil, fmt.Errorf("write background for page %s: %w", p.ID, err)
 					}
+					pc.BackgroundChanged = bgChanged
 					svg = rewritten
 				}
 			} else {
@@ -163,12 +211,17 @@ func (a *Archive) Write(n *snote.Note, svgs map[string][]byte) error {
 			if a.SVG.Format {
 				svg = formatSVG(svg)
 			}
-			if err := writeFileIfChanged(filepath.Join(dir, p.ID+".svg"), svg); err != nil {
-				return fmt.Errorf("write svg for page %s: %w", p.ID, err)
+			svgChanged, err := writeFileIfChanged(filepath.Join(dir, p.ID+".svg"), svg)
+			if err != nil {
+				return nil, fmt.Errorf("write svg for page %s: %w", p.ID, err)
 			}
+			pc.SVGChanged = svgChanged
+		}
+		if pc.New || pc.JSONChanged || pc.SVGChanged || pc.BackgroundChanged || len(pc.DroppedRegions) > 0 {
+			report.Pages = append(report.Pages, pc)
 		}
 	}
-	return nil
+	return report, nil
 }
 
 // preflight reads the note's kept pages through the schema-gated reader before Write
@@ -196,8 +249,10 @@ func (a *Archive) preflight(fileID string, pages []snote.Page) (map[string]PageD
 // matched by exact rect (the region's identity: same rect = same handwriting
 // underneath, even if the link's target changed). Regions that moved or resized
 // drop their analysis and get re-transcribed by the next analyze run. Duplicate
-// rects are consumed in order, each old analysis at most once.
-func carryRegionAnalyses(pd *PageDoc, old PageDoc) {
+// rects are consumed in order, each old analysis at most once. It returns the old
+// regions whose analysis was non-nil but went unconsumed — the dropped analyses,
+// in title-then-link, old-document order.
+func carryRegionAnalyses(pd *PageDoc, old PageDoc) []DroppedRegion {
 	titles := map[snote.Rect][]*TitleAnalysis{}
 	for _, t := range old.Titles {
 		titles[t.Rect] = append(titles[t.Rect], t.Analysis)
@@ -218,6 +273,32 @@ func carryRegionAnalyses(pd *PageDoc, old PageDoc) {
 			links[l.Rect] = q[1:]
 		}
 	}
+	// Any old analysis left in the queues had no matching rect in the new page: it
+	// is dropped. Report in old-document order (titles first, then links) so the
+	// result is deterministic; consume each queue front-to-back to stay in sync
+	// with the matching loops above.
+	var dropped []DroppedRegion
+	for _, t := range old.Titles {
+		q := titles[t.Rect]
+		if len(q) == 0 {
+			continue
+		}
+		titles[t.Rect] = q[1:]
+		if q[0] != nil {
+			dropped = append(dropped, DroppedRegion{Kind: "title", Rect: t.Rect})
+		}
+	}
+	for _, l := range old.Links {
+		q := links[l.Rect]
+		if len(q) == 0 {
+			continue
+		}
+		links[l.Rect] = q[1:]
+		if q[0] != nil {
+			dropped = append(dropped, DroppedRegion{Kind: "link", Rect: l.Rect})
+		}
+	}
+	return dropped
 }
 
 // archivedPageIDs returns the set of PAGEIDs already present in dir, derived from
@@ -260,32 +341,35 @@ func removePageFiles(dir, pageID string) error {
 // writeBackground stores a content-addressed page background under the note's
 // <noteDir>/backgrounds/ subfolder. The name is a content hash, so identical
 // backgrounds (every page of a note shares the same template) collapse to one
-// file and re-ingest writes nothing new.
-func writeBackground(noteDir, name string, img []byte) error {
+// file and re-ingest writes nothing new. It reports whether it wrote.
+func writeBackground(noteDir, name string, img []byte) (bool, error) {
 	dir := filepath.Join(noteDir, backgroundsDir)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return fmt.Errorf("create %s: %w", dir, err)
+		return false, fmt.Errorf("create %s: %w", dir, err)
 	}
 	return writeFileIfChanged(filepath.Join(dir, name), img)
 }
 
-func writeJSONIfChanged(path string, v any) error {
+// writeJSONIfChanged marshals v to indented JSON and writes it only when the bytes
+// differ from disk; it reports whether it wrote.
+func writeJSONIfChanged(path string, v any) (bool, error) {
 	b, err := json.MarshalIndent(v, "", "  ")
 	if err != nil {
-		return fmt.Errorf("marshal %s: %w", filepath.Base(path), err)
+		return false, fmt.Errorf("marshal %s: %w", filepath.Base(path), err)
 	}
 	b = append(b, '\n')
 	return writeFileIfChanged(path, b)
 }
 
 // writeFileIfChanged writes data only when it differs from what is on disk, so
-// unchanged files keep their bytes (and mtime) and produce no VCS churn.
-func writeFileIfChanged(path string, data []byte) error {
+// unchanged files keep their bytes (and mtime) and produce no VCS churn. It reports
+// whether it wrote (false = the file was already up to date).
+func writeFileIfChanged(path string, data []byte) (bool, error) {
 	if old, err := os.ReadFile(path); err == nil && bytes.Equal(old, data) {
-		return nil
+		return false, nil
 	}
 	if err := os.WriteFile(path, data, 0o644); err != nil {
-		return fmt.Errorf("write %s: %w", path, err)
+		return false, fmt.Errorf("write %s: %w", path, err)
 	}
-	return nil
+	return true, nil
 }

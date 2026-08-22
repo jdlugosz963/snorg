@@ -11,7 +11,7 @@ import "github.com/jdlugosz963/snorg/internal/snote"
 // migration step) whenever the JSON contract changes; a future `migrate` command
 // walks stale files forward one version at a time. 0 (absent field) is
 // pre-versioning, and is also stale.
-const CurrentSchemaVersion = 3
+const CurrentSchemaVersion = 4
 
 // NoteDoc is note.json — file metadata plus ordered page placement.
 type NoteDoc struct {
@@ -36,11 +36,17 @@ type NotePageRef struct {
 // selector), stamped by ingest regardless of the SVG background mode — the one
 // template-related field that is an ingest fact, so it stays top-level; the per-box
 // analyze state lives under Analysis.Regions instead.
+//
+// Tags are snorg-managed labels attached from the tag command, independent of the
+// device-set Keywords. They are not sourced from the .note (pageDoc leaves them
+// empty), so re-ingest carries them forward like Analysis. Kept sorted and
+// de-duplicated for deterministic, VCS-friendly output.
 type PageDoc struct {
 	SchemaVersion  int           `json:"schema_version"`
 	PageID         string        `json:"page_id"`
 	Starred        bool          `json:"starred"`
 	BackgroundHash string        `json:"background_hash,omitempty"`
+	Tags           []string      `json:"tags,omitempty"`
 	Titles         []TitleDoc    `json:"titles"`
 	Keywords       []KeywordDoc  `json:"keywords"`
 	Links          []LinkDoc     `json:"links"`

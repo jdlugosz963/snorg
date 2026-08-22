@@ -28,7 +28,7 @@ func TestInjectLinksSameNote(t *testing.T) {
 	a := New(t.TempDir())
 	n := linkedNote("F_TEST", "Pa", "F_TEST", "Pb")
 	n.Pages = append(n.Pages, snote.Page{ID: "Pb", Number: 2})
-	if err := a.Write(n, svgMap(map[string]string{"Pa": "<svg>a</svg>", "Pb": "<svg>b</svg>"})); err != nil {
+	if _, err := a.Write(n, svgMap(map[string]string{"Pa": "<svg>a</svg>", "Pb": "<svg>b</svg>"})); err != nil {
 		t.Fatal(err)
 	}
 	svg, err := a.ReadSVG("F_TEST", "Pa")
@@ -45,7 +45,7 @@ func TestInjectLinksCrossNote(t *testing.T) {
 	a := New(t.TempDir())
 	// Cross-note links resolve unconditionally — the target note need not exist yet.
 	n := linkedNote("F_SRC", "Pa", "F_TEST", "Pb")
-	if err := a.Write(n, svgMap(map[string]string{"Pa": "<svg>a</svg>"})); err != nil {
+	if _, err := a.Write(n, svgMap(map[string]string{"Pa": "<svg>a</svg>"})); err != nil {
 		t.Fatal(err)
 	}
 	svg, err := a.ReadSVG("F_SRC", "Pa")
@@ -61,7 +61,7 @@ func TestInjectLinksMissingTargetStillBaked(t *testing.T) {
 	a := New(t.TempDir())
 	// A cross-note link to a not-yet-ingested note is baked anyway (dangling href).
 	n := linkedNote("F_SRC", "Pa", "F_GONE", "Pb")
-	if err := a.Write(n, svgMap(map[string]string{"Pa": "<svg>a</svg>"})); err != nil {
+	if _, err := a.Write(n, svgMap(map[string]string{"Pa": "<svg>a</svg>"})); err != nil {
 		t.Fatal(err)
 	}
 	svg, err := a.ReadSVG("F_SRC", "Pa")
@@ -89,7 +89,7 @@ func TestInjectLinksWebBakedExternal(t *testing.T) {
 		Target: "https://example.com/x?a=1&b=2",
 		Name:   "https://example.com/x?a=1&b=2",
 	})
-	if err := a.Write(n, svgMap(map[string]string{"Pa": "<svg>a</svg>"})); err != nil {
+	if _, err := a.Write(n, svgMap(map[string]string{"Pa": "<svg>a</svg>"})); err != nil {
 		t.Fatal(err)
 	}
 	svg, err := a.ReadSVG("F_SRC", "Pa")
@@ -112,7 +112,7 @@ func TestInjectLinksFileAndUnknownNotBaked(t *testing.T) {
 			Target: "/storage/emulated/0/Document/Book.pdf",
 			Name:   "Book.pdf",
 		})
-		if err := a.Write(n, svgMap(map[string]string{"Pa": "<svg>a</svg>"})); err != nil {
+		if _, err := a.Write(n, svgMap(map[string]string{"Pa": "<svg>a</svg>"})); err != nil {
 			t.Fatal(err)
 		}
 		svg, err := a.ReadSVG("F_SRC", "Pa")
@@ -128,7 +128,7 @@ func TestInjectLinksFileAndUnknownNotBaked(t *testing.T) {
 func TestInjectLinksSelfClosingUnchanged(t *testing.T) {
 	a := New(t.TempDir())
 	n := linkedNote("F_TEST", "Pa", "F_TEST", "Pa") // self-target, page in note
-	if err := a.Write(n, svgMap(map[string]string{"Pa": "<svg/>"})); err != nil {
+	if _, err := a.Write(n, svgMap(map[string]string{"Pa": "<svg/>"})); err != nil {
 		t.Fatal(err)
 	}
 	svg, err := a.ReadSVG("F_TEST", "Pa")
@@ -145,14 +145,14 @@ func TestInjectLinksIdempotent(t *testing.T) {
 	n := linkedNote("F_TEST", "Pa", "F_TEST", "Pb")
 	n.Pages = append(n.Pages, snote.Page{ID: "Pb", Number: 2})
 	svgs := map[string]string{"Pa": "<svg>a</svg>", "Pb": "<svg>b</svg>"}
-	if err := a.Write(n, svgMap(svgs)); err != nil {
+	if _, err := a.Write(n, svgMap(svgs)); err != nil {
 		t.Fatal(err)
 	}
 	first, err := a.ReadSVG("F_TEST", "Pa")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := a.Write(n, svgMap(svgs)); err != nil {
+	if _, err := a.Write(n, svgMap(svgs)); err != nil {
 		t.Fatal(err)
 	}
 	second, err := a.ReadSVG("F_TEST", "Pa")

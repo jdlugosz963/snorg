@@ -26,7 +26,7 @@ func TestWriteStampsBackgroundHash(t *testing.T) {
 		t.Run(string(mode), func(t *testing.T) {
 			a := New(t.TempDir())
 			a.SVG.Background = mode
-			if err := a.Write(note, map[string][]byte{"Pa": svg}); err != nil {
+			if _, err := a.Write(note, map[string][]byte{"Pa": svg}); err != nil {
 				t.Fatal(err)
 			}
 			pd, err := a.ReadPage("F_A", "Pa")
@@ -45,7 +45,7 @@ func TestWriteNoBackgroundLeavesHashEmpty(t *testing.T) {
 	a := New(t.TempDir())
 	note := &snote.Note{FileID: "F_A", Pages: []snote.Page{{ID: "Pa", Number: 1}}}
 	svg := []byte(`<svg xmlns="http://www.w3.org/2000/svg"><path d="M1 1 L2 2"/></svg>`)
-	if err := a.Write(note, map[string][]byte{"Pa": svg}); err != nil {
+	if _, err := a.Write(note, map[string][]byte{"Pa": svg}); err != nil {
 		t.Fatal(err)
 	}
 	pd, _ := a.ReadPage("F_A", "Pa")

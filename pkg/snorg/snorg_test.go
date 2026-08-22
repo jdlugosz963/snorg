@@ -30,7 +30,7 @@ func seedArchive(t *testing.T) *Client {
 			{ID: "P2", Number: 2},
 		},
 	}
-	if err := a.Write(n, map[string][]byte{"P1": []byte(testSVG), "P2": []byte(testSVG)}); err != nil {
+	if _, err := a.Write(n, map[string][]byte{"P1": []byte(testSVG), "P2": []byte(testSVG)}); err != nil {
 		t.Fatal(err)
 	}
 	c, err := Open(root, nil)

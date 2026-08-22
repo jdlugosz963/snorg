@@ -36,7 +36,8 @@ func (a *Archive) readEditDiff(fileID, pageID string) (string, error) {
 }
 
 func (a *Archive) writeEditDiff(fileID, pageID, diff string) error {
-	return writeFileIfChanged(a.diffPath(fileID, pageID), []byte(diff))
+	_, err := writeFileIfChanged(a.diffPath(fileID, pageID), []byte(diff))
+	return err
 }
 
 func (a *Archive) removeEditDiff(fileID, pageID string) error {

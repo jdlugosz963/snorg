@@ -26,10 +26,12 @@ type AnalyzeOptions struct {
 }
 
 // AnalyzeResult is one page's analysis outcome; Err is set when that page failed
-// (the batch continues past failures).
+// (the batch continues past failures). Regions carries the per-box outcomes for a
+// templated page (nil otherwise).
 type AnalyzeResult struct {
 	PageID  string
 	Outcome Outcome
+	Regions []RegionOutcome
 	Err     error
 }
 
@@ -68,15 +70,16 @@ func (c *Client) Analyze(ctx context.Context, pageIDs []string, opts AnalyzeOpti
 
 	results := make([]AnalyzeResult, 0, len(pageIDs))
 	for _, pageID := range pageIDs {
-		outcome, err := analyze.Page(ctx, c.arch, prov, prov, spec, pageID, opts.Force)
-		results = append(results, AnalyzeResult{PageID: pageID, Outcome: outcome, Err: err})
+		res, err := analyze.Page(ctx, c.arch, prov, prov, spec, pageID, opts.Force)
+		results = append(results, AnalyzeResult{PageID: pageID, Outcome: res.Outcome, Regions: res.Regions, Err: err})
 	}
 	return results, nil
 }
 
 // AnalyzePage analyzes one page with a caller-supplied Provider and Spec — the seam
 // for an alternate backend or a test double. force re-analyzes even an unchanged
-// page.
-func (c *Client) AnalyzePage(ctx context.Context, prov Provider, spec Spec, pageID string, force bool) (Outcome, error) {
+// page. The PageResult carries the page Outcome and, for a templated page, the
+// per-box RegionOutcomes.
+func (c *Client) AnalyzePage(ctx context.Context, prov Provider, spec Spec, pageID string, force bool) (PageResult, error) {
 	return analyze.Page(ctx, c.arch, prov, prov, spec, pageID, force)
 }

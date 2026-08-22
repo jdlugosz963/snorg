@@ -42,6 +42,7 @@ type PageView struct {
 	PageID   string            `json:"page_id"`
 	Starred  bool              `json:"starred"`
 	SVG      string            `json:"svg"`
+	Tags     []string          `json:"tags,omitempty"`
 	Titles   []TitleView       `json:"titles"`
 	Keywords []KeywordView     `json:"keywords"`
 	Links    []LinkView        `json:"links"`
@@ -270,6 +271,7 @@ func pageView(fileID string, ref archive.NotePageRef, pd archive.PageDoc, svg st
 		PageID:   ref.ID,
 		Starred:  pd.Starred,
 		SVG:      svg,
+		Tags:     pd.Tags,
 		Titles:   titles,
 		Keywords: keywords,
 		Links:    links,

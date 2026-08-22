@@ -84,6 +84,10 @@ var schemaMigrations = []func(migKind, map[string]any) error{
 	// (migrateEditDiff) does the actual conversion — the .md.diff carries no
 	// schema_version, so it cannot ride this chain.
 	func(migKind, map[string]any) error { return nil },
+	// v3 → v4: pages gained a snorg-managed `tags` list. It is purely additive and
+	// omitempty, so an absent key unmarshals to nil and canonicalDoc reproduces a
+	// fresh-ingest byte layout — no transformation needed.
+	func(migKind, map[string]any) error { return nil },
 }
 
 // realID reports whether a decoded JSON value is a present, non-"none" id string —
@@ -296,7 +300,7 @@ func (a *Archive) migrateFile(path string, kind migKind) (MigrateOutcome, error)
 	if err != nil {
 		return "", fmt.Errorf("%s: %w", filepath.Base(path), err)
 	}
-	if err := writeJSONIfChanged(path, doc); err != nil {
+	if _, err := writeJSONIfChanged(path, doc); err != nil {
 		return "", err
 	}
 	return MigrateUpgraded, nil

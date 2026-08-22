@@ -17,7 +17,7 @@ func writeNote(t *testing.T, a *archive.Archive, n *snote.Note, svgs map[string]
 	for k, v := range svgs {
 		m[k] = []byte(v)
 	}
-	if err := a.Write(n, m); err != nil {
+	if _, err := a.Write(n, m); err != nil {
 		t.Fatal(err)
 	}
 }

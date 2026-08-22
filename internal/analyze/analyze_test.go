@@ -79,17 +79,17 @@ func sampleReplies() map[string]string {
 
 func TestPageWritesAnalysis(t *testing.T) {
 	a := archive.New(t.TempDir())
-	if err := a.Write(sampleNote(), map[string][]byte{"Pa": []byte(sampleSVG)}); err != nil {
+	if _, err := a.Write(sampleNote(), map[string][]byte{"Pa": []byte(sampleSVG)}); err != nil {
 		t.Fatal(err)
 	}
 
 	tr := &fakeTranscriber{replies: sampleReplies()}
-	outcome, err := Page(context.Background(), a, tr, tr, sampleSpec, "Pa", false)
+	res, err := Page(context.Background(), a, tr, tr, sampleSpec, "Pa", false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if outcome != Analyzed {
-		t.Errorf("outcome = %q, want %q", outcome, Analyzed)
+	if res.Outcome != Analyzed {
+		t.Errorf("outcome = %q, want %q", res.Outcome, Analyzed)
 	}
 
 	pd, err := a.ReadPage("F_A", "Pa")
@@ -126,7 +126,7 @@ func TestPageWritesAnalysis(t *testing.T) {
 
 func TestPageSkipsWhenUnchanged(t *testing.T) {
 	a := archive.New(t.TempDir())
-	if err := a.Write(sampleNote(), map[string][]byte{"Pa": []byte(sampleSVG)}); err != nil {
+	if _, err := a.Write(sampleNote(), map[string][]byte{"Pa": []byte(sampleSVG)}); err != nil {
 		t.Fatal(err)
 	}
 	tr := &fakeTranscriber{replies: sampleReplies()}
@@ -135,12 +135,12 @@ func TestPageSkipsWhenUnchanged(t *testing.T) {
 	}
 
 	tr.calls = 0
-	outcome, err := Page(context.Background(), a, tr, tr, sampleSpec, "Pa", false)
+	res, err := Page(context.Background(), a, tr, tr, sampleSpec, "Pa", false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if outcome != Skipped {
-		t.Errorf("outcome = %q, want %q", outcome, Skipped)
+	if res.Outcome != Skipped {
+		t.Errorf("outcome = %q, want %q", res.Outcome, Skipped)
 	}
 	if tr.calls != 0 {
 		t.Errorf("unchanged page made %d LLM calls, want 0", tr.calls)
@@ -149,7 +149,7 @@ func TestPageSkipsWhenUnchanged(t *testing.T) {
 
 func TestPageUpdateUsesPreviousTranscription(t *testing.T) {
 	a := archive.New(t.TempDir())
-	if err := a.Write(sampleNote(), map[string][]byte{"Pa": []byte(sampleSVG)}); err != nil {
+	if _, err := a.Write(sampleNote(), map[string][]byte{"Pa": []byte(sampleSVG)}); err != nil {
 		t.Fatal(err)
 	}
 	tr := &fakeTranscriber{replies: sampleReplies()}
@@ -158,16 +158,16 @@ func TestPageUpdateUsesPreviousTranscription(t *testing.T) {
 	}
 
 	// The page changes: the update prompt must carry the previous transcription.
-	if err := a.Write(sampleNote(), map[string][]byte{"Pa": []byte(editedSVG)}); err != nil {
+	if _, err := a.Write(sampleNote(), map[string][]byte{"Pa": []byte(editedSVG)}); err != nil {
 		t.Fatal(err)
 	}
 	tr.prompts = nil
-	outcome, err := Page(context.Background(), a, tr, tr, sampleSpec, "Pa", false)
+	res, err := Page(context.Background(), a, tr, tr, sampleSpec, "Pa", false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if outcome != Updated {
-		t.Errorf("outcome = %q, want %q", outcome, Updated)
+	if res.Outcome != Updated {
+		t.Errorf("outcome = %q, want %q", res.Outcome, Updated)
 	}
 	want := "Update the previous transcription.\n\n# Heading\n\npage body text\n"
 	if len(tr.prompts) == 0 || tr.prompts[0] != want {
@@ -184,7 +184,7 @@ func TestPageUpdateUsesPreviousTranscription(t *testing.T) {
 
 func TestPageForceReanalyzes(t *testing.T) {
 	a := archive.New(t.TempDir())
-	if err := a.Write(sampleNote(), map[string][]byte{"Pa": []byte(sampleSVG)}); err != nil {
+	if _, err := a.Write(sampleNote(), map[string][]byte{"Pa": []byte(sampleSVG)}); err != nil {
 		t.Fatal(err)
 	}
 	tr := &fakeTranscriber{replies: sampleReplies()}
@@ -193,12 +193,12 @@ func TestPageForceReanalyzes(t *testing.T) {
 	}
 
 	tr.calls = 0
-	outcome, err := Page(context.Background(), a, tr, tr, sampleSpec, "Pa", true)
+	res, err := Page(context.Background(), a, tr, tr, sampleSpec, "Pa", true)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if outcome != Updated {
-		t.Errorf("outcome = %q, want %q (previous transcription exists)", outcome, Updated)
+	if res.Outcome != Updated {
+		t.Errorf("outcome = %q, want %q (previous transcription exists)", res.Outcome, Updated)
 	}
 	if tr.calls == 0 {
 		t.Error("force did not re-analyze")
@@ -210,7 +210,7 @@ func TestPageForceReanalyzes(t *testing.T) {
 // merge re-applies the edit onto the fresh transcription.
 func TestPageMergePreservesUserEdits(t *testing.T) {
 	a := archive.New(t.TempDir())
-	if err := a.Write(sampleNote(), map[string][]byte{"Pa": []byte(sampleSVG)}); err != nil {
+	if _, err := a.Write(sampleNote(), map[string][]byte{"Pa": []byte(sampleSVG)}); err != nil {
 		t.Fatal(err)
 	}
 	tr := &fakeTranscriber{replies: sampleReplies()}
@@ -225,17 +225,17 @@ func TestPageMergePreservesUserEdits(t *testing.T) {
 	if err := a.WriteAnalysisEdit("F_A", "Pa", base, "# My own heading\n\npage body text\n"); err != nil {
 		t.Fatal(err)
 	}
-	if err := a.Write(sampleNote(), map[string][]byte{"Pa": []byte(editedSVG)}); err != nil {
+	if _, err := a.Write(sampleNote(), map[string][]byte{"Pa": []byte(editedSVG)}); err != nil {
 		t.Fatal(err)
 	}
 
 	tr.prompts = nil
-	outcome, err := Page(context.Background(), a, tr, tr, sampleSpec, "Pa", false)
+	res, err := Page(context.Background(), a, tr, tr, sampleSpec, "Pa", false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if outcome != Updated {
-		t.Errorf("outcome = %q, want %q", outcome, Updated)
+	if res.Outcome != Updated {
+		t.Errorf("outcome = %q, want %q", res.Outcome, Updated)
 	}
 	// The update prompt carries the base, not the user's edit.
 	if !strings.Contains(tr.prompts[0], base) {
@@ -259,7 +259,7 @@ func TestPageMergePreservesUserEdits(t *testing.T) {
 // leave conflict markers and report the Conflicted outcome, not an error.
 func TestPageMergeConflict(t *testing.T) {
 	a := archive.New(t.TempDir())
-	if err := a.Write(sampleNote(), map[string][]byte{"Pa": []byte(sampleSVG)}); err != nil {
+	if _, err := a.Write(sampleNote(), map[string][]byte{"Pa": []byte(sampleSVG)}); err != nil {
 		t.Fatal(err)
 	}
 	tr := &fakeTranscriber{replies: sampleReplies()}
@@ -273,16 +273,16 @@ func TestPageMergeConflict(t *testing.T) {
 	if err := a.WriteAnalysisEdit("F_A", "Pa", base, "# Heading\n\npage body text, user version\n"); err != nil {
 		t.Fatal(err)
 	}
-	if err := a.Write(sampleNote(), map[string][]byte{"Pa": []byte(editedSVG)}); err != nil {
+	if _, err := a.Write(sampleNote(), map[string][]byte{"Pa": []byte(editedSVG)}); err != nil {
 		t.Fatal(err)
 	}
 
-	outcome, err := Page(context.Background(), a, tr, tr, sampleSpec, "Pa", false)
+	res, err := Page(context.Background(), a, tr, tr, sampleSpec, "Pa", false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if outcome != Conflicted {
-		t.Errorf("outcome = %q, want %q", outcome, Conflicted)
+	if res.Outcome != Conflicted {
+		t.Errorf("outcome = %q, want %q", res.Outcome, Conflicted)
 	}
 	md, err := a.ReadAnalysisMD("F_A", "Pa")
 	if err != nil {
@@ -298,7 +298,7 @@ func TestPageMergeConflict(t *testing.T) {
 // and the two sides land in a conflict for the user to resolve once.
 func TestPageHumanTranscriptionStaysOffLLM(t *testing.T) {
 	a := archive.New(t.TempDir())
-	if err := a.Write(sampleNote(), map[string][]byte{"Pa": []byte(sampleSVG)}); err != nil {
+	if _, err := a.Write(sampleNote(), map[string][]byte{"Pa": []byte(sampleSVG)}); err != nil {
 		t.Fatal(err)
 	}
 	if err := a.WriteAnalysisEdit("F_A", "Pa", "", "written by hand\n"); err != nil {
@@ -306,12 +306,12 @@ func TestPageHumanTranscriptionStaysOffLLM(t *testing.T) {
 	}
 
 	tr := &fakeTranscriber{replies: sampleReplies()}
-	outcome, err := Page(context.Background(), a, tr, tr, sampleSpec, "Pa", false)
+	res, err := Page(context.Background(), a, tr, tr, sampleSpec, "Pa", false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if outcome != Conflicted {
-		t.Errorf("outcome = %q, want %q", outcome, Conflicted)
+	if res.Outcome != Conflicted {
+		t.Errorf("outcome = %q, want %q", res.Outcome, Conflicted)
 	}
 	if !strings.HasPrefix(tr.prompts[0], sampleSpec.Content) {
 		t.Errorf("expected the fresh Content prompt, got %q", tr.prompts[0])
@@ -335,7 +335,7 @@ func TestPageHumanTranscriptionStaysOffLLM(t *testing.T) {
 // under --force.
 func TestPageKeepsEditedRegionNames(t *testing.T) {
 	a := archive.New(t.TempDir())
-	if err := a.Write(sampleNote(), map[string][]byte{"Pa": []byte(sampleSVG)}); err != nil {
+	if _, err := a.Write(sampleNote(), map[string][]byte{"Pa": []byte(sampleSVG)}); err != nil {
 		t.Fatal(err)
 	}
 	tr := &fakeTranscriber{replies: sampleReplies()}

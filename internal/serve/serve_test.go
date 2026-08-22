@@ -36,7 +36,7 @@ func fixture(t *testing.T) *httptest.Server {
 		},
 	}
 	svg := `<svg xmlns="http://www.w3.org/2000/svg" width="1920" height="2560"><path d="M10 10 L100 100" stroke="#000"/></svg>`
-	if err := a.Write(n, map[string][]byte{"Pa": []byte(svg), "Pb": []byte(svg)}); err != nil {
+	if _, err := a.Write(n, map[string][]byte{"Pa": []byte(svg), "Pb": []byte(svg)}); err != nil {
 		t.Fatal(err)
 	}
 	// A transcription on the first page so the lightbox has content to show.
@@ -62,7 +62,7 @@ func flatFixture(t *testing.T) *httptest.Server {
 		Pages:  []snote.Page{{ID: "Pa", Number: 1}, {ID: "Pb", Number: 2}},
 	}
 	svg := `<svg xmlns="http://www.w3.org/2000/svg" width="1920" height="2560"><path d="M10 10 L100 100" stroke="#000"/></svg>`
-	if err := a.Write(n, map[string][]byte{"Pa": []byte(svg), "Pb": []byte(svg)}); err != nil {
+	if _, err := a.Write(n, map[string][]byte{"Pa": []byte(svg), "Pb": []byte(svg)}); err != nil {
 		t.Fatal(err)
 	}
 	if err := a.WriteAnalysisMD("F_TEST", "Pa", "# Heading\nsome notes"); err != nil {
@@ -159,7 +159,7 @@ func TestEventsBootIDStablePerHandlerDistinctAcross(t *testing.T) {
 
 func TestEventsParkReleasesOnDisconnect(t *testing.T) {
 	a := archive.New(t.TempDir())
-	if err := a.Write(&snote.Note{FileID: "F_TEST", Source: "x.note", Pages: []snote.Page{{ID: "Pa", Number: 1}}}, map[string][]byte{"Pa": []byte("<svg/>")}); err != nil {
+	if _, err := a.Write(&snote.Note{FileID: "F_TEST", Source: "x.note", Pages: []snote.Page{{ID: "Pa", Number: 1}}}, map[string][]byte{"Pa": []byte("<svg/>")}); err != nil {
 		t.Fatal(err)
 	}
 	res, err := retrieve.Get(a, []string{"Pa"})
@@ -343,7 +343,7 @@ func TestSVGForUnservedPageIs404(t *testing.T) {
 	// A real archive page (Pb exists) but outside the served set is still 404 —
 	// the viewer only exposes selected pages.
 	a := archive.New(t.TempDir())
-	if err := a.Write(&snote.Note{FileID: "F_TEST", Source: "x.note", Pages: []snote.Page{{ID: "Pa", Number: 1}}}, map[string][]byte{"Pa": []byte("<svg/>")}); err != nil {
+	if _, err := a.Write(&snote.Note{FileID: "F_TEST", Source: "x.note", Pages: []snote.Page{{ID: "Pa", Number: 1}}}, map[string][]byte{"Pa": []byte("<svg/>")}); err != nil {
 		t.Fatal(err)
 	}
 	res, err := retrieve.Get(a, []string{"Pa"})

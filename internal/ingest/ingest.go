@@ -17,38 +17,42 @@ import (
 	"github.com/jdlugosz963/snorg/internal/snote"
 )
 
-// Run ingests notePath into store via src and returns the parsed note.
-func Run(src snote.Source, store *archive.Archive, notePath string) (*snote.Note, error) {
+// Run ingests notePath into store via src and returns the parsed note plus the
+// store's WriteReport (what the incremental reconcile changed on disk).
+func Run(src snote.Source, store *archive.Archive, notePath string) (*snote.Note, *archive.WriteReport, error) {
 	note, err := src.Read(notePath)
 	if err != nil {
-		return nil, fmt.Errorf("read note: %w", err)
+		return nil, nil, fmt.Errorf("read note: %w", err)
 	}
 	note.Source = filepath.Base(notePath)
 
 	pageSVGs, err := src.RenderSVGs(notePath)
 	if err != nil {
-		return nil, fmt.Errorf("render pages: %w", err)
+		return nil, nil, fmt.Errorf("render pages: %w", err)
 	}
 	if len(pageSVGs) != len(note.Pages) {
-		return nil, fmt.Errorf("rendered %d pages, note has %d", len(pageSVGs), len(note.Pages))
+		return nil, nil, fmt.Errorf("rendered %d pages, note has %d", len(pageSVGs), len(note.Pages))
 	}
 	svgs := make(map[string][]byte, len(note.Pages))
 	for i, p := range note.Pages {
 		svgs[p.ID] = pageSVGs[i]
 	}
 
-	if err := store.Write(note, svgs); err != nil {
-		return nil, fmt.Errorf("write archive: %w", err)
+	report, err := store.Write(note, svgs)
+	if err != nil {
+		return nil, nil, fmt.Errorf("write archive: %w", err)
 	}
-	return note, nil
+	return note, report, nil
 }
 
-// Result is the outcome of ingesting one path in a batch: exactly one of Note or
-// Err is set. Results preserve the input order of the paths passed to RunMany.
+// Result is the outcome of ingesting one path in a batch: on success Note and
+// Report are set (Report says what changed on disk); on failure Err is set.
+// Results preserve the input order of the paths passed to RunMany.
 type Result struct {
-	Path string
-	Note *snote.Note
-	Err  error
+	Path   string
+	Note   *snote.Note
+	Report *archive.WriteReport
+	Err    error
 }
 
 // RunMany ingests paths into store concurrently, one note per worker. jobs caps
@@ -76,8 +80,8 @@ func RunMany(src snote.Source, store *archive.Archive, paths []string, jobs int)
 		go func() {
 			defer wg.Done()
 			for i := range indices {
-				note, err := Run(src, store, paths[i])
-				results[i] = Result{Path: paths[i], Note: note, Err: err}
+				note, report, err := Run(src, store, paths[i])
+				results[i] = Result{Path: paths[i], Note: note, Report: report, Err: err}
 			}
 		}()
 	}

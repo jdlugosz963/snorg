@@ -14,7 +14,7 @@ func editArchive(t *testing.T) *archive.Archive {
 	t.Helper()
 	a := archive.New(t.TempDir())
 	n := &snote.Note{FileID: "F_TEST", Pages: []snote.Page{{ID: "Pa", Number: 1}}}
-	if err := a.Write(n, map[string][]byte{"Pa": []byte("<svg/>")}); err != nil {
+	if _, err := a.Write(n, map[string][]byte{"Pa": []byte("<svg/>")}); err != nil {
 		t.Fatal(err)
 	}
 	return a
@@ -183,7 +183,7 @@ func regionArchive(t *testing.T) *archive.Archive {
 		Titles: []snote.Title{{Rect: snote.Rect{X: 1, Y: 2, W: 3, H: 4}, Level: 1}},
 		Links:  []snote.Link{{Rect: snote.Rect{X: 5, Y: 6, W: 7, H: 8}, Name: "NoteB", TargetPageID: "P2", TargetFileID: "F_OTHER"}},
 	}}}
-	if err := a.Write(n, map[string][]byte{"Pa": []byte("<svg/>")}); err != nil {
+	if _, err := a.Write(n, map[string][]byte{"Pa": []byte("<svg/>")}); err != nil {
 		t.Fatal(err)
 	}
 	return a

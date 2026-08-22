@@ -106,6 +106,18 @@ func Keyword(re *regexp.Regexp) Predicate {
 	}
 }
 
+// Tag matches pages with at least one snorg-managed tag matching re.
+func Tag(re *regexp.Regexp) Predicate {
+	return func(_ string, pd archive.PageDoc) bool {
+		for _, t := range pd.Tags {
+			if re.MatchString(t) {
+				return true
+			}
+		}
+		return false
+	}
+}
+
 // Content matches pages whose transcribed content (the <PAGEID>.md effective
 // content, AI or hand-written) matches re. Pages with no transcription never
 // match; an unreadable md is treated as non-matching.

@@ -47,7 +47,7 @@ func TestMigrateV0ToCurrent(t *testing.T) {
 	root := t.TempDir()
 	dir := filepath.Join(root, "F_TEST")
 	a := New(root)
-	if err := a.Write(note("Pa", "Pb"), svgMap(map[string]string{"Pa": "<svg/>", "Pb": "<svg/>"})); err != nil {
+	if _, err := a.Write(note("Pa", "Pb"), svgMap(map[string]string{"Pa": "<svg/>", "Pb": "<svg/>"})); err != nil {
 		t.Fatal(err)
 	}
 
@@ -102,7 +102,7 @@ func TestMigrateIdempotent(t *testing.T) {
 	root := t.TempDir()
 	dir := filepath.Join(root, "F_TEST")
 	a := New(root)
-	if err := a.Write(note("Pa"), svgMap(map[string]string{"Pa": "<svg/>"})); err != nil {
+	if _, err := a.Write(note("Pa"), svgMap(map[string]string{"Pa": "<svg/>"})); err != nil {
 		t.Fatal(err)
 	}
 	notePath := filepath.Join(dir, "note.json")
@@ -131,7 +131,7 @@ func TestMigrateNewerThanBinary(t *testing.T) {
 	root := t.TempDir()
 	dir := filepath.Join(root, "F_TEST")
 	a := New(root)
-	if err := a.Write(note("Pa"), svgMap(map[string]string{"Pa": "<svg/>"})); err != nil {
+	if _, err := a.Write(note("Pa"), svgMap(map[string]string{"Pa": "<svg/>"})); err != nil {
 		t.Fatal(err)
 	}
 	bumpVersion(t, filepath.Join(dir, "Pa.json")) // sets schema_version = 999
@@ -157,7 +157,7 @@ func TestMigratePagesSelection(t *testing.T) {
 	root := t.TempDir()
 	dir := filepath.Join(root, "F_TEST")
 	a := New(root)
-	if err := a.Write(note("Pa", "Pb"), svgMap(map[string]string{"Pa": "<svg/>", "Pb": "<svg/>"})); err != nil {
+	if _, err := a.Write(note("Pa", "Pb"), svgMap(map[string]string{"Pa": "<svg/>", "Pb": "<svg/>"})); err != nil {
 		t.Fatal(err)
 	}
 	for _, p := range []string{"note.json", "Pa.json", "Pb.json"} {
@@ -235,7 +235,7 @@ func TestMigrateV1LinkKinds(t *testing.T) {
 			{Rect: snote.Rect{W: 1, H: 1}, Kind: snote.LinkFile, TargetPageID: "none", TargetFileID: "none", Target: "/x/y.pdf"},
 		}}, {ID: "Pb", Number: 2}},
 	}
-	if err := a.Write(n, svgMap(map[string]string{"Pa": "<svg/>", "Pb": "<svg/>"})); err != nil {
+	if _, err := a.Write(n, svgMap(map[string]string{"Pa": "<svg/>", "Pb": "<svg/>"})); err != nil {
 		t.Fatal(err)
 	}
 	downgradeLinksToV1(t, filepath.Join(dir, "Pa.json"))
@@ -288,7 +288,7 @@ func TestMigrateLegacyEditDiff(t *testing.T) {
 	root := t.TempDir()
 	dir := filepath.Join(root, "F_TEST")
 	a := New(root)
-	if err := a.Write(note("Pa"), svgMap(map[string]string{"Pa": "<svg/>"})); err != nil {
+	if _, err := a.Write(note("Pa"), svgMap(map[string]string{"Pa": "<svg/>"})); err != nil {
 		t.Fatal(err)
 	}
 	base := "old line one\nold line two\n"

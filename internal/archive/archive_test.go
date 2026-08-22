@@ -38,7 +38,7 @@ func svgMap(m map[string]string) map[string][]byte {
 func TestWritePreservesAnalysisOnReingest(t *testing.T) {
 	a := New(t.TempDir())
 	n := note("Pa")
-	if err := a.Write(n, svgMap(map[string]string{"Pa": "<svg/>"})); err != nil {
+	if _, err := a.Write(n, svgMap(map[string]string{"Pa": "<svg/>"})); err != nil {
 		t.Fatal(err)
 	}
 
@@ -56,7 +56,7 @@ func TestWritePreservesAnalysisOnReingest(t *testing.T) {
 	}
 
 	// Re-ingest the same note.
-	if err := a.Write(n, svgMap(map[string]string{"Pa": "<svg/>"})); err != nil {
+	if _, err := a.Write(n, svgMap(map[string]string{"Pa": "<svg/>"})); err != nil {
 		t.Fatal(err)
 	}
 
@@ -85,7 +85,7 @@ func TestWriteCarriesRegionAnalysesByRect(t *testing.T) {
 		Links:  []snote.Link{{Rect: r2, TargetPageID: "Pz", TargetFileID: "F_TEST"}},
 	}
 	n := &snote.Note{FileID: "F_TEST", Pages: []snote.Page{page}}
-	if err := a.Write(n, svgMap(map[string]string{"Pa": "<svg/>"})); err != nil {
+	if _, err := a.Write(n, svgMap(map[string]string{"Pa": "<svg/>"})); err != nil {
 		t.Fatal(err)
 	}
 
@@ -103,7 +103,7 @@ func TestWriteCarriesRegionAnalysesByRect(t *testing.T) {
 	moved := page
 	moved.Links = []snote.Link{{Rect: snote.Rect{X: 500, Y: 400, W: 300, H: 100}, TargetPageID: "Pz", TargetFileID: "F_TEST"}}
 	n2 := &snote.Note{FileID: "F_TEST", Pages: []snote.Page{moved}}
-	if err := a.Write(n2, svgMap(map[string]string{"Pa": "<svg/>"})); err != nil {
+	if _, err := a.Write(n2, svgMap(map[string]string{"Pa": "<svg/>"})); err != nil {
 		t.Fatal(err)
 	}
 
@@ -159,7 +159,7 @@ func TestWritePreservesUnchangedAndAnalyses(t *testing.T) {
 	dir := filepath.Join(root, "F_TEST")
 	a := New(root)
 	svgs := svgMap(map[string]string{"Pa": "<svg>a</svg>", "Pb": "<svg>b</svg>"})
-	if err := a.Write(note("Pa", "Pb"), svgs); err != nil {
+	if _, err := a.Write(note("Pa", "Pb"), svgs); err != nil {
 		t.Fatal(err)
 	}
 
@@ -175,7 +175,7 @@ func TestWritePreservesUnchangedAndAnalyses(t *testing.T) {
 	}
 
 	// Re-write identical note: nothing should be rewritten, analysis preserved.
-	if err := a.Write(note("Pa", "Pb"), svgs); err != nil {
+	if _, err := a.Write(note("Pa", "Pb"), svgs); err != nil {
 		t.Fatal(err)
 	}
 	mustExist(t, analysis)
@@ -192,7 +192,7 @@ func TestWriteChangedPageKeepsAnalysis(t *testing.T) {
 	root := t.TempDir()
 	dir := filepath.Join(root, "F_TEST")
 	a := New(root)
-	if err := a.Write(note("Pa"), svgMap(map[string]string{"Pa": "<svg>a</svg>"})); err != nil {
+	if _, err := a.Write(note("Pa"), svgMap(map[string]string{"Pa": "<svg>a</svg>"})); err != nil {
 		t.Fatal(err)
 	}
 	analysis := filepath.Join(dir, "Pa.analysis.json")
@@ -201,7 +201,7 @@ func TestWriteChangedPageKeepsAnalysis(t *testing.T) {
 	}
 
 	// Change the page content.
-	if err := a.Write(note("Pa"), svgMap(map[string]string{"Pa": "<svg>EDITED</svg>"})); err != nil {
+	if _, err := a.Write(note("Pa"), svgMap(map[string]string{"Pa": "<svg>EDITED</svg>"})); err != nil {
 		t.Fatal(err)
 	}
 	// Prior analysis must survive a content change (it becomes re-analysis context).
@@ -213,7 +213,7 @@ func TestWriteRemovedPagePruned(t *testing.T) {
 	dir := filepath.Join(root, "F_TEST")
 	a := New(root)
 	svgs := svgMap(map[string]string{"Pa": "<svg>a</svg>", "Pb": "<svg>b</svg>"})
-	if err := a.Write(note("Pa", "Pb"), svgs); err != nil {
+	if _, err := a.Write(note("Pa", "Pb"), svgs); err != nil {
 		t.Fatal(err)
 	}
 	// Analysis on both pages.
@@ -226,7 +226,7 @@ func TestWriteRemovedPagePruned(t *testing.T) {
 	}
 
 	// Re-write without Pb.
-	if err := a.Write(note("Pa"), svgMap(map[string]string{"Pa": "<svg>a</svg>"})); err != nil {
+	if _, err := a.Write(note("Pa"), svgMap(map[string]string{"Pa": "<svg>a</svg>"})); err != nil {
 		t.Fatal(err)
 	}
 	mustNotExist(t, filepath.Join(dir, "Pb.json"))
@@ -260,7 +260,7 @@ func TestWriteDisabledPipelineKeepsSVGVerbatim(t *testing.T) {
 		Rect:         snote.Rect{X: 1, Y: 2, W: 3, H: 4},
 		TargetPageID: "Pb", TargetFileID: "F_TEST",
 	}}
-	if err := a.Write(n, svgMap(map[string]string{"Pa": raw, "Pb": "<svg>b</svg>"})); err != nil {
+	if _, err := a.Write(n, svgMap(map[string]string{"Pa": raw, "Pb": "<svg>b</svg>"})); err != nil {
 		t.Fatal(err)
 	}
 
@@ -284,7 +284,7 @@ func TestWriteExtractsAndDedupesBackground(t *testing.T) {
 	sum := sha256.Sum256([]byte("shared background"))
 	name := hex.EncodeToString(sum[:]) + ".png"
 	svgs := svgMap(map[string]string{"Pa": string(bgSVG(b64)), "Pb": string(bgSVG(b64))})
-	if err := a.Write(note("Pa", "Pb"), svgs); err != nil {
+	if _, err := a.Write(note("Pa", "Pb"), svgs); err != nil {
 		t.Fatal(err)
 	}
 
@@ -320,7 +320,7 @@ func TestWriteExtractsAndDedupesBackground(t *testing.T) {
 	// Re-write identical input: background and SVGs are byte-stable (no churn).
 	bgBefore, _ := os.Stat(bg)
 	svgBefore, _ := os.Stat(filepath.Join(dir, "Pa.svg"))
-	if err := a.Write(note("Pa", "Pb"), svgs); err != nil {
+	if _, err := a.Write(note("Pa", "Pb"), svgs); err != nil {
 		t.Fatal(err)
 	}
 	bgAfter, _ := os.Stat(bg)
@@ -341,7 +341,7 @@ func TestWriteReorderUpdatesNavAndNoteJSON(t *testing.T) {
 	dir := filepath.Join(root, "F_TEST")
 	a := New(root)
 	svgs := svgMap(map[string]string{"Pa": "<svg>a</svg>", "Pb": "<svg>b</svg>"})
-	if err := a.Write(note("Pa", "Pb"), svgs); err != nil {
+	if _, err := a.Write(note("Pa", "Pb"), svgs); err != nil {
 		t.Fatal(err)
 	}
 	analysis := filepath.Join(dir, "Pa.analysis.json")
@@ -350,7 +350,7 @@ func TestWriteReorderUpdatesNavAndNoteJSON(t *testing.T) {
 	}
 
 	// Swap order.
-	if err := a.Write(note("Pb", "Pa"), svgs); err != nil {
+	if _, err := a.Write(note("Pb", "Pa"), svgs); err != nil {
 		t.Fatal(err)
 	}
 	mustExist(t, analysis)
@@ -375,7 +375,7 @@ func TestWriteReorderUpdatesNavAndNoteJSON(t *testing.T) {
 // note.json and the page JSON, and that WritePage re-stamps it.
 func TestSchemaVersionStamped(t *testing.T) {
 	a := New(t.TempDir())
-	if err := a.Write(note("Pa"), svgMap(map[string]string{"Pa": "<svg/>"})); err != nil {
+	if _, err := a.Write(note("Pa"), svgMap(map[string]string{"Pa": "<svg/>"})); err != nil {
 		t.Fatal(err)
 	}
 	nd, err := a.ReadNote("F_TEST")
@@ -411,7 +411,7 @@ func TestSchemaVersionGate(t *testing.T) {
 	root := t.TempDir()
 	dir := filepath.Join(root, "F_TEST")
 	a := New(root)
-	if err := a.Write(note("Pa"), svgMap(map[string]string{"Pa": "<svg/>"})); err != nil {
+	if _, err := a.Write(note("Pa"), svgMap(map[string]string{"Pa": "<svg/>"})); err != nil {
 		t.Fatal(err)
 	}
 
@@ -424,7 +424,7 @@ func TestSchemaVersionGate(t *testing.T) {
 
 	// Re-ingest must abort (not clobber the stale file) — and not with a
 	// not-exist error either.
-	err := a.Write(note("Pa"), svgMap(map[string]string{"Pa": "<svg/>"}))
+	_, err := a.Write(note("Pa"), svgMap(map[string]string{"Pa": "<svg/>"}))
 	if !errors.Is(err, ErrSchemaVersion) {
 		t.Errorf("re-ingest over stale page: err = %v, want ErrSchemaVersion", err)
 	}
@@ -446,7 +446,7 @@ func TestReingestOverStaleArchiveIsAtomic(t *testing.T) {
 	root := t.TempDir()
 	dir := filepath.Join(root, "F_TEST")
 	a := New(root)
-	if err := a.Write(note("Pa"), svgMap(map[string]string{"Pa": "<svg/>"})); err != nil {
+	if _, err := a.Write(note("Pa"), svgMap(map[string]string{"Pa": "<svg/>"})); err != nil {
 		t.Fatal(err)
 	}
 
@@ -476,7 +476,7 @@ func TestReingestOverStaleArchiveIsAtomic(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := a.Write(note("Pa"), svgMap(map[string]string{"Pa": "<svg/>"})); !errors.Is(err, ErrSchemaVersion) {
+	if _, err := a.Write(note("Pa"), svgMap(map[string]string{"Pa": "<svg/>"})); !errors.Is(err, ErrSchemaVersion) {
 		t.Fatalf("re-ingest over stale page: err = %v, want ErrSchemaVersion", err)
 	}
 	after, err := os.ReadFile(notePath)

@@ -16,7 +16,7 @@ func writeNote(t *testing.T, a *archive.Archive, n *snote.Note) {
 	for _, p := range n.Pages {
 		svgs[p.ID] = []byte("<svg/>")
 	}
-	if err := a.Write(n, svgs); err != nil {
+	if _, err := a.Write(n, svgs); err != nil {
 		t.Fatal(err)
 	}
 }

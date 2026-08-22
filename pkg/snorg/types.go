@@ -75,8 +75,21 @@ type (
 	Predicate = query.Predicate
 )
 
-// IngestResult is one note's ingest outcome (Err set when it failed).
+// ValueCount is one distinct label with its page count, as returned by the archive
+// inventory accessors Client.Keywords / Client.Tags (behind `list keywords`/`tags`).
+type ValueCount = query.ValueCount
+
+// IngestResult is one note's ingest outcome (Err set when it failed); on success
+// its Report says what the incremental reconcile changed on disk.
 type IngestResult = ingest.Result
+
+// The ingest change report, reachable as IngestResult.Report: which pages were newly
+// written or changed, which files changed on each, and which pages were pruned.
+type (
+	WriteReport     = archive.WriteReport
+	PageWriteReport = archive.PageWriteReport
+	DroppedRegion   = archive.DroppedRegion
+)
 
 // Migrate results, returned by Client.Migrate / Client.MigrateAll.
 type (
@@ -96,11 +109,13 @@ const CurrentSchemaVersion = archive.CurrentSchemaVersion
 // Analyze primitives. Transcriber (image→text) and Generator (text→text) are the
 // two provider seams; a Provider (see NewOpenAIProvider) satisfies both.
 type (
-	Spec        = analyze.Spec
-	Field       = analyze.Field
-	Outcome     = analyze.Outcome
-	Transcriber = analyze.Transcriber
-	Generator   = analyze.Generator
+	Spec          = analyze.Spec
+	Field         = analyze.Field
+	Outcome       = analyze.Outcome
+	PageResult    = analyze.PageResult
+	RegionOutcome = analyze.RegionOutcome
+	Transcriber   = analyze.Transcriber
+	Generator     = analyze.Generator
 )
 
 const (

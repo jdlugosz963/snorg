@@ -121,7 +121,8 @@ func (a *Archive) FindPage(pageID string) (string, error) {
 // written in (and never fails its own next read).
 func (a *Archive) WritePage(fileID string, pd PageDoc) error {
 	pd.SchemaVersion = CurrentSchemaVersion
-	return writeJSONIfChanged(filepath.Join(a.Root, fileID, pd.PageID+".json"), pd)
+	_, err := writeJSONIfChanged(filepath.Join(a.Root, fileID, pd.PageID+".json"), pd)
+	return err
 }
 
 // mdName is the transcription sidecar filename for a page. A page has exactly one
@@ -151,7 +152,8 @@ func (a *Archive) readMD(fileID, pageID string) (string, error) {
 
 // writeMD writes a page's transcription sidecar in NormMD form.
 func (a *Archive) writeMD(fileID, pageID, content string) error {
-	return writeFileIfChanged(a.mdPath(fileID, pageID), []byte(NormMD(content)))
+	_, err := writeFileIfChanged(a.mdPath(fileID, pageID), []byte(NormMD(content)))
+	return err
 }
 
 // ReadAnalysisMD returns the page's transcription from <fileID>/<pageID>.md (plain

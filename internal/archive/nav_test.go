@@ -24,7 +24,7 @@ func TestWriteInjectsNavZones(t *testing.T) {
 	svgs := svgMap(map[string]string{
 		"Pa": "<svg>a</svg>", "Pb": "<svg>b</svg>", "Pc": "<svg>c</svg>",
 	})
-	if err := a.Write(note("Pa", "Pb", "Pc"), svgs); err != nil {
+	if _, err := a.Write(note("Pa", "Pb", "Pc"), svgs); err != nil {
 		t.Fatal(err)
 	}
 
@@ -56,7 +56,7 @@ func TestWriteInjectsNavZones(t *testing.T) {
 func TestWriteSinglePageHasNoNavZones(t *testing.T) {
 	root := t.TempDir()
 	a := New(root)
-	if err := a.Write(note("Pa"), svgMap(map[string]string{"Pa": "<svg>a</svg>"})); err != nil {
+	if _, err := a.Write(note("Pa"), svgMap(map[string]string{"Pa": "<svg>a</svg>"})); err != nil {
 		t.Fatal(err)
 	}
 	if s := readSVG(t, root, "Pa"); strings.Contains(s, "<a ") {
@@ -76,7 +76,7 @@ func TestNavZonesSitBehindLinkOverlays(t *testing.T) {
 		Kind:         snote.LinkNote,
 		TargetPageID: "Pb", TargetFileID: "F_TEST",
 	}}
-	if err := a.Write(n, svgMap(map[string]string{"Pa": "<svg>a</svg>", "Pb": "<svg>b</svg>"})); err != nil {
+	if _, err := a.Write(n, svgMap(map[string]string{"Pa": "<svg>a</svg>", "Pb": "<svg>b</svg>"})); err != nil {
 		t.Fatal(err)
 	}
 	pa := readSVG(t, root, "Pa")

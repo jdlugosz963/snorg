@@ -25,20 +25,36 @@ A `Client` bundles an archive root with merged configuration.
 | Method | Does |
 |---|---|
 | `List()` | archived FILE_IDs |
+| `Keywords()` / `Tags()` | distinct device keywords / snorg tags with per-value page counts (`[]ValueCount`) |
 | `Query(pred)` | pages matching a `Predicate` |
-| `ParseFilter(word, args)` | build a `Predicate` from the CLI filter DSL (`all`, `starred`, `note`, `keyword`, `content`, `date`, `not …`) |
+| `ParseFilter(word, args)` | build a `Predicate` from the CLI filter DSL (`all`, `starred`, `note`, `keyword`, `tag`, `content`, `date`, `not …`) |
+| `Tag(tag, pageIDs, remove)` | add/remove a snorg-managed tag on pages (independent of device keywords); returns the count changed |
 | `Retrieve(pageIDs)` | assemble pages into a `*Result` (`{Archive, Notes}`) |
 | `ReadNote/ReadPage/ReadSVG/FindPage` | raw on-disk document access |
-| `Ingest(paths, jobs)` | register `.note` files (`NoteFiles(dir)` enumerates them) |
+| `Ingest(paths, jobs)` | register `.note` files (`NoteFiles(dir)` enumerates them); each `IngestResult.Report` (`*WriteReport`) says what the incremental reconcile changed |
 | `Export(pageIDs)` | render through the config's template (`RenderTemplate` for an arbitrary one) |
 | `ServeHandler(pageIDs, flat)` | the built-in viewer as an `http.Handler` (empty = whole archive) |
-| `Analyze(ctx, pageIDs, opts)` | vision-LLM transcription (config-driven provider + prompts) |
-| `AnalyzePage(ctx, prov, spec, id, force)` | one page with a caller-supplied `Provider` |
+| `Analyze(ctx, pageIDs, opts)` | vision-LLM transcription (config-driven provider + prompts); each `AnalyzeResult` carries the page `Outcome` and, for a templated page, per-box `Regions []RegionOutcome` |
+| `AnalyzePage(ctx, prov, spec, id, force)` | one page with a caller-supplied `Provider` (returns a `PageResult{Outcome, Regions}`) |
 | `Migrate(pageIDs)` / `MigrateAll()` | schema upgrade |
 | `PageBuffer(id)` / `ApplyPage(id, buf)` | programmatic transcription edit — no `$EDITOR` |
 
 The predicate constructors (`All`, `Starred`, `Unanalyzed`, `Not`, `And`, `InSet`,
-`InNote`, `Keyword`, `Date`, plus `Client.Content`) compose filters directly.
+`InNote`, `Keyword`, `Tag`, `Date`, plus `Client.Content`) compose filters directly.
+
+### Knowing what changed
+
+`Ingest` makes the incremental reconcile observable: `IngestResult.Report`
+(`*WriteReport`) reports `NoteChanged`, the `Pruned` page ids, and `Pages`
+(`[]PageWriteReport`) — one entry per page that was newly written (`New`) or whose
+bytes changed (`JSONChanged`/`SVGChanged`/`BackgroundChanged`); an unchanged page
+produces no entry, so an already-current re-ingest yields an all-false/empty report.
+Each `PageWriteReport.DroppedRegions` lists title/link analyses that could not be
+carried forward because their rect moved (they will be re-transcribed next
+`Analyze`). `Analyze` reports the complement for template boxes:
+`AnalyzeResult.Regions` (`[]RegionOutcome`) gives each `analyze:true` box's outcome —
+`Skipped` (fingerprint matched, previous text reused) vs `Analyzed`/`Updated`
+(re-cropped and re-transcribed).
 
 Editing: `PageBuffer`/`ApplyPage` are the library edit path (round-trip the buffer
 yourself). `EditPage(id, editor)` and `EditorFromEnv()` are the interactive
