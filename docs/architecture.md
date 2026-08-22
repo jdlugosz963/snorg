@@ -3,7 +3,7 @@
 ## CLI
 
 ```
-snorg [-a <archive-path>] [-c config.yaml ...] [--no-archive-config] <command> [command flags] [args]
+snorg [-a <archive-path>] [-c config.yaml ...] [--no-user-config] <command> [command flags] [args]
 
 snorg [-a <archive-path>] ingest [-j N] <file-or-dir>
 snorg [-a <archive-path>] list
@@ -87,12 +87,17 @@ migrates its owning `note.json`. Idempotent, needs no provider config.
 ## Archive layout (plaintext contract)
 
 ```
+<archive>/config.yaml         # optional per-archive config (not auto-loaded; pass with -c); may hold the templates: section
+<archive>/templates/*.png     # optional device-form background PNGs (template selectors);
+                              #   image: paths are relative to the declaring config file (see docs/templates.md)
 <archive>/<FILE_ID>/
     note.json          # schema_version + file metadata + ordered page placement (id, number)
-    <PAGEID>.json      # schema_version + per page: starred, titles(rect,level,analysis),
-                       # keywords(text), links(...,analysis), analysis{source_hash,fields}
-    <PAGEID>.md        # per page: the content transcription (Markdown), AI-produced
-                       # and/or user-edited — always the effective content
+    <PAGEID>.json      # schema_version + per page: starred, background_hash, titles(rect,level,
+                       # analysis), keywords(text), links(...,analysis), analysis{source_hash,
+                       # fields, regions[](id,source_hash)}
+    <PAGEID>.md        # per page: the transcription (Markdown), AI-produced and/or
+                       # user-edited — always the effective content; for a templated
+                       # page this holds the id-keyed per-box region sections instead
     <PAGEID>.md.diff   # only while user edits diverge from the AI transcription:
                        # unified diff AI-base → md (analyze-edit)
     <PAGEID>.svg       # per page rendered vector (one <path>/command per line)
@@ -143,7 +148,8 @@ default pen-shade `fill=` values (`archive.recolor`, verbatim substitution, so t
 `fill="none"` overlays are untouched). Order in `Write`: background → recolor →
 navigation → links → format. With overlays off, `background: inline` and no
 `colors`, the renderer's SVG is stored byte-verbatim. None of these stages changes
-the analyze fingerprint (path geometry only). See [config.md](config.md).
+the analyze fingerprint (the canonical black-on-white rasterization, which forces
+pen colors black and drops overlays). See [config.md](config.md).
 
 **User edits.** `analyze-edit` opens the transcription in the user's editor.
 `<PAGEID>.md` always holds the *effective* content — what `retrieve`/`export`
@@ -217,39 +223,65 @@ stdin / bare = whole archive), but a page selection also migrates its owning
   maps its domain model onto snorg's and renders each page to SVG in-process.
 - `internal/archive` — owns the on-disk layout; `doc.go` is the JSON serialization boundary
   (per-title/per-link `analysis` nested on the items; page-level `analysis` holds
-  `source_hash` + `fields`; both docs carry `schema_version` = `CurrentSchemaVersion`);
-  `Write` reconciles a note's directory in place and runs the
+  `source_hash` + `fields` + `regions[]` (per-box fingerprint state); the top-level
+  `background_hash` (ingest-stamped selector) + `analysis.regions[]` support template regions; both
+  docs carry `schema_version` = `CurrentSchemaVersion`);
+  `Write` reconciles a note's directory in place, stamps `background_hash` (sha256 of the
+  decoded background, from `background.go`) and runs the
   SVG pipeline (background mode → `recolor` → `injectNav` → `injectLinks` → `formatSVG`,
   each configurable); `read.go` are the layout-aware accessors (`List`/`ReadNote`/`ReadPage`/
   `ReadSVG`/`SVGRel`/`FindPage` — `ReadNote`/`ReadPage` gate on `schema_version`, erroring
-  `ErrSchemaVersion` on a mismatch) plus `WritePage` and the `<PAGEID>.md` sidecar pair
-  `ReadAnalysisMD`/`WriteAnalysisMD`; `editdiff.go` owns the `<PAGEID>.md.diff`
-  sidecar and its invariant (`ReadAnalysisBase`/`WriteAnalysisEdit`/`MergeAnalysis`);
-  `migrate.go` is the un-gated schema upgrader (`MigrateAll`/`MigratePages` +
-  the version-indexed `schemaMigrations` chain).
+  `ErrSchemaVersion` on a mismatch) plus `WritePage` and the sidecar readers; `editdiff.go`
+  owns the `.md.diff` sidecar and its invariant (`ReadAnalysisBase`/`WriteAnalysisEdit`/
+  `MergeAnalysis`), which serves both a normal page's content and a templated page's region
+  sections — they share the one `<PAGEID>.md[.diff]` pair, since a page is one or the other;
+  `templates.go` builds the template set from specs injected via `SetTemplateSpecs`
+  (`TemplateSpec`/`Template`/`Box`, `MatchBackground` by image hash — the specs come from the
+  merged config's `templates:` section, bridged in by `pkg/snorg.Open`) and `regions.go`
+  (de)serializes the id-keyed region sections held in `.md` (see `docs/templates.md`);
+  `migrate.go` is the un-gated schema upgrader (`MigrateAll`/`MigratePages` + the version-indexed
+  `schemaMigrations` chain).
 - `internal/retrieve` — platform-agnostic read contract: assembles `note.json` + each
-  `<PAGEID>.json` + `<PAGEID>.md` into denormalized `NoteView`s (the stable JSON
-  consumers depend on). `Get` takes PAGEIDs and groups them per owning note (archive
-  List order, pages in placement order); an unknown PAGEID is an error.
+  `<PAGEID>.json` + `<PAGEID>.md` into denormalized `NoteView`s (the stable JSON consumers
+  depend on). `Get` takes PAGEIDs and groups them per owning note (archive List order, pages in
+  placement order); an unknown PAGEID is an error. A templated page's `.md` is the region-section
+  document: its transcription surfaces as `analysis.regions[]` (`RegionView{id,label,rect,
+  content}`, label/rect resolved from the template config) with an empty `analysis.content`.
 - `internal/query` — read-only metadata filter: walks every note/page via the `archive`
   accessors and returns the pages matching a `Predicate` (`All`, `Starred`, `Unanalyzed`,
   `InNote(fileID)`, `Keyword(regexp)`, `Content(archive, regexp)` — the last reads each
   page's `<PAGEID>.md`).
 - `internal/config` — loads + deep-merges YAML config (provider creds, analysis prompts,
-  `ingest.svg` toggles, `export.template`); `Load` parses + defaults only — commands
-  validate the section they use. External dep: `yaml.v3`.
-- `internal/analyze` — incremental vision-LLM analysis of one page (by PAGEID): fingerprints
-  the page by its path geometry (`pathHash`, `analysis.source_hash`) and skips unchanged
-  pages without even rasterizing; otherwise rasterizes the SVG (`oksvg`/`rasterx`),
-  transcribes the page (through the update prompt + the previous AI base when one exists —
-  never the user-edited text), 3-way merges the result with any user edits
-  (`archive.MergeAnalysis`; overlap → the `conflict` outcome), crops title/link rects, runs
-  the custom fields over the effective content, and writes `<PAGEID>.md` + `<PAGEID>.json`.
-  The geometry hash is invariant under recolor/background/overlays, so restyling never
-  re-triggers analysis. External deps: `openai-go`, `oksvg`/`rasterx`.
+  `ingest.svg` toggles, `export.template`, `templates:` regions); `Load` expands each file's
+  `include:` list (other configs merged *over* the includer — "above includer" — recursively,
+  with cycle detection) and resolves each `templates[].image` to an absolute path relative to
+  the declaring file, then parses + defaults — commands validate the section they use. The
+  `templates:` specs are bridged to the archive by `pkg/snorg.Open` (`config.TemplateSpec` →
+  `archive.TemplateSpec`), keeping config and archive mutually independent. External deps:
+  `yaml.v3`, `internal/snote` (`snote.Rect` for template boxes).
+- `internal/analyze` — incremental vision-LLM analysis of one page (by PAGEID): a single
+  **canonical black-on-white rasterization** (`geom.go`: `canonicalSVG` forces every `<path>`
+  black and drops background/nav/link overlays, `oksvg`/`rasterx`) drives everything —
+  its 1-bit ink `mask` gives `analysis.source_hash` (`mask.hash`) for the skip check, the
+  per-box fingerprints, and the LLM crops, so a `Page` call rasterizes exactly once
+  (including on a skip). Unchanged pages are skipped; otherwise it transcribes the page
+  (through the update prompt + the previous AI base when one exists — never the user-edited
+  text), 3-way merges the result with any user edits (`archive.MergeAnalysis`; overlap → the
+  `conflict` outcome), crops title/link rects, runs the custom fields over the effective
+  content, and writes `<PAGEID>.md` + `<PAGEID>.json`. The mask depends only on the
+  handwriting geometry, so it is invariant under recolor/background/overlays and restyling
+  never re-triggers analysis. **Template regions**: a page whose `background_hash` matches
+  `a.Templates()` is analyzed per box instead — `mask.regionHash` hashes the box rect cropped
+  out of the page mask (pixel-space, so a stroke crossing the edge counts only its in-box
+  pixels), so an unchanged box is skipped and a moved/added box rect re-triggers (the
+  page-level skip is template-aware); the id-keyed region document is 3-way merged into the
+  page's `<PAGEID>.md` (in place of free-form content). External deps: `openai-go`,
+  `oksvg`/`rasterx`.
 - `internal/edit` — the `analyze-edit` command's orchestration: opens the page's
   transcription in the user's editor (`sh -c`, terminal inherited, temp copy so an
-  aborted editor changes nothing) and stores the result via `archive.WriteAnalysisEdit`.
+  aborted editor changes nothing) and stores the effective md via `archive.WriteAnalysisEdit`;
+  a templated page's body is `<!-- region <id> -->` sections (keyed by id, no content marker)
+  assembled into that same md.
 - `internal/textmerge` — diff/patch and 3-way-merge plumbing, pure Go (no PATH tool):
   `Diff`/`Unapply` (line diff + reverse-apply of a serialized patch) via
   `github.com/njchilds90/go-diffpatch`, `Merge` (3-way merge, git-standard conflict

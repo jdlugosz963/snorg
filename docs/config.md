@@ -20,24 +20,49 @@ org-mode exporter).
 The root loads, in increasing precedence:
 
 1. `$XDG_CONFIG_HOME/snorg/config.yaml` (i.e. `~/.config/snorg/config.yaml`) —
-   the XDG **user config**, if it exists: cross-archive defaults for the machine.
-   Pass `--no-user-config` to ignore it.
-2. `<archive-path>/config.yaml` — the archive's own default config, if the file
-   exists (self-contained per-archive settings). Pass `--no-archive-config` to
-   ignore it.
-3. each `-c` file, left to right.
+   the XDG **user config**, if it exists: the one auto-loaded file. Pass
+   `--no-user-config` to ignore it.
+2. each `-c` file, left to right.
 
-Later sources win via the deep-merge below, so the archive config overrides the
-user config and `-c` files override both, per key. A missing config file is not
-an error; a malformed one is.
+Later sources win via the deep-merge below, so `-c` files override the user
+config, per key. A missing user config is not an error; a malformed config is.
+An archive's own `config.yaml` is not loaded automatically — pass it explicitly
+with `-c <archive>/config.yaml` (or pull it in via `include:`) if you want it.
+
+### Including other configs
+
+Any config file may pull in others with a top-level `include:` list. Paths resolve
+relative to the **including file's** directory (a leading `~` is expanded), and are
+followed recursively.
+
+An included file is merged **over** the file that includes it — "above includer":
+the include's keys win over the including file's own keys. Within one `include:`
+list, later entries win over earlier ones, and an include's own includes win over
+its body. The top-level layers (user → `-c`) still order lowest to highest as
+above; each expands in place, so a `-c` file's includes sit above the user config
+but below that `-c` file's own body only where the file itself sets a key.
+
+```yaml
+# main.yaml
+include:
+  - shared.yaml     # shared.yaml's keys override main.yaml's own
+provider:
+  model: from-main  # overridden if shared.yaml sets provider.model
+```
+
+A file that includes itself (directly or through a chain) is an error, not a loop.
 
 ## Archive path
 
 The archive root is normally the global `-a`/`--archive` flag. It may instead be
-set once as the top-level `archive:` key in the **user config**, so plain
-`snorg <command>` works with no `-a` (the flag still wins when both are given). A
-leading `~` in `archive:` is expanded to your home directory. `archive:` is only
-consulted to locate the archive — every other key merges as usual.
+set as the top-level `archive:` key in the merged config (naturally the **user
+config**, but a `-c` file works too), so plain `snorg <command>` works with no
+`-a` (the flag still wins when both are given). A relative `archive:` is resolved
+**relative to the config file that declared it** (like `include:`/`image:` paths),
+so `archive: .` in `<archive>/config.yaml` means that file's own directory; an
+absolute value is used as-is and a leading `~` expands to your home directory. (The
+`-a` flag, by contrast, is relative to the CWD like any shell path.) `archive:` is
+only consulted to locate the archive — every other key merges as usual.
 
 ```yaml
 # ~/.config/snorg/config.yaml
@@ -49,6 +74,10 @@ archive: ~/notes/sn
 ```yaml
 archive: ~/notes/sn                         # optional; default archive root when -a is absent
                                             # (user config only; -a flag overrides; ~ expanded)
+
+include:                                    # optional; other configs to pull in (paths relative to
+  - shared.yaml                             #   this file, ~ expanded). Included keys override this
+  - ~/snorg/base.yaml                       #   file's own keys ("above includer"); recursive; no cycles
 
 provider:
   endpoint: https://openrouter.ai/api/v1   # OpenAI-compatible base URL (required by analyze)
@@ -102,8 +131,9 @@ byte-verbatim. Note that `navigation` bakes the *neighbor order* into each SVG:
 reordering pages legitimately rewrites the affected SVGs.
 
 Crucially, none of these — recolor, background mode, links, navigation, format —
-change the `analyze` fingerprint (it is derived from path geometry only; see
-"Incremental analysis"), so restyling a note never forces a paid re-transcription.
+change the `analyze` fingerprint (it is derived from the canonical
+black-on-white rasterization, which forces pen colors black and drops overlays;
+see "Incremental analysis"), so restyling a note never forces a paid re-transcription.
 `colors` remaps only the four exact default fills the renderer emits, so the
 link/nav overlays (`fill="none"`) are never touched; `background: blank` inserts a
 white rectangle and `remove` deletes the background `<image>` entirely.
@@ -192,26 +222,57 @@ Beyond the pongo2 built-ins (registered by `internal/export`):
 
 ## Merge semantics
 
-Each `-c` file is parsed and deep-merged: scalars (and sequences) are overwritten
-by later files; nested maps merge per key. So `analysis.fields` from different files
-union by name. After merge, unset prompts get built-in defaults and unset
-`ingest.svg` toggles default to true (an explicit `false` survives the merge).
+Each file (including any it pulls in via `include:`) is parsed and deep-merged:
+scalars (and sequences) are overwritten by later sources; nested maps merge per key.
+So `analysis.fields` from different files union by name, while a whole `templates:`
+list from a higher layer replaces a lower one. After merge, unset prompts get
+built-in defaults and unset `ingest.svg` toggles default to true (an explicit
+`false` survives the merge).
 
 ## Incremental analysis
 
-`analyze` fingerprints a page by its **path geometry** — the `d` attribute of
-every `<path>`, whitespace-normalized (`analysis.source_hash` in `<PAGEID>.json`) —
-and **skips** pages whose handwriting is unchanged, with no LLM call (and without
-even rasterizing), unless `--force` is given. Because the hash ignores `fill`
-(recolor), the background `<image>` (background mode) and the `<a><rect>` link/nav
-overlays, restyling a note via `ingest.svg` never triggers re-analysis; only an
-actual stroke edit (a different traced `d`) does. When a page did change, the
-previous `<PAGEID>.md` is fed back through `analysis.content.update_prompt`, so the
-fresh transcription diffs minimally against the old one (clean VCS history).
+`analyze` fingerprints a page by a **single canonical rasterization** — the page
+rendered black-on-white (every `<path>` forced black, background/nav/link overlays
+dropped) and thresholded to a 1-bit ink mask, hashed into `analysis.source_hash`
+(`<PAGEID>.json`) — and **skips** pages whose handwriting is unchanged, with no LLM
+call, unless `--force` is given. That one rasterization also feeds the per-box
+region hashes and the LLM crops, so a run rasterizes each page exactly once
+(including on a skip). Because the mask ignores `fill` (recolor), the background
+`<image>` (background mode) and the `<a><rect>` link/nav overlays, restyling a note
+via `ingest.svg` never triggers re-analysis; only an actual handwriting edit does.
+When a page did change, the previous `<PAGEID>.md` is fed back through
+`analysis.content.update_prompt`, so the fresh transcription diffs minimally against
+the old one (clean VCS history).
 
-> Migration: this fingerprint replaces an earlier pixel hash. Existing
-> `source_hash` values won't match, so the first `analyze` after upgrading
-> re-transcribes every page once (through the update prompt → minimal diffs).
+> Migration: this raster-mask fingerprint replaces an earlier stroke-geometry hash.
+> Existing `source_hash` values won't match, so the first `analyze` after upgrading
+> re-transcribes every page once (through the update prompt → minimal diffs). No
+> `snorg migrate` pass is needed — the fingerprint self-heals on that first run.
+
+## Template regions
+
+The `templates:` section declares background templates and their boxes, so
+`analyze` transcribes a page drawn on a known template per box into its
+`<PAGEID>.md` (as id-keyed region sections, in place of whole-page content). It is
+an ordinary config section — it layers, merges and can be included like any other
+(no provider credentials needed to read it). A page is matched to a template by its
+background-image hash. See **`docs/templates.md`** for the format and workflow; the
+short version:
+
+```yaml
+templates:
+  - image: templates/prawo_jazdy.png   # device-form grayscale PNG; path relative to THIS config file
+    boxes:
+      - {id: title, label: "Title", rect: {x: 0, y: 0, w: 1920, h: 384}, analyze: true, prompt: "..."}
+```
+
+Each `image:` path is resolved **relative to the config file that declared it**
+(`~` expanded), so a per-archive config you pass with `-c` can reference images
+under the archive while a shared user config carries its own alongside it. The
+image is hashed to match a page's background, so register the device-form grayscale
+PNG exactly (a re-encode hashes differently). Because a `templates:` list is a
+sequence, a higher layer's list **replaces** a lower one wholesale (sequences are
+overwritten, not merged).
 
 ## Fields are derived from content, not the image
 

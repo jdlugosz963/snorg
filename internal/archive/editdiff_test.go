@@ -46,7 +46,7 @@ func TestWriteAnalysisEditRoundTrip(t *testing.T) {
 	if md, err := a.ReadAnalysisMD("F_TEST", "Pa"); err != nil || md != "# ai output\n\nbody, fixed by hand\n" {
 		t.Errorf("md = %q, %v", md, err)
 	}
-	if _, err := os.Stat(a.editDiffPath("F_TEST", "Pa")); err != nil {
+	if _, err := os.Stat(a.diffPath("F_TEST", "Pa")); err != nil {
 		t.Fatalf("edit diff not written: %v", err)
 	}
 	if got, err := a.ReadAnalysisBase("F_TEST", "Pa"); err != nil || got != base {
@@ -66,7 +66,7 @@ func TestWriteAnalysisEditRevertRemovesDiff(t *testing.T) {
 	if err := a.WriteAnalysisEdit("F_TEST", "Pa", base, base); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(a.editDiffPath("F_TEST", "Pa")); !os.IsNotExist(err) {
+	if _, err := os.Stat(a.diffPath("F_TEST", "Pa")); !os.IsNotExist(err) {
 		t.Errorf("edit diff not removed on revert: %v", err)
 	}
 	if md, err := a.ReadAnalysisMD("F_TEST", "Pa"); err != nil || md != base {
@@ -141,7 +141,7 @@ func TestMergeAnalysisDropsDiffWhenAbsorbed(t *testing.T) {
 	if conflicts {
 		t.Fatalf("unexpected conflicts:\n%s", got)
 	}
-	if _, err := os.Stat(a.editDiffPath("F_TEST", "Pa")); !os.IsNotExist(err) {
+	if _, err := os.Stat(a.diffPath("F_TEST", "Pa")); !os.IsNotExist(err) {
 		t.Errorf("edit diff not removed when merge equals theirs: %v", err)
 	}
 }
@@ -192,7 +192,7 @@ func TestReadAnalysisBaseRejectsForeignMDEdit(t *testing.T) {
 	}
 	if _, err := a.ReadAnalysisBase("F_TEST", "Pa"); err == nil {
 		t.Fatal("expected error when the diff no longer applies")
-	} else if !strings.Contains(err.Error(), "remove the .md.diff") {
+	} else if !strings.Contains(err.Error(), "remove Pa.md.diff") {
 		t.Errorf("error lacks the recovery hint: %v", err)
 	}
 }
@@ -212,14 +212,14 @@ func TestWritePrunesEditDiff(t *testing.T) {
 	if err := a.Write(note("Pa"), svgMap(map[string]string{"Pa": "<svg/>"})); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(a.editDiffPath("F_TEST", "Pa")); err != nil {
+	if _, err := os.Stat(a.diffPath("F_TEST", "Pa")); err != nil {
 		t.Errorf("edit diff not preserved across re-ingest: %v", err)
 	}
 
 	if err := a.Write(note("Pb"), svgMap(map[string]string{"Pb": "<svg/>"})); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(a.editDiffPath("F_TEST", "Pa")); !os.IsNotExist(err) {
+	if _, err := os.Stat(a.diffPath("F_TEST", "Pa")); !os.IsNotExist(err) {
 		t.Errorf("edit diff not pruned with its page: %v", err)
 	}
 }

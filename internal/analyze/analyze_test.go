@@ -384,30 +384,6 @@ func TestPageNotFound(t *testing.T) {
 	}
 }
 
-// TestPathHashInvariance: the fingerprint follows path geometry only, so recolor,
-// background changes, formatting whitespace and link/nav overlays leave it
-// unchanged, while an actual stroke edit changes it.
-func TestPathHashInvariance(t *testing.T) {
-	base := `<svg><path d="M100 100 L300 300" fill="#000000" /></svg>`
-	h := pathHash([]byte(base))
-
-	same := map[string]string{
-		"recolor":    `<svg><path d="M100 100 L300 300" fill="#1a1aff" /></svg>`,
-		"whitespace": "<svg>\n<path d=\"M100   100\n L300 300\" fill=\"#000000\" /></svg>",
-		"background": `<svg><image xlink:href="data:image/png;base64,AAAA" /><path d="M100 100 L300 300" fill="#000000" /></svg>`,
-		"overlay":    `<svg><path d="M100 100 L300 300" fill="#000000" /><a xlink:href="P2.svg"><rect x="0" y="0" width="10" height="10" fill="none" /></a></svg>`,
-	}
-	for name, s := range same {
-		if pathHash([]byte(s)) != h {
-			t.Errorf("%s changed the hash", name)
-		}
-	}
-	edited := `<svg><path d="M100 100 L300 300 L500 100" fill="#000000" /></svg>`
-	if pathHash([]byte(edited)) == h {
-		t.Error("edited stroke did not change the hash")
-	}
-}
-
 func TestRasterizeAndCrop(t *testing.T) {
 	img, err := rasterize([]byte(sampleSVG))
 	if err != nil {

@@ -67,7 +67,7 @@ fi
 mkdir -p "$DEST"
 
 # The listing page: all selected notes in one pass.
-"$SNORG" -a "$ARCHIVE" --no-archive-config -c "$SCRIPT_DIR/index.yaml" export \
+"$SNORG" -a "$ARCHIVE" -c "$SCRIPT_DIR/index.yaml" export \
 	< "$PAGEIDS" > "$DEST/index.html"
 
 # One HTML page per selected note, plus its selected pages' SVGs. `query note`
@@ -77,7 +77,7 @@ mkdir -p "$DEST"
 	[ -n "$fid" ] || continue
 	sub=$("$SNORG" -a "$ARCHIVE" query note "$fid" < "$PAGEIDS")
 	[ -n "$sub" ] || continue
-	printf '%s\n' "$sub" | "$SNORG" -a "$ARCHIVE" --no-archive-config \
+	printf '%s\n' "$sub" | "$SNORG" -a "$ARCHIVE" \
 		-c "$SCRIPT_DIR/note.yaml" export > "$DEST/$fid.html"
 	mkdir -p "$DEST/$fid"
 	printf '%s\n' "$sub" | while IFS= read -r pid; do

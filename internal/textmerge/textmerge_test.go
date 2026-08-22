@@ -61,6 +61,34 @@ func TestDiffIsUnifiedNotJSON(t *testing.T) {
 	}
 }
 
+// TestDiffContextIsOneLine pins the terse `-U1` output: a single-line change in
+// the middle of a larger document keeps exactly one context (' '-prefixed) line
+// on each side — not 3, and not the whole file (which Context <= 0 would emit).
+func TestDiffContextIsOneLine(t *testing.T) {
+	old := "1\n2\n3\n4\n5\n6\n7\n"
+	new := "1\n2\n3\nFOUR\n5\n6\n7\n"
+	d, err := Diff(old, new)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var context int
+	for _, l := range strings.Split(d, "\n") {
+		if strings.HasPrefix(l, " ") {
+			context++
+		}
+	}
+	if context != 2 {
+		t.Errorf("expected exactly 2 context lines (one each side), got %d:\n%s", context, d)
+	}
+	got, err := Unapply(new, d)
+	if err != nil {
+		t.Fatalf("Unapply: %v", err)
+	}
+	if got != old {
+		t.Errorf("round trip = %q, want %q", got, old)
+	}
+}
+
 func TestUnapplyEmptyDiff(t *testing.T) {
 	got, err := Unapply("content\n", "")
 	if err != nil {

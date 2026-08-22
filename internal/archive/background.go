@@ -79,6 +79,55 @@ func backgroundImageSpan(s string) (start, end int, ok bool) {
 // everywhere at the cost of duplicating the template across notes.
 const backgroundsDir = "backgrounds"
 
+// backgroundHash returns the sha256 (hex) of the decoded inline background image
+// in a rendered page SVG — the template selector. It is computed from the source
+// SVG (before the background pipeline runs), so it is captured under every
+// background mode, not only extract. ok is false when the SVG has no inline
+// data-URI image (e.g. a blank page). The hash is over the *decoded* bytes (the
+// raw image file), so it equals sha256 of the standalone template image file and
+// matches the content-addressed backgrounds/<sha256>.<ext> filename.
+func backgroundHash(svg []byte) (hexsum string, ok bool) {
+	data, _, ok := decodeInlineBackground(svg)
+	if !ok {
+		return "", false
+	}
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:]), true
+}
+
+// decodeInlineBackground locates the inline data-URI background image in a
+// rendered SVG and returns its decoded bytes plus extension. ok is false when
+// there is no such image or the data URI is malformed.
+func decodeInlineBackground(svg []byte) (data []byte, ext string, ok bool) {
+	s := string(svg)
+	const marker = `xlink:href="data:image/`
+	hi := strings.Index(s, marker)
+	if hi < 0 {
+		return nil, "", false
+	}
+	valStart := hi + len(`xlink:href="`) // points at "data:image/..."
+	q := strings.IndexByte(s[valStart:], '"')
+	if q < 0 {
+		return nil, "", false
+	}
+	uri := s[valStart : valStart+q] // data:image/<ext>;base64,<DATA>
+
+	semi := strings.IndexByte(uri, ';')
+	comma := strings.IndexByte(uri, ',')
+	if semi < 0 || comma < 0 || comma < semi {
+		return nil, "", false
+	}
+	ext = uri[len("data:image/"):semi]
+	if ext == "" {
+		ext = "png"
+	}
+	decoded, err := base64.StdEncoding.DecodeString(uri[comma+1:])
+	if err != nil {
+		return nil, "", false
+	}
+	return decoded, ext, true
+}
+
 // extractBackground finds the inline data-URI background <image> in a rendered
 // SVG and replaces its xlink:href with a relative path to a content-addressed
 // file in backgroundsDir. It returns the rewritten SVG plus the decoded image
@@ -91,35 +140,21 @@ const backgroundsDir = "backgrounds"
 // identical href), so re-ingest re-renders byte-identically and writeFileIfChanged
 // stays churn-free.
 func extractBackground(svg []byte) (out []byte, img []byte, name string, ok bool) {
+	data, ext, ok := decodeInlineBackground(svg)
+	if !ok {
+		return svg, nil, "", false
+	}
+	// The content hash is over the decoded bytes, so it matches backgroundHash and
+	// the standalone template image file (see backgroundHash).
+	sum := sha256.Sum256(data)
+	name = hex.EncodeToString(sum[:]) + "." + ext
+
+	// Rewrite the inline data URI href in place to the descendant backgrounds path.
 	s := string(svg)
 	const marker = `xlink:href="data:image/`
 	hi := strings.Index(s, marker)
-	if hi < 0 {
-		return svg, nil, "", false
-	}
-	valStart := hi + len(`xlink:href="`) // points at "data:image/..."
+	valStart := hi + len(`xlink:href="`)
 	q := strings.IndexByte(s[valStart:], '"')
-	if q < 0 {
-		return svg, nil, "", false
-	}
-	uri := s[valStart : valStart+q] // data:image/<ext>;base64,<DATA>
-
-	semi := strings.IndexByte(uri, ';')
-	comma := strings.IndexByte(uri, ',')
-	if semi < 0 || comma < 0 || comma < semi {
-		return svg, nil, "", false
-	}
-	ext := uri[len("data:image/"):semi]
-	if ext == "" {
-		ext = "png"
-	}
-	data, err := base64.StdEncoding.DecodeString(uri[comma+1:])
-	if err != nil {
-		return svg, nil, "", false
-	}
-
-	sum := sha256.Sum256(data)
-	name = hex.EncodeToString(sum[:]) + "." + ext
 	href := backgroundsDir + "/" + name
 	out = []byte(s[:valStart] + href + s[valStart+q:])
 	return out, data, name, true

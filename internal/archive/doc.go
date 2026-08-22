@@ -31,25 +31,47 @@ type NotePageRef struct {
 
 // PageDoc is <PAGEID>.json — the per-page deterministic metadata, optionally
 // enriched with a derived AI Analysis (written by the analyze command, not ingest).
+//
+// BackgroundHash is the sha256 of the decoded page background image (the template
+// selector), stamped by ingest regardless of the SVG background mode — the one
+// template-related field that is an ingest fact, so it stays top-level; the per-box
+// analyze state lives under Analysis.Regions instead.
 type PageDoc struct {
-	SchemaVersion int           `json:"schema_version"`
-	PageID        string        `json:"page_id"`
-	Starred       bool          `json:"starred"`
-	Titles        []TitleDoc    `json:"titles"`
-	Keywords      []KeywordDoc  `json:"keywords"`
-	Links         []LinkDoc     `json:"links"`
-	Analysis      *PageAnalysis `json:"analysis,omitempty"`
+	SchemaVersion  int           `json:"schema_version"`
+	PageID         string        `json:"page_id"`
+	Starred        bool          `json:"starred"`
+	BackgroundHash string        `json:"background_hash,omitempty"`
+	Titles         []TitleDoc    `json:"titles"`
+	Keywords       []KeywordDoc  `json:"keywords"`
+	Links          []LinkDoc     `json:"links"`
+	Analysis       *PageAnalysis `json:"analysis,omitempty"`
 }
 
-// PageAnalysis is the page-level derived AI output. The transcribed content
-// itself lives in the <PAGEID>.md sidecar (multiline markdown, diff-friendly);
-// per-region transcriptions live on TitleDoc/LinkDoc. SourceHash fingerprints
-// the rasterized page the analysis was derived from, so analyze can skip
-// unchanged pages. Fields holds configurable custom outputs (e.g. "summary")
-// derived from the content by name.
+// RegionDoc is the per-box fingerprint state for a templated page: ID is the
+// template box id (stable identity, matches the config's templates: section), SourceHash is
+// the hash of the box rect cropped from the page's canonical black-on-white
+// rasterization, so analyze can skip a box whose handwriting is unchanged. The
+// transcription itself is the box's section in the <PAGEID>.md sidecar, keyed by
+// the same id.
+type RegionDoc struct {
+	ID         string `json:"id"`
+	SourceHash string `json:"source_hash"`
+}
+
+// PageAnalysis is the page-level derived AI output — everything the analyze
+// command produces. The transcribed content itself lives in the <PAGEID>.md
+// sidecar (multiline markdown, diff-friendly — a templated page's per-box sections
+// share that same file); per-region title/link transcriptions live on
+// TitleDoc/LinkDoc. SourceHash fingerprints the rasterized page the analysis was
+// derived from, so analyze can skip unchanged pages. Fields holds configurable
+// custom outputs (e.g. "summary") derived from the content by name. Regions is the
+// per-box change-detection state for a templated page: it sits here (not top-level)
+// because a region entry is purely analyze state — its label/rect/prompt live only
+// in the config's templates: section and its text in the <PAGEID>.md sidecar.
 type PageAnalysis struct {
 	SourceHash string            `json:"source_hash"`
 	Fields     map[string]string `json:"fields,omitempty"`
+	Regions    []RegionDoc       `json:"regions,omitempty"`
 }
 
 // TitleAnalysis is a title region's transcription. Edited marks Name as a

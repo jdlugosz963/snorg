@@ -5,11 +5,10 @@
 //
 // The archive path is the global -a/--archive flag, optional when the XDG user config
 // ($XDG_CONFIG_HOME/snorg/config.yaml) sets `archive:` (the flag wins). The merged
-// config (XDG user config, overridden by the archive's config.yaml, overridden by
-// -c files) is loaded once in the root Before hook via snorg.Resolve and shared by
-// every command:
+// config (XDG user config, overridden by -c files) is loaded once in the root Before
+// hook via snorg.Resolve and shared by every command:
 //
-//	snorg [-a <archive-path>] [-c config.yaml ...] [--no-archive-config] [--no-user-config] <command> [command flags] [args]
+//	snorg [-a <archive-path>] [-c config.yaml ...] [--no-user-config] <command> [command flags] [args]
 //
 //	snorg [-a <archive-path>] ingest [-j N] <file-or-dir>
 //	snorg [-a <archive-path>] list
@@ -65,7 +64,7 @@ func archiveFlag() *cli.StringFlag {
 	return &cli.StringFlag{
 		Name:    "archive",
 		Aliases: []string{"a"},
-		Usage:   "archive root `PATH` (holds the FILE_ID sub-dirs and config.yaml); optional if the user config sets archive:",
+		Usage:   "archive root `PATH` (holds the FILE_ID sub-dirs); optional if the user config sets archive:",
 	}
 }
 
@@ -76,14 +75,6 @@ func configFlag() *cli.StringSliceFlag {
 		Name:    "config",
 		Aliases: []string{"c"},
 		Usage:   "config YAML `FILE` (repeatable; later files override earlier ones)",
-	}
-}
-
-// noArchiveConfigFlag opts out of loading <archive-path>/config.yaml.
-func noArchiveConfigFlag() *cli.BoolFlag {
-	return &cli.BoolFlag{
-		Name:  "no-archive-config",
-		Usage: "ignore <archive-path>/config.yaml",
 	}
 }
 
@@ -124,16 +115,15 @@ func root() *cli.Command {
 	return &cli.Command{
 		Name:                  "snorg",
 		Usage:                 "supernote-organizer: ingest .note files into a plaintext archive",
-		UsageText:             "snorg [-a <archive-path>] [-c config.yaml ...] [--no-archive-config] [--no-user-config] <command> [command flags] [args]",
-		Flags:                 []cli.Flag{archiveFlag(), configFlag(), noArchiveConfigFlag(), noUserConfigFlag()},
+		UsageText:             "snorg [-a <archive-path>] [-c config.yaml ...] [--no-user-config] <command> [command flags] [args]",
+		Flags:                 []cli.Flag{archiveFlag(), configFlag(), noUserConfigFlag()},
 		Commands:              commands(a),
 		EnableShellCompletion: true,
 		Before: func(ctx context.Context, cmd *cli.Command) (context.Context, error) {
 			client, err := snorg.Resolve(snorg.ResolveOptions{
-				ArchivePath:     cmd.String("archive"),
-				ConfigFiles:     cmd.StringSlice("config"),
-				NoUserConfig:    cmd.Bool("no-user-config"),
-				NoArchiveConfig: cmd.Bool("no-archive-config"),
+				ArchivePath:  cmd.String("archive"),
+				ConfigFiles:  cmd.StringSlice("config"),
+				NoUserConfig: cmd.Bool("no-user-config"),
 			})
 			if err != nil {
 				return ctx, err

@@ -14,10 +14,10 @@ import (
 )
 
 // Pages render in a fixed pixel space; all rects are expressed in it (see
-// docs/supernote-format.md).
+// snote.PageWidth/PageHeight and docs/supernote-format.md).
 const (
-	pageW = 1920
-	pageH = 2560
+	pageW = snote.PageWidth
+	pageH = snote.PageHeight
 )
 
 // rasterize draws the page SVG onto a white RGBA canvas at the native page

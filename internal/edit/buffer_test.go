@@ -27,9 +27,9 @@ func eq(t *testing.T, got, want string, label string) {
 
 func TestSerializeParseRoundTrip(t *testing.T) {
 	pd := samplePage()
-	buf := serialize(pd, "# body\n\ntext\n")
+	buf := serialize(pd, "# body\n\ntext\n", nil)
 
-	titleNames, linkNames, content, err := parse(buf, len(pd.Titles), len(pd.Links))
+	titleNames, linkNames, _, content, err := parse(buf, len(pd.Titles), len(pd.Links), nil)
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
@@ -45,10 +45,10 @@ func TestSerializeParseRoundTrip(t *testing.T) {
 func TestSerializeNoRegions(t *testing.T) {
 	// No titles and no links: the buffer is just the content, and parse hands it
 	// straight back — the pre-feature behavior.
-	buf := serialize(archive.PageDoc{}, "just content\n")
+	buf := serialize(archive.PageDoc{}, "just content\n", nil)
 	eq(t, buf, "just content\n", "buffer")
 
-	titleNames, linkNames, content, err := parse(buf, 0, 0)
+	titleNames, linkNames, _, content, err := parse(buf, 0, 0, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -64,7 +64,7 @@ func TestParseIgnoresMarkerContext(t *testing.T) {
 	buf := "<!-- title 1 (h9) whatever -->\nA\n" +
 		"<!-- link 1 -->\nB\n" +
 		"<!-- content -->\nbody\n"
-	titleNames, linkNames, content, err := parse(buf, 1, 1)
+	titleNames, linkNames, _, content, err := parse(buf, 1, 1, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -77,7 +77,7 @@ func TestParseContentIsVerbatim(t *testing.T) {
 	// Content after the first content marker is taken as-is, even lines that look
 	// like markers or a second content marker.
 	buf := "<!-- title 1 -->\nT\n<!-- content -->\n<!-- title 2 -->\n<!-- content -->\nreal body\n"
-	titleNames, _, content, err := parse(buf, 1, 0)
+	titleNames, _, _, content, err := parse(buf, 1, 0, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -87,7 +87,7 @@ func TestParseContentIsVerbatim(t *testing.T) {
 
 func TestParseMultilineAndEmptyNames(t *testing.T) {
 	buf := "<!-- title 1 -->\nline one\nline two\n<!-- title 2 -->\n<!-- content -->\n"
-	titleNames, _, content, err := parse(buf, 2, 0)
+	titleNames, _, _, content, err := parse(buf, 2, 0, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -108,7 +108,7 @@ func TestParseErrors(t *testing.T) {
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
-			if _, _, _, err := parse(c.buf, c.nTitles, c.nLinks); err == nil {
+			if _, _, _, _, err := parse(c.buf, c.nTitles, c.nLinks, nil); err == nil {
 				t.Errorf("expected error for %s", name)
 			}
 		})

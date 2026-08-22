@@ -76,6 +76,52 @@ analysis:
 	}
 }
 
+func TestLoadArchivePathResolution(t *testing.T) {
+	// A relative archive: resolves against the declaring file's directory.
+	p := writeCfg(t, "config.yaml", "archive: .\n")
+	dir := filepath.Dir(p)
+	cfg, err := Load([]string{p})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Archive != dir {
+		t.Errorf("archive '.' = %q, want %q", cfg.Archive, dir)
+	}
+
+	p2 := writeCfg(t, "config.yaml", "archive: sub/x\n")
+	dir2 := filepath.Dir(p2)
+	cfg2, err := Load([]string{p2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := filepath.Join(dir2, "sub/x"); cfg2.Archive != want {
+		t.Errorf("archive 'sub/x' = %q, want %q", cfg2.Archive, want)
+	}
+
+	// Absolute stays as-is; a leading ~ expands to $HOME.
+	pAbs := writeCfg(t, "config.yaml", "archive: /abs/archive\n")
+	cfgAbs, err := Load([]string{pAbs})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfgAbs.Archive != "/abs/archive" {
+		t.Errorf("absolute archive = %q, want /abs/archive", cfgAbs.Archive)
+	}
+
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skip("no home dir")
+	}
+	pTilde := writeCfg(t, "config.yaml", "archive: ~/notes/sn\n")
+	cfgTilde, err := Load([]string{pTilde})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := filepath.Join(home, "notes/sn"); cfgTilde.Archive != want {
+		t.Errorf("~ archive = %q, want %q", cfgTilde.Archive, want)
+	}
+}
+
 func TestLoadUpdatePromptOverride(t *testing.T) {
 	p := writeCfg(t, "c.yaml", `
 analysis:
@@ -240,6 +286,25 @@ func TestValidateProvider(t *testing.T) {
 		}
 		if err := cfg.ValidateProvider(); err == nil {
 			t.Errorf("%s: expected error", name)
+		}
+	}
+}
+
+func TestExpandHome(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skipf("no home dir: %v", err)
+	}
+	cases := map[string]string{
+		"~":          home,
+		"~/notes/sn": filepath.Join(home, "notes/sn"),
+		"/abs/notes": "/abs/notes",
+		"rel/notes":  "rel/notes",
+		"~notuser/x": "~notuser/x", // ~ not followed by / is left alone
+	}
+	for in, want := range cases {
+		if got := ExpandHome(in); got != want {
+			t.Errorf("ExpandHome(%q) = %q, want %q", in, got, want)
 		}
 	}
 }

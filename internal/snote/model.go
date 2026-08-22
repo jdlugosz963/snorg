@@ -4,7 +4,14 @@
 // on-disk binary format directly.
 package snote
 
-// Rect is an axis-aligned rectangle in page pixel space (pages render 1920x2560).
+// Pages render in a fixed pixel space; every Rect (titles, links, template boxes)
+// is expressed in it (see docs/supernote-format.md).
+const (
+	PageWidth  = 1920
+	PageHeight = 2560
+)
+
+// Rect is an axis-aligned rectangle in page pixel space (PageWidth x PageHeight).
 type Rect struct {
 	X int `json:"x"`
 	Y int `json:"y"`

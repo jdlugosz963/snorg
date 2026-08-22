@@ -124,27 +124,47 @@ func (a *Archive) WritePage(fileID string, pd PageDoc) error {
 	return writeJSONIfChanged(filepath.Join(a.Root, fileID, pd.PageID+".json"), pd)
 }
 
-func (a *Archive) analysisMDPath(fileID, pageID string) string {
-	return filepath.Join(a.Root, fileID, pageID+".md")
+// mdName is the transcription sidecar filename for a page. A page has exactly one
+// <pageID>.md: plain markdown for a normal page, the id-keyed region-section
+// document (see regions.go) for a templated page — the two forms are mutually
+// exclusive per page, so they share the file.
+func mdName(pageID string) string {
+	return pageID + ".md"
 }
 
-// ReadAnalysisMD returns the page's transcribed content from <fileID>/<pageID>.md.
-// A missing sidecar means the page was never analyzed and reads as ("", nil).
-func (a *Archive) ReadAnalysisMD(fileID, pageID string) (string, error) {
-	b, err := os.ReadFile(a.analysisMDPath(fileID, pageID))
+func (a *Archive) mdPath(fileID, pageID string) string {
+	return filepath.Join(a.Root, fileID, mdName(pageID))
+}
+
+// readMD returns a page's transcription sidecar content; a missing file reads as
+// ("", nil) — the page was never analyzed/edited.
+func (a *Archive) readMD(fileID, pageID string) (string, error) {
+	b, err := os.ReadFile(a.mdPath(fileID, pageID))
 	if os.IsNotExist(err) {
 		return "", nil
 	}
 	if err != nil {
-		return "", fmt.Errorf("read analysis %s: %w", pageID, err)
+		return "", fmt.Errorf("read %s: %w", mdName(pageID), err)
 	}
 	return string(b), nil
 }
 
-// WriteAnalysisMD writes the page's transcribed content (markdown) to the
+// writeMD writes a page's transcription sidecar in NormMD form.
+func (a *Archive) writeMD(fileID, pageID, content string) error {
+	return writeFileIfChanged(a.mdPath(fileID, pageID), []byte(NormMD(content)))
+}
+
+// ReadAnalysisMD returns the page's transcription from <fileID>/<pageID>.md (plain
+// content for a normal page, the region-section document for a templated page). A
+// missing sidecar means the page was never analyzed and reads as ("", nil).
+func (a *Archive) ReadAnalysisMD(fileID, pageID string) (string, error) {
+	return a.readMD(fileID, pageID)
+}
+
+// WriteAnalysisMD writes the page's transcription (markdown) to the
 // <fileID>/<pageID>.md sidecar in NormMD form.
 func (a *Archive) WriteAnalysisMD(fileID, pageID, content string) error {
-	return writeFileIfChanged(a.analysisMDPath(fileID, pageID), []byte(NormMD(content)))
+	return a.writeMD(fileID, pageID, content)
 }
 
 // NormMD normalizes transcription content to its stored form: exactly one

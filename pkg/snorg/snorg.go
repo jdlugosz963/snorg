@@ -73,43 +73,57 @@ func Open(archivePath string, cfg *Config) (*Client, error) {
 		svg.Colors = s.Colors
 	}
 	arch.SVG = svg
+	// Bridge the config's template specs (image paths already resolved to absolute
+	// by config.Load) into the archive, which hashes each image to match a page's
+	// background. A hand-built Config with no templates leaves the feature inert.
+	arch.SetTemplateSpecs(templateSpecs(cfg))
 	return &Client{arch: arch, cfg: cfg}, nil
+}
+
+// templateSpecs converts the config's template section into the archive's raw spec
+// form (identical fields; the two packages stay mutually independent, bridged here).
+func templateSpecs(cfg *config.Config) []archive.TemplateSpec {
+	if len(cfg.Templates) == 0 {
+		return nil
+	}
+	out := make([]archive.TemplateSpec, len(cfg.Templates))
+	for i, t := range cfg.Templates {
+		boxes := make([]archive.Box, len(t.Boxes))
+		for j, b := range t.Boxes {
+			boxes[j] = archive.Box{ID: b.ID, Label: b.Label, Rect: b.Rect, Analyze: b.Analyze, Prompt: b.Prompt}
+		}
+		out[i] = archive.TemplateSpec{Image: t.Image, Boxes: boxes}
+	}
+	return out
 }
 
 // ResolveOptions configures Resolve's archive-path and config-layer resolution,
 // mirroring the snorg CLI's global flags.
 type ResolveOptions struct {
-	ArchivePath     string   // the -a flag; when empty, falls back to the config's archive: key
-	ConfigFiles     []string // -c files, later overriding earlier
-	NoUserConfig    bool     // skip the XDG user config
-	NoArchiveConfig bool     // skip <archive>/config.yaml
+	ArchivePath  string   // the -a flag; when empty, falls back to the config's archive: key
+	ConfigFiles  []string // -c files, later overriding earlier
+	NoUserConfig bool     // skip the XDG user config
 }
 
-// Resolve builds a Client the way the CLI does: it locates the archive root (the
-// ArchivePath option, else the archive: key from the XDG user config and -c files,
-// with a leading ~ expanded) and loads the merged config in increasing precedence
-// (XDG user config → <archive>/config.yaml → -c files, later wins).
+// Resolve builds a Client the way the CLI does: it loads the merged config in
+// increasing precedence (XDG user config → -c files, later wins) in a single pass,
+// then locates the archive root — the ArchivePath option (CWD-relative, like any
+// CLI path), else the archive: key from that merged config (resolved by config.Load
+// relative to the file that declared it). A leading ~ is expanded either way.
 func Resolve(opts ResolveOptions) (*Client, error) {
 	userPath := userConfigPath()
+	cfg, err := config.Load(configPaths(userPath, opts.ConfigFiles, opts.NoUserConfig))
+	if err != nil {
+		return nil, err
+	}
 	archivePath := opts.ArchivePath
 	if archivePath == "" {
-		// The archive path is needed to locate the archive's own config, so it is
-		// resolved from only the layers that do not depend on it.
-		preCfg, err := config.Load(configPaths(userPath, "", opts.ConfigFiles, opts.NoUserConfig, true))
-		if err != nil {
-			return nil, err
-		}
-		archivePath = preCfg.Archive
+		archivePath = cfg.Archive
 	}
 	if archivePath == "" {
 		return nil, fmt.Errorf("no archive path: set ArchivePath or the archive: key in %s", userPath)
 	}
-	archivePath = expandHome(archivePath)
-
-	cfg, err := config.Load(configPaths(userPath, archivePath, opts.ConfigFiles, opts.NoUserConfig, opts.NoArchiveConfig))
-	if err != nil {
-		return nil, err
-	}
+	archivePath = config.ExpandHome(archivePath)
 	return Open(archivePath, cfg)
 }
 

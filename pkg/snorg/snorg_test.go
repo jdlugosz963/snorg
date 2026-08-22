@@ -1,6 +1,8 @@
 package snorg
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -149,67 +151,37 @@ func TestPageBufferApplyRoundTrip(t *testing.T) {
 }
 
 func TestConfigPaths(t *testing.T) {
-	dir := t.TempDir()
-	archiveCfg := filepath.Join(dir, archiveConfigName)
-	if err := os.WriteFile(archiveCfg, []byte("provider:\n  model: archive\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	userCfg := filepath.Join(t.TempDir(), archiveConfigName)
+	userCfg := filepath.Join(t.TempDir(), userConfigName)
 	if err := os.WriteFile(userCfg, []byte("archive: /somewhere\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	cli := []string{"/tmp/a.yaml", "/tmp/b.yaml"}
 
-	// All layers present: XDG user config, then archive config, then -c files
-	// (each later layer wins the merge).
-	got := configPaths(userCfg, dir, cli, false, false)
-	want := append([]string{userCfg, archiveCfg}, cli...)
+	// Both layers present: the XDG user config, then the -c files (each later
+	// layer wins the merge).
+	got := configPaths(userCfg, cli, false)
+	want := append([]string{userCfg}, cli...)
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("all layers: got %v, want %v", got, want)
 	}
 
-	// Opt-outs are independent.
-	if got := configPaths(userCfg, dir, cli, true, false); !reflect.DeepEqual(got, append([]string{archiveCfg}, cli...)) {
+	// --no-user-config drops the auto-loaded user config, leaving only -c files.
+	if got := configPaths(userCfg, cli, true); !reflect.DeepEqual(got, cli) {
 		t.Errorf("no-user-config: got %v", got)
 	}
-	if got := configPaths(userCfg, dir, cli, false, true); !reflect.DeepEqual(got, append([]string{userCfg}, cli...)) {
-		t.Errorf("no-archive-config: got %v", got)
-	}
-	if got := configPaths(userCfg, dir, cli, true, true); !reflect.DeepEqual(got, cli) {
-		t.Errorf("both opt-outs: got %v, want %v", got, cli)
-	}
 
-	// Empty user path and missing archive config: only the -c files, no error.
-	if got := configPaths("", t.TempDir(), cli, false, false); !reflect.DeepEqual(got, cli) {
-		t.Errorf("missing files: got %v, want %v", got, cli)
+	// Empty user path: only the -c files, no error.
+	if got := configPaths("", cli, false); !reflect.DeepEqual(got, cli) {
+		t.Errorf("missing user config: got %v, want %v", got, cli)
 	}
 
 	// A directory named config.yaml is not treated as a config file.
-	dir2 := t.TempDir()
-	if err := os.Mkdir(filepath.Join(dir2, archiveConfigName), 0o755); err != nil {
+	dir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dir, userConfigName), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if got := configPaths("", dir2, cli, false, false); !reflect.DeepEqual(got, cli) {
+	if got := configPaths(filepath.Join(dir, userConfigName), cli, false); !reflect.DeepEqual(got, cli) {
 		t.Errorf("config.yaml dir: got %v, want %v", got, cli)
-	}
-}
-
-func TestExpandHome(t *testing.T) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		t.Skipf("no home dir: %v", err)
-	}
-	cases := map[string]string{
-		"~":          home,
-		"~/notes/sn": filepath.Join(home, "notes/sn"),
-		"/abs/notes": "/abs/notes",
-		"rel/notes":  "rel/notes",
-		"~notuser/x": "~notuser/x", // ~ not followed by / is left alone
-	}
-	for in, want := range cases {
-		if got := expandHome(in); got != want {
-			t.Errorf("expandHome(%q) = %q, want %q", in, got, want)
-		}
 	}
 }
 
@@ -240,5 +212,44 @@ func TestParseDateSpec(t *testing.T) {
 		if err == nil && (from != tc.from || to != tc.to) {
 			t.Errorf("ParseDateSpec(%q) = (%q,%q), want (%q,%q)", tc.spec, from, to, tc.from, tc.to)
 		}
+	}
+}
+
+// TestOpenBridgesTemplateSpecs verifies Open wires the merged config's templates:
+// section into the archive: an image path resolved by LoadConfig (relative to the
+// config file) is hashed and matchable via the archive's template set.
+func TestOpenBridgesTemplateSpecs(t *testing.T) {
+	dir := t.TempDir()
+	imgBytes := []byte("device-form-template")
+	sum := sha256.Sum256(imgBytes)
+	hash := hex.EncodeToString(sum[:])
+	if err := os.WriteFile(filepath.Join(dir, "bg.png"), imgBytes, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfgPath := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(cfgPath, []byte(
+		"templates:\n  - image: bg.png\n    boxes:\n      - {id: title, label: \"Title\", rect: {x: 0, y: 0, w: 1920, h: 400}, analyze: true}\n"),
+		0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := LoadConfig([]string{cfgPath})
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	c, err := Open(t.TempDir(), cfg)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	ts, err := c.arch.Templates()
+	if err != nil {
+		t.Fatalf("Templates: %v", err)
+	}
+	tmpl := ts.MatchBackground(hash)
+	if tmpl == nil {
+		t.Fatalf("template not matched by image hash %s (bridge broken)", hash)
+	}
+	if len(tmpl.Boxes) != 1 || tmpl.Boxes[0].ID != "title" {
+		t.Errorf("boxes = %+v", tmpl.Boxes)
 	}
 }

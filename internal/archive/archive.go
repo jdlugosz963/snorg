@@ -29,6 +29,12 @@ import (
 type Archive struct {
 	Root string
 	SVG  SVGPipeline
+
+	// templateSpecs are the template regions injected from the merged config (via
+	// SetTemplateSpecs); templates is the resolved, image-hashed set Templates()
+	// builds from them and caches. Nil specs = the template feature is inert.
+	templateSpecs []TemplateSpec
+	templates     *Templates
 }
 
 // SVGPipeline configures the rewrites Write applies to each rendered page SVG.
@@ -108,9 +114,18 @@ func (a *Archive) Write(n *snote.Note, svgs map[string][]byte) error {
 	}
 	for i, p := range n.Pages {
 		pd := pageDoc(p)
+		// Stamp the template selector from the source SVG (before the background
+		// pipeline runs), so it is captured under every background mode. Absent
+		// inline background (blank page) leaves it empty.
+		if svg, ok := svgs[p.ID]; ok {
+			if h, ok := backgroundHash(svg); ok {
+				pd.BackgroundHash = h
+			}
+		}
 		// Re-ingest must not discard a page's derived AI analysis: carry it over from
 		// the existing page doc gathered in the preflight (ingest itself never
 		// produces one). Absent = the normal first-ingest case, nothing to carry.
+		// Region fingerprints ride along inside Analysis, so this carries them too.
 		if old, ok := oldPages[p.ID]; ok {
 			pd.Analysis = old.Analysis
 			carryRegionAnalyses(&pd, old)

@@ -16,7 +16,7 @@ A `Client` bundles an archive root with merged configuration.
   may be `nil` for built-in defaults. Build `cfg` with `LoadConfig(paths)`.
 - `Resolve(ResolveOptions) (*Client, error)` — the CLI's resolution: archive path
   from the option or the config's `archive:` key (`~` expanded), config layered
-  XDG user → `<archive>/config.yaml` → `-c` files (later wins).
+  XDG user → `-c` files (later wins).
 
 `Client.ArchivePath()` / `Client.Config()` expose the resolved root and config.
 

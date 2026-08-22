@@ -19,14 +19,15 @@ import (
 )
 
 // Diff returns a unified diff turning old into new, or "" when they are equal.
-// go-diffpatch computes the line diff (Myers, 3 lines of context) and
-// sourcegraph/go-diff renders it as a standard unified diff — plaintext,
-// self-contained and human-readable — that Unapply reverses.
+// go-diffpatch computes the line diff (Myers, 1 line of context — `-U1`, the
+// tersest go-diffpatch supports: Context <= 0 means unlimited context, a
+// full-file diff) and sourcegraph/go-diff renders it as a standard unified
+// diff — plaintext, self-contained and human-readable — that Unapply reverses.
 func Diff(old, new string) (string, error) {
 	if old == new {
 		return "", nil
 	}
-	patch, err := diffpatch.DiffWithOptions(old, new, diffpatch.Options{Context: 3})
+	patch, err := diffpatch.DiffWithOptions(old, new, diffpatch.Options{Context: 1})
 	if err != nil {
 		return "", err
 	}

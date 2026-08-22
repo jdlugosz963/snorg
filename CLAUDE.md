@@ -7,15 +7,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 SNORG (supernote-organizer) ingests Supernote `.note` files into a plaintext,
 machine-readable, VCS-friendly *archive*, so notes can later be retrieved and exported.
 Read `docs/principles.md` (project rules), `docs/architecture.md` (modules/CLI),
-`docs/supernote-format.md` (`.note` format + tooling) before substantial work.
+`docs/supernote-format.md` (`.note` format + tooling), `docs/templates.md`
+(template regions) before substantial work.
 
 ## Project rules
 
 - Go. External deps by package: `internal/analyze` and `internal/serve` use
   `oksvg`/`rasterx` (SVG rasterization — analyze for the vision prompt, serve for
   gallery thumbnails); `internal/analyze` also uses `openai-go` (LLM client);
-  `internal/config` uses
-  `gopkg.in/yaml.v3` (config parsing); `internal/export` uses `pongo2/v6`
+  `internal/config` uses `gopkg.in/yaml.v3` (YAML parsing); `internal/export` uses `pongo2/v6`
   (Jinja2-style templating); `cmd/snorg` uses `urfave/cli/v3` (CLI framework);
   `internal/snote/sntool` uses `github.com/jdlugosz963/sntool` (the native-Go
   `.note` parser + SVG renderer, pure Go via `gotranspile/gotrace` potrace), so
@@ -35,14 +35,14 @@ Read `docs/principles.md` (project rules), `docs/architecture.md` (modules/CLI),
 - `go build ./... && go vet ./... && gofmt -l .` — build, vet, format check (gofmt output must be empty)
 - `go test ./...` — all tests
 - `go test -run TestIngestSampleNote ./internal/ingest` — e2e ingest through the native `sntool` backend (parse + render in pure Go, no PATH tool); skips only if the `note.note` fixture is absent
-- CLI shape: `snorg [-a <archive-path>] [-c config.yaml ...] [--no-archive-config] [--no-user-config] <command> [command flags] [args]` — the archive is the global `-a`/`--archive` flag and the config flags are global too, so all come **before** the command; the root's `Before` hook loads the merged config once in **increasing precedence**: `$XDG_CONFIG_HOME/snorg/config.yaml` (the XDG **user config**, `--no-user-config` to skip) → `<archive-path>/config.yaml` (`--no-archive-config` to skip) → `-c` files (later wins), and hands it to the command, which validates only the sections it uses. `-a` is **optional** when the user config sets the top-level `archive:` key (the flag wins; a leading `~` is expanded) — resolved before the archive config is located, so a bare `snorg <command>` targets that archive
-- `go run ./cmd/snorg -a <archive-path> [-c ...] ingest [-j N] <file-or-dir>` — register a note (or all `*.note` under a dir) into the archive; `-j` caps concurrent notes (default NumCPU); config drives the SVG pipeline (`ingest.svg.{links,navigation,format}` bools default true; `background` mode `extract`(default)`|inline|blank|remove`; `colors` remaps the 4 default pen-shade fills). None of these change the analyze fingerprint (path geometry), so restyling never re-transcribes.
+- CLI shape: `snorg [-a <archive-path>] [-c config.yaml ...] [--no-user-config] <command> [command flags] [args]` — the archive is the global `-a`/`--archive` flag and the config flags are global too, so all come **before** the command; the root's `Before` hook loads the merged config once in **increasing precedence**: `$XDG_CONFIG_HOME/snorg/config.yaml` (the XDG **user config**, the only auto-loaded file, `--no-user-config` to skip) → `-c` files (later wins), and hands it to the command, which validates only the sections it uses. An archive's own `config.yaml` is **not** auto-loaded — pass it explicitly with `-c` (or `include:` it). `-a` is **optional** when the merged config sets the top-level `archive:` key (the flag wins; a leading `~` is expanded), so a bare `snorg <command>` targets that archive
+- `go run ./cmd/snorg -a <archive-path> [-c ...] ingest [-j N] <file-or-dir>` — register a note (or all `*.note` under a dir) into the archive; `-j` caps concurrent notes (default NumCPU); config drives the SVG pipeline (`ingest.svg.{links,navigation,format}` bools default true; `background` mode `extract`(default)`|inline|blank|remove`; `colors` remaps the 4 default pen-shade fills). None of these change the analyze fingerprint (the canonical black-on-white rasterization — pen colors forced black, overlays dropped), so restyling never re-transcribes.
 - `go run ./cmd/snorg -a <archive-path> list [-l]` — list FILE_IDs (one per line); `-l`/`--long` appends the note name (source sans `.note`, FILE_ID fallback) as a tab-separated column (`<FILE_ID>\t<name>`), FILE_ID kept first so `cut -f1`/`awk '{print $1}'` still extracts it
 - `go run ./cmd/snorg -a <archive-path> query <filter> [arg]` — print PAGEIDs of matching pages (one per line); one filter per call: `all`, `note <FILE_ID>`, `unanalyzed`, `keyword <regexp>` (matches `Keyword.Text`), `content <regexp>` (matches the page's transcribed `<PAGEID>.md`), `starred`, `date <spec>` (day from the PAGEID's leading 8 digits; spec = `today`/`yesterday`/`YYYY-MM-DD`/`FROM..TO` with open ends); a `not <filter>` **prefix** inverts any filter (`query not starred` == the non-starred pages), so under piping `query A | query not B` == A minus B; pipes into `retrieve`/`analyze`/`export` (all three take PAGEIDs as args or stdin lines). `query` **itself** reads PAGEIDs from stdin when piped, restricting the filter to that set — so filters intersect: `query keyword foo | query date today` == foo ∩ today. `-l`/`--long` switches to a **browse-only** annotated form: tab-separated columns `<PAGEID>\t<note>\tp<page#>\t<*?>\t<headings>\t#<keyword>…` (note = `source` sans `.note`; `*` marks a starred page, empty otherwise; headings = analyzed title names joined ` / `, empty until analyzed; keywords = device metadata as `#tags`, present even without analysis, so a fuzzy finder can filter on them). Fixed `\t` separators keep the columns machine-splittable (`cut -f`) regardless of value widths. PAGEID stays the **first** whitespace field on purpose (`awk '{print $1}'` extracts it — e.g. `query -l all | fzf -m | awk '{print $1}' | serve -f`). **Not** pipe-safe as-is, so never feed the annotated form downstream
-- `go run ./cmd/snorg -a <archive-path> retrieve [PAGEID ...]` — the read interface: assembles the selected pages into a JSON **object** `{archive, notes}` — `archive` = the **absolute archive root** (so a consumer resolves the pages' archive-relative `svg` paths without knowing where the archive lives), `notes` = the **array of NoteViews** grouped per owning note (full note metadata, only the requested pages, placement order); whole note = `query note <FILE_ID> | retrieve`; unknown PAGEID errors
-- `go run ./cmd/snorg -a <archive-path> [-c ...] analyze [--force] [PAGEID ...]` — incremental vision-LLM analysis; PAGEIDs from args or stdin (pipe from `query`); unchanged pages (path-geometry hash == `analysis.source_hash`; invariant under recolor/background/overlays) are skipped without an LLM call (no rasterize), changed ones re-transcribed through the update prompt + the previous **AI base** (`<PAGEID>.md` with the user's edit diff reverse-applied — user edits never reach the LLM; minimal diff), then 3-way merged with any user edits (overlap → outcome `conflict`, markers in the md, resolve via `analyze-edit`); writes `<PAGEID>.md` (effective content) + `<PAGEID>.json` (per-title/link `analysis.name`, `analysis.{source_hash,fields}`; fields generated from the effective content); a title/link name marked `analysis.edited` (a user override from `analyze-edit`) is kept as-is and its region is **not** re-transcribed, even under `--force`; provider + prompts from the config (`docs/config.md`); `api_key` falls back to `api_key_command` stdout then `OPENAI_API_KEY`
-- `go run ./cmd/snorg -a <archive-path> analyze-edit <PAGEID>` — open the page's transcription in `$VISUAL`/`$EDITOR` (exactly one PAGEID, no stdin — the editor needs the terminal; no provider config needed). The buffer is content **plus** the title/link names: when the page has any title/link the editor opens a header of `<!-- title N (h..) -->` / `<!-- link N → target -->` markers (context after the index is informational — snorg keys off kind+index only) with each name below, then a `<!-- content -->` marker and the content (a page with no regions opens as bare content, as before). On save the content section flows through the usual sidecars — `<PAGEID>.md` stays the effective content, the divergence from the AI base is stored as `<PAGEID>.md.diff` (a unified diff base→md, exists iff they diverge) — and each changed name becomes a **user override** (`analysis.edited`) in `<PAGEID>.json` that `analyze` keeps (and skips re-transcribing) until the region's rect changes. Works on never-analyzed pages too (empty content → hand-written transcription, empty base ⇒ first `analyze` conflicts once); pure Go, no PATH tool
-- `go run ./cmd/snorg -a <archive-path> [-c ...] export [PAGEID ...]` — PAGEIDs from args or stdin (pipe from `query`); groups pages per owning note like `retrieve` and renders the config's single `export.template` (pongo2/Jinja2) **once** over the whole result to stdout; template context is the **whole `retrieve` object** — `archive` (absolute root) + `notes` (snake_case: `notes[].pages[].titles/keywords/links/analysis.content`, `title.analysis.name`, `link.analysis.name`), so one template can span notes and build absolute svg paths (`{{ archive }}/{{ p.svg }}`); filters: `denote` (FILE_ID/PAGEID → denote id), `org` (markdown→org via pandoc), `html` (markdown→HTML via pandoc), `nestorgheadings:N` (demote org headings), `nestmdheadings:N` (demote Markdown headings); needs no `provider` creds; see `examples/config.yaml` (Markdown), `examples/emacs/orgmode.yaml` (org), and `examples/web/` (static HTML site: `export.sh` runs `index.yaml` + per-note `note.yaml` over piped PAGEIDs, copies the pages' SVGs)
+- `go run ./cmd/snorg -a <archive-path> retrieve [PAGEID ...]` — the read interface: assembles the selected pages into a JSON **object** `{archive, notes}` — `archive` = the **absolute archive root** (so a consumer resolves the pages' archive-relative `svg` paths without knowing where the archive lives), `notes` = the **array of NoteViews** grouped per owning note (full note metadata, only the requested pages, placement order); a templated page carries its transcription in `analysis.regions[]` (one entry per config box, label/rect resolved from the config's `templates:` section) rather than `analysis.content`; whole note = `query note <FILE_ID> | retrieve`; unknown PAGEID errors
+- `go run ./cmd/snorg -a <archive-path> [-c ...] analyze [--force] [PAGEID ...]` — incremental vision-LLM analysis; PAGEIDs from args or stdin (pipe from `query`); unchanged pages (canonical-raster mask hash == `analysis.source_hash`; invariant under recolor/background/overlays) are skipped without an LLM call, changed ones re-transcribed through the update prompt + the previous **AI base** (`<PAGEID>.md` with the user's edit diff reverse-applied — user edits never reach the LLM; minimal diff), then 3-way merged with any user edits (overlap → outcome `conflict`, markers in the md, resolve via `analyze-edit`); writes `<PAGEID>.md` (effective content) + `<PAGEID>.json` (per-title/link `analysis.name`, `analysis.{source_hash,fields}`; fields generated from the effective content); a title/link name marked `analysis.edited` (a user override from `analyze-edit`) is kept as-is and its region is **not** re-transcribed, even under `--force`; **template regions**: a page whose `background_hash` matches a config `templates:` entry is analyzed **per box** instead of whole-page — each `analyze:true` box is fingerprinted by its rect cropped out of the canonical-raster mask (pixel-space, so a stroke crossing the edge counts only its in-box pixels; per-box skip, `pd.analysis.regions[].source_hash`), cropped + transcribed, and written to `<PAGEID>.md` (id-keyed region sections in place of free-form content, 3-way merged like content) (`docs/templates.md`); provider + prompts from the config (`docs/config.md`); `api_key` falls back to `api_key_command` stdout then `OPENAI_API_KEY`
+- `go run ./cmd/snorg -a <archive-path> analyze-edit <PAGEID>` — open the page's transcription in `$VISUAL`/`$EDITOR` (exactly one PAGEID, no stdin — the editor needs the terminal; no provider config needed). The buffer is content **plus** the title/link names: when the page has any title/link the editor opens a header of `<!-- title N (h..) -->` / `<!-- link N → target -->` markers (context after the index is informational — snorg keys off kind+index only) with each name below, then a `<!-- content -->` marker and the content (a page with no regions opens as bare content, as before). On save the content section flows through the usual sidecars — `<PAGEID>.md` stays the effective content, the divergence from the AI base is stored as `<PAGEID>.md.diff` (a unified diff base→md, exists iff they diverge) — and each changed name becomes a **user override** (`analysis.edited`) in `<PAGEID>.json` that `analyze` keeps (and skips re-transcribing) until the region's rect changes. A **templated** page instead opens one `<!-- region <id> (<label>) -->` section per template box (keyed by id; label informational) after the header as its body (no `<!-- content -->` marker — the regions are the content; one appearing is an error), saved to the same `<PAGEID>.md[.diff]` via the same 3-way merge. Works on never-analyzed pages too (empty content → hand-written transcription, empty base ⇒ first `analyze` conflicts once); pure Go, no PATH tool
+- `go run ./cmd/snorg -a <archive-path> [-c ...] export [PAGEID ...]` — PAGEIDs from args or stdin (pipe from `query`); groups pages per owning note like `retrieve` and renders the config's single `export.template` (pongo2/Jinja2) **once** over the whole result to stdout; template context is the **whole `retrieve` object** — `archive` (absolute root) + `notes` (snake_case: `notes[].pages[].titles/keywords/links/analysis.content`, `title.analysis.name`, `link.analysis.name`, and `page.analysis.regions[].{id,label,rect,content}` for a templated page), so one template can span notes and build absolute svg paths (`{{ archive }}/{{ p.svg }}`); filters: `denote` (FILE_ID/PAGEID → denote id), `org` (markdown→org via pandoc), `html` (markdown→HTML via pandoc), `nestorgheadings:N` (demote org headings), `nestmdheadings:N` (demote Markdown headings); needs no `provider` creds; see `examples/config.yaml` (Markdown), `examples/emacs/orgmode.yaml` (org), and `examples/web/` (static HTML site: `export.sh` runs `index.yaml` + per-note `note.yaml` over piped PAGEIDs, copies the pages' SVGs)
 - `go run ./cmd/snorg -a <archive-path> serve [-l ADDR] [--flat] [PAGEID ...]` — the built-in, zero-setup HTTP viewer (no provider/config needed). PAGEIDs from args or stdin; **neither = the whole archive**. Assembles the pages like `retrieve` and serves a minimal, dependency-free HTML site on `-l`/`--listen` (default `127.0.0.1:8080`): `/` = note gallery (name from `note.json` `source` sans `.note`, first-page SVG thumbnail) → `/note/<FILE_ID>` = that note's page gallery with a click-to-enlarge lightbox (←/→ pages, Esc) → `/svg/<FILE_ID>/<PAGEID>.svg` streams the page SVG straight from the archive (only pages in the served set; nothing copied to disk — in-memory viewer). `--flat`/`-f` drops the per-note grouping: `/` becomes **one flat gallery of all selected pages** (across notes, each captioned `<note name> · <page number>`) with the same lightbox; in-page SVG links then reopen `/` on the target (`/?page=<PAGEID>`) instead of the note page. Every page holds an SSE stream to `/events` carrying the process's random **boot-id**; on reconnect the viewer reloads to `/` iff the boot-id changed — so restarting `serve` (e.g. over a new selection) auto-refreshes open tabs, while a blip to the same process doesn't (liveness refresh, not live-reload-on-edit)
 - `go run ./cmd/snorg -a <archive-path> migrate [PAGEID ...]` — upgrade the archive's `note.json`/`<PAGEID>.json` to the current `schema_version` (no provider/config needed). PAGEIDs from args or stdin; **neither = the whole archive**; a page selection also migrates its owning `note.json`. The **only** command that reads stale grammars — every other command hard-errors (`ErrSchemaVersion`, "run `snorg migrate`") on a version mismatch; `migrate` reads each file **raw** (no `verifySchema`) and enumerates via `os.Stat`/glob (never the gated readers), walks it **one version at a time** through the version-indexed `archive.schemaMigrations` chain (v→v+1→…→`CurrentSchemaVersion`), then re-serializes through the canonical `NoteDoc`/`PageDoc` (bytes identical to ingest). It also normalizes each page's **unversioned** `<PAGEID>.md.diff` sidecar (content-sniffed: legacy JSON `go-diffpatch` patch → unified diff via `textmerge.ConvertLegacyDiff`), reported as a separate `diff <PAGEID>: migrated` result — this runs regardless of the JSON version walk (idempotent, self-heals a crash between the two writes), since the sidecar carries no `schema_version` to walk. Idempotent (already-current = `current`, no rewrite); a file newer than the binary errors rather than downgrading. Bump `CurrentSchemaVersion` + append one `schemaMigrations` step per contract change (`len == CurrentSchemaVersion`)
 
@@ -60,7 +60,9 @@ Flow: `cmd/snorg` → `pkg/snorg` (public API) → `internal/ingest` orchestrate
   an `internal/*` import. `cmd/snorg` is a thin CLI over this package (flag parsing +
   PAGEID stdin conventions + formatting stay in `cmd`); the config layering, `~`
   expansion, date-spec and query-filter DSL live here (`Resolve`, `ParseFilter`,
-  `ParseDateSpec`). See `docs/library.md`. **When adding or changing a capability,
+  `ParseDateSpec`). `Open` also **bridges** the config's `templates:` specs into the
+  archive (`config.TemplateSpec` → `archive.TemplateSpec` via `SetTemplateSpecs`), keeping
+  `internal/config` and `internal/archive` mutually independent. See `docs/library.md`. **When adding or changing a capability,
   keep the facade in sync** (a new returned type needs an alias, or an external
   consumer can't name it).
 
@@ -74,12 +76,19 @@ Flow: `cmd/snorg` → `pkg/snorg` (public API) → `internal/ingest` orchestrate
   note/file/web/unknown, `Link.Target()` decoded LINKFILE, `Link.Name()` per-kind label),
   so this adapter is a straight mapping — no footer-key parsing here. Its SVG (pen-shade fills `#000000/#9d9d9d/#c9c9c9/#fefefe`,
   inline `xlink:href="data:image/…"` background, `xmlns:xlink` root, `<path fill d>`) is
-  exactly what the archive SVG pipeline (recolor/background/nav/links/pathHash) expects.
-- `internal/archive` — owns the on-disk layout `<archive>/<FILE_ID>/{note.json,<PAGEID>.json,<PAGEID>.md[.diff],<PAGEID>.svg}`;
+  exactly what the archive SVG pipeline (recolor/background/nav/links) and the analyze canonical-raster fingerprint expect.
+- `internal/archive` — owns the on-disk layout `<archive>/<FILE_ID>/{note.json,<PAGEID>.json,<PAGEID>.md[.diff],<PAGEID>.svg}` (a templated page's `.md` holds region sections in place of content) (template background images are ordinary files referenced by the config's `templates:` section, e.g. under `<archive>/templates/`);
   `doc.go` is the JSON serialization boundary (the stable plaintext contract; add fields freely —
   per-title/per-link `analysis` is nested on the items (`name` + `edited` = user-override flag), page
-  `analysis` holds `source_hash`+`fields`, the content transcription lives in the `<PAGEID>.md`
-  sidecar); both `note.json`/`<PAGEID>.json` carry `schema_version` (= `CurrentSchemaVersion`,
+  `analysis` holds `source_hash`+`fields`+`regions[].{id,source_hash}` (per-box fingerprint state),
+  the content transcription lives in the `<PAGEID>.md`
+  sidecar; the top-level `background_hash` (template selector, sha256 of the decoded background,
+  stamped by ingest) + `analysis.regions[]` support template regions —
+  `templates.go` builds the template set from specs injected via `SetTemplateSpecs`
+  (`TemplateSpec`/`Template`/`Box`, hash each absolute `image` path → `MatchBackground`; the specs
+  come from the merged config's `templates:` section, bridged in by `pkg/snorg.Open`, no provider
+  creds), `regions.go` (de)serializes the id-keyed
+  region sections a templated page holds in `<PAGEID>.md` (`docs/templates.md`)); both `note.json`/`<PAGEID>.json` carry `schema_version` (= `CurrentSchemaVersion`,
   stamped by every writer): `ReadNote`/`ReadPage` **hard-reject** a mismatch (`ErrSchemaVersion`,
   "run `snorg migrate`") so no command touches a grammar it doesn't understand and re-ingest aborts
   rather than clobbering a stale page — the `migrate` command reads old files raw
@@ -92,12 +101,15 @@ Flow: `cmd/snorg` → `pkg/snorg` (public API) → `internal/ingest` orchestrate
   before links so links win hit-testing — SVG picks the later element);
   `read.go` are layout-aware accessors (`List`/`ReadNote`/`ReadPage`/`ReadSVG`/`SVGRel`/`FindPage`)
   plus `WritePage` and `ReadAnalysisMD`/`WriteAnalysisMD` (the sidecar pair; `NormMD` is the stored
-  form — one trailing newline, empty collapses to empty); `editdiff.go` owns the `<PAGEID>.md.diff`
+  form — one trailing newline, empty collapses to empty); `editdiff.go` owns the `.md.diff`
   sidecar and its invariant (**md = effective content; diff = AI base → md, exists iff they
-  diverge**): `ReadAnalysisBase` (reverse-applies the diff; fails loudly with a recovery hint when
-  the md was edited outside the tool), `WriteAnalysisEdit` (store an edit; removes both sidecars
-  when base and content are empty), `MergeAnalysis` (3-way merge of a fresh transcription with the
-  user's edits; theirs becomes the new base, conflict markers land in the md). `migrate.go` is the
+  diverge**) via `ReadAnalysisBase`/`WriteAnalysisEdit`/`MergeAnalysis` over the one `<PAGEID>.md[.diff]`
+  pair — serving both a normal page's content and a templated page's region-section document (a page is
+  one or the other, so they share the file): `ReadAnalysisBase`
+  reverse-applies the diff (fails loudly with a recovery hint when the md was edited outside the tool),
+  `WriteAnalysisEdit` stores an edit (removes both sidecars when base and content are empty),
+  `MergeAnalysis` 3-way-merges a fresh transcription with the user's edits (theirs becomes the new base,
+  conflict markers land in the md). `migrate.go` is the
   **only** un-gated reader (`MigrateAll`/`MigratePages` + the version-indexed `schemaMigrations`
   chain): reads raw, enumerates via `List`/`archivedPageIDs`, walks each file v→v+1→current, writes
   canonical `NoteDoc`/`PageDoc` bytes, and (per page) normalizes the unversioned `<PAGEID>.md.diff`
@@ -111,7 +123,9 @@ Flow: `cmd/snorg` → `pkg/snorg` (public API) → `internal/ingest` orchestrate
   the view **mirrors the on-disk structure** (`title.analysis.name`, `link.analysis.name`,
   `page.analysis.{content,fields}`) via its own view types — the internal `edited` override flag is
   **not** exposed; `analysis.content` is exposed whenever the md exists (AI or
-  hand-written), fields only once AI-analyzed. Consumers talk to snorg only via
+  hand-written), fields only once AI-analyzed. A templated page (matched via `a.Templates()`) adds
+  `analysis.regions[]` (`RegionView{id,label,rect,content}` — one per config box, label/rect from the
+  config, content sliced from the region sections in `<PAGEID>.md`; tombstones excluded). Consumers talk to snorg only via
   `list`/`query`/`retrieve`; read-only.
 - `internal/serve` — the built-in HTTP viewer (`serve` cmd): `Handler(a, views, flat)` builds a
   `net/http.ServeMux` over the assembled `[]*retrieve.NoteView` — `/` (note gallery: name +
@@ -139,22 +153,32 @@ Flow: `cmd/snorg` → `pkg/snorg` (public API) → `internal/ingest` orchestrate
   Self-contained HTML/CSS/JS via `html/template`, no other deps; read-only, nothing written to
   disk. Testable via `httptest` (no network). Package deps: `oksvg`/`rasterx` (thumbnail raster).
 - `internal/config` — loads merged YAML config (provider creds + analysis prompts incl.
-  `content.update_prompt` + `ingest.svg` toggles + `export.template`; `docs/config.md`). `Load(paths)`
-  deep-merges files (later wins), defaults unset prompts and nil toggles (to true). Provider key
+  `content.update_prompt` + `ingest.svg` toggles + `export.template` + `templates:` regions; `docs/config.md`). `Load(paths)`
+  deep-merges files (later wins), defaults unset prompts and nil toggles (to true). A file may
+  carry an `include:` list of other config paths (relative to that file's dir, `~` expanded):
+  `loadInto` merges each include **over** the including file ("above includer"), recursively, with
+  stack-based cycle detection — so the low→high order for a file is its body then its includes.
+  Each `templates[].image` is resolved to an absolute path relative to the declaring file **before**
+  merge (provenance survives the wholesale sequence overwrite); the specs are the raw
+  `config.TemplateSpec`/`config.Box` (`snote.Rect`), bridged to `archive.TemplateSpec` by
+  `pkg/snorg.Open` (config and archive stay mutually independent). Provider key
   resolution is a separate `ResolveAPIKey` (called by analyze, not `Load`, so export never runs it):
   literal `api_key` > `api_key_command` shell stdout > `OPENAI_API_KEY`. **Load does not enforce required fields** — each command validates its
   own section (analyze: `ValidateProvider`; export: non-empty `Export.Template`), so an export-only
-  config needs no provider. The top-level `archive:` key (a scalar carried through untouched) is the
-  default archive root when `-a` is absent. Uses `yaml.v3`. `cmd/snorg`'s root command
+  config needs no provider. The top-level `archive:` key is the default archive root when `-a` is
+  absent; Load resolves it per-file by context like `include:`/`image:` paths (relative → against the
+  declaring file's dir via `resolveArchivePath`/`resolvePath`, so `archive: .` in `<archive>/config.yaml`
+  means that dir; absolute/`~` as-is). Uses `yaml.v3`. `cmd/snorg`'s root command
   builds the path list (`configPaths`: XDG user config `$XDG_CONFIG_HOME/snorg/config.yaml`
-  first — `--no-user-config` skips it — then `<archive-path>/config.yaml` — `--no-archive-config`
-  skips it — then the `-c` files, so later layers override via the later-wins merge; each file layer
-  skipped when absent/a directory), loads once in the root's `Before` hook, and shares the result
-  with the command via the `app` struct in `main.go`. The archive path is resolved **first** (`-a`
-  flag, else the `archive:` key from a pre-merge of the layers that don't depend on it — user config +
-  `-c` — with `~` expanded via `expandHome`), since it's needed to locate the archive config; a bare
-  invocation with neither errors. The global `-a`/`--archive` flag is no longer `Required`, so
-  urfave's natural subcommand dispatch still handles routing — no manual dispatch.
+  first — the only auto-loaded file, `--no-user-config` skips it — then the `-c` files, so later
+  layers override via the later-wins merge; the user config skipped when absent/a directory), loads
+  once in the root's `Before` hook, and shares the result with the command via the `app` struct in
+  `main.go`. `snorg.Resolve` loads the merged config in a **single** pass, then resolves the archive
+  path (`-a` flag, CWD-relative; else the merged config's `archive:` key, already file-resolved by
+  Load; `~` expanded via `ExpandHome`); a bare
+  invocation with neither errors. An archive's own `config.yaml` is never auto-loaded (pass it with
+  `-c`). The global `-a`/`--archive` flag is no longer `Required`, so urfave's natural subcommand
+  dispatch still handles routing — no manual dispatch.
 - `internal/export` — generic exporter (`export` cmd): renders the retrieved `*retrieve.Result`
   through one pongo2 template in a single pass (`Render(res, template)`). Marshals the whole Result to
   JSON then back (numbers via `UseNumber` so levels/page numbers render as ints) into the pongo2
@@ -170,24 +194,37 @@ Flow: `cmd/snorg` → `pkg/snorg` (public API) → `internal/ingest` orchestrate
   `markdown.go` (Markdown-exclusive: `nestmdheadings:N` = demote Markdown `#` headings by N). Tests
   skip when pandoc is absent.
 - `internal/analyze` — **incremental** vision-LLM analysis (`analyze` cmd): fingerprints the page by
-  its **path geometry** (`pathHash`: the `d` of every `<path>`, whitespace-normalized — immune to
-  recolor `fill`, background mode, links/nav/format), skips when it matches `analysis.source_hash`
-  without rasterizing (unless `--force`). Otherwise rasterizes the page SVG (`oksvg`/`rasterx`) and
-  transcribes it — through `Spec.Update` + the previous **AI base** (`archive.ReadAnalysisBase`;
-  user edits never reach the LLM) when one exists (minimal-diff updates) — merges the result with
-  any user edits (`archive.MergeAnalysis`), crops title/link rects via a `Transcriber`, runs custom
-  `Spec.Fields` via a `Generator` (text→text over the **effective** content, **no image** — cheaper).
-  Both seams are one openai-go client (endpoint/model/key from config). Writes `<PAGEID>.md` +
-  `<PAGEID>.json`; returns `skipped|analyzed|updated|conflict` (conflict ≠ error; the batch continues).
+  a **single canonical rasterization** (`geom.go`: `canonicalSVG` renders every `<path>` forced black,
+  overlays/background dropped — immune to recolor `fill`, background mode, links/nav/format; `oksvg`/`rasterx`),
+  thresholded to a 1-bit ink `mask` whose `mask.hash` is `analysis.source_hash`. That one raster also
+  feeds the per-box region hashes and the LLM crops, so a `Page` call rasterizes **exactly once**
+  (including on a skip). Skips when the hash matches (unless `--force`); otherwise transcribes —
+  through `Spec.Update` + the previous **AI base** (`archive.ReadAnalysisBase`; user edits never reach
+  the LLM) when one exists (minimal-diff updates) — merges the result with any user edits
+  (`archive.MergeAnalysis`), crops title/link rects via a `Transcriber`, runs custom `Spec.Fields` via
+  a `Generator` (text→text over the **effective** content, **no image** — cheaper).
+  **Template regions**: when the page's `background_hash` matches `a.Templates()`, the page takes the
+  region path (`analyzeRegions`) instead of whole-page content — `mask.regionHash` hashes a box's rect
+  (`snote.Rect`) cropped out of the page mask (pixel-space, so a stroke crossing the edge counts only
+  its in-box pixels — editing one box never perturbs a neighbour), so a box is skipped when its
+  fingerprint is unchanged and re-cropped/transcribed otherwise; the id-keyed region document is 3-way
+  merged into `<PAGEID>.md` via `archive.MergeAnalysis`.
+  The page-level skip is **template-aware** (`regionsCurrent`): an unchanged page skips a
+  templated page only when every box fingerprint also matches, so a moved/added box rect re-triggers.
+  Both seams are one openai-go client (endpoint/model/key from config). Writes `<PAGEID>.md` (region
+  sections for a templated page, else content) + `<PAGEID>.json`; returns `skipped|analyzed|updated|conflict` (conflict ≠ error; the batch continues).
   Has external deps; the seams keep it testable without a network.
 - `internal/edit` — `analyze-edit` orchestration: `buffer.go` serializes the page to one editable
-  document (per-region name header + `<!-- content -->` + content; parses back keying regions by
-  marker kind+index, ignoring the informational context, content taken verbatim after the first
-  content marker) and opens it in the editor (`sh -c` so `$EDITOR` may carry args, terminal inherited,
-  temp copy — an aborted editor changes nothing); the content flows through `archive.WriteAnalysisEdit`
-  and each changed name becomes an `Edited` override via `archive.WritePage`. Returns the content
-  outcome (`unchanged|edited|reverted`) plus the count of changed names; a malformed header (wrong
-  marker count, missing content marker) errors and writes nothing.
+  document (per-region name header — title/link markers keyed by kind+index, plus, for a templated
+  page, `<!-- region <id> (<label>) -->` sections keyed by string id, which are the body — no
+  `<!-- content -->` marker — while a normal page has `<!-- content -->` + content parsed verbatim
+  after the first content marker) and opens it in the editor (`sh -c` so
+  `$EDITOR` may carry args, terminal inherited, temp copy — an aborted editor changes nothing); the
+  effective md — the content, or the region sections (rebuilt in canonical order by `regionLayout`)
+  assembled — flows through `archive.WriteAnalysisEdit`, and each changed name becomes an `Edited`
+  override via `archive.WritePage`. Returns the content outcome (`unchanged|edited|reverted`) plus the
+  count of changed names; a malformed header (wrong marker count, missing content marker) errors and
+  writes nothing.
 - `internal/textmerge` — diff/patch + 3-way-merge plumbing, pure Go, no PATH tool: `Diff`/`Unapply`
   (line diff + reverse-apply via `github.com/njchilds90/go-diffpatch`, serialized to/from a normal
   unified diff via `github.com/sourcegraph/go-diff` — `patchToFileDiff`/`fileDiffToPatch` convert at

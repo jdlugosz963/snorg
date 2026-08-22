@@ -52,10 +52,26 @@ type PageView struct {
 // user-written via analyze-edit (assembled from the <PAGEID>.md sidecar) —
 // plus custom named fields once the page was AI-analyzed. Internal bookkeeping
 // like the source hash is deliberately not exposed. Content may carry conflict
-// markers until a merge conflict from analyze is resolved.
+// markers until a merge conflict from analyze is resolved. Regions is present
+// when the page matches a background template: one entry per template box, with
+// its transcription (empty until analyzed) — templated pages carry their content
+// here, not in Content.
 type PageAnalysisView struct {
 	Content string            `json:"content"`
 	Fields  map[string]string `json:"fields,omitempty"`
+	Regions []RegionView      `json:"regions,omitempty"`
+}
+
+// RegionView is one template box on a templated page: its stable id, the current
+// label and pixel-space rect (same `{x,y,w,h}` shape as a title/link rect)
+// resolved from the config's templates: section (never duplicated into the sidecar), and the
+// box's transcription text sliced by id from the <PAGEID>.md region-section document.
+// Tombstoned sections (ids no longer in the config) are not exposed.
+type RegionView struct {
+	ID      string     `json:"id"`
+	Label   string     `json:"label"`
+	Rect    snote.Rect `json:"rect"`
+	Content string     `json:"content"`
 }
 
 // TitleView is a title region, with its transcription (if analyzed) nested
@@ -112,6 +128,13 @@ func Get(a *archive.Archive, pageIDs []string) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
+	// The template set (from the merged config, injected into the archive) needs no
+	// provider creds; resolve it once so each templated page can resolve its boxes'
+	// label/rect at read time.
+	templates, err := a.Templates()
+	if err != nil {
+		return nil, err
+	}
 	var views []*NoteView
 	for _, fileID := range ids {
 		nd, err := a.ReadNote(fileID)
@@ -124,7 +147,7 @@ func Get(a *archive.Archive, pageIDs []string) (*Result, error) {
 				continue
 			}
 			delete(pending, ref.ID)
-			pv, err := getPage(a, fileID, ref)
+			pv, err := getPage(a, templates, fileID, ref)
 			if err != nil {
 				return nil, err
 			}
@@ -155,29 +178,60 @@ func Get(a *archive.Archive, pageIDs []string) (*Result, error) {
 	return &Result{Archive: root, Notes: views}, nil
 }
 
-// getPage assembles one PageView, joining <PAGEID>.json with the .md sidecar.
-func getPage(a *archive.Archive, fileID string, ref archive.NotePageRef) (PageView, error) {
+// getPage assembles one PageView, joining <PAGEID>.json with the .md sidecar —
+// parsed as the region-section document for a templated page (boxes resolved from
+// templates), or exposed as free-form content otherwise.
+func getPage(a *archive.Archive, templates *archive.Templates, fileID string, ref archive.NotePageRef) (PageView, error) {
 	pd, err := a.ReadPage(fileID, ref.ID)
 	if err != nil {
 		return PageView{}, fmt.Errorf("page %s: %w", ref.ID, err)
 	}
-	content, err := a.ReadAnalysisMD(fileID, ref.ID)
+	md, err := a.ReadAnalysisMD(fileID, ref.ID)
 	if err != nil {
 		return PageView{}, fmt.Errorf("page %s: %w", ref.ID, err)
 	}
+	// A templated page's md holds the region-section document, not free-form
+	// content, so it is parsed into Regions and Content stays empty; every other
+	// page exposes the md as Content.
+	tmpl := templates.MatchBackground(pd.BackgroundHash)
+	content := md
+	var regions []RegionView
+	if tmpl != nil {
+		content = ""
+		regions = getRegions(tmpl, md)
+	}
 	// The md sidecar is the page's transcription whether AI-produced,
 	// user-edited or user-written (analyze-edit), so it is exposed whenever
-	// present; fields exist only once the page was AI-analyzed.
+	// present; fields exist only once the page was AI-analyzed. Regions carry a
+	// templated page's transcription instead of Content.
 	var analysis *PageAnalysisView
-	if pd.Analysis != nil || content != "" {
+	if pd.Analysis != nil || content != "" || len(regions) > 0 {
 		// The sidecar ends in a newline (file hygiene); the view carries the
 		// content itself so templates control the surrounding whitespace.
 		analysis = &PageAnalysisView{Content: strings.TrimRight(content, "\n")}
 		if pd.Analysis != nil {
 			analysis.Fields = pd.Analysis.Fields
 		}
+		analysis.Regions = regions
 	}
 	return pageView(fileID, ref, pd, a.SVGRel(fileID, ref.ID), analysis), nil
+}
+
+// getRegions resolves a templated page's boxes to RegionViews: one per config box
+// (in author order), with label/rect from the config and text sliced by id from md
+// (the region-section document held in the page's <PAGEID>.md sidecar).
+func getRegions(tmpl *archive.Template, md string) []RegionView {
+	sections := archive.ParseRegions(md)
+	regions := make([]RegionView, 0, len(tmpl.Boxes))
+	for _, box := range tmpl.Boxes {
+		regions = append(regions, RegionView{
+			ID:      box.ID,
+			Label:   box.Label,
+			Rect:    box.Rect,
+			Content: archive.RegionText(sections, box.ID),
+		})
+	}
+	return regions
 }
 
 func pageView(fileID string, ref archive.NotePageRef, pd archive.PageDoc, svg string, analysis *PageAnalysisView) PageView {

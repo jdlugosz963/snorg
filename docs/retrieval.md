@@ -50,7 +50,9 @@ consumer never needs to know the on-disk file split. A whole note is
       "links":    [{"rect": {"x":0,"y":0,"w":0,"h":0}, "kind": "note", "target_page_id": "P...",
                     "target_file_id": "F...", "name": "linked-note", "internal": true,
                     "analysis": {"name": "see also"}}],
-      "analysis": {"content": "# Chapter 1\n\n...", "fields": {"description": "..."}}
+      "analysis": {"content": "# Chapter 1\n\n...", "fields": {"description": "..."},
+                   "regions": [{"id": "title", "label": "Title",
+                                "rect": {"x":0,"y":0,"w":1920,"h":384}, "content": "..."}]}
     }]
   }]
 }
@@ -76,7 +78,12 @@ consumer never needs to know the on-disk file split. A whole note is
   region names and `fields` exist only once the page was AI-analyzed; everything is
   absent before that. After a conflicted re-analysis, `content` carries standard
   merge conflict markers until the user resolves them. The view mirrors the on-disk
-  structure, so export templates and external consumers see one shape. Fields may be
+  structure, so export templates and external consumers see one shape.
+- `analysis.regions` is present on a **templated** page (its background matched a
+  `templates/config.yaml` entry): one entry per config box — `id`, `label`, `rect`
+  (pixel-space `{x,y,w,h}`, same as a title/link rect) resolved from the config, and `content` (the box's
+  transcription). A templated page carries its transcription here, not in
+  `analysis.content`. See `docs/templates.md`. Fields may be
   added freely over time — there is no backward-compatibility guarantee, so consumers
   should ignore unknown fields rather than pin a shape.
 

@@ -72,8 +72,9 @@ func Page(a *archive.Archive, pageID, editor string) (Outcome, int, error) {
 }
 
 // Serialize renders pageID's editable buffer: the per-region title/link name header
-// (only when the page has regions) followed by the current transcription content.
-// It is the input side of the buffer round-trip; feed an edited buffer to Apply.
+// plus, for a templated page, the template-box sections, followed by the current
+// transcription content. It is the input side of the buffer round-trip; feed an
+// edited buffer to Apply.
 func Serialize(a *archive.Archive, pageID string) (string, error) {
 	fileID, err := a.FindPage(pageID)
 	if err != nil {
@@ -87,7 +88,50 @@ func Serialize(a *archive.Archive, pageID string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return serialize(pd, cur), nil
+	sections, _, err := regionLayout(a, fileID, pageID, pd.BackgroundHash)
+	if err != nil {
+		return "", err
+	}
+	return serialize(pd, cur, sections), nil
+}
+
+// regionLayout returns a templated page's region sections in canonical order
+// (template box order with current text, then tombstoned sections), plus their id
+// list. It returns nil,nil for a page matching no template. Serialize renders the
+// sections; Apply uses the ids to validate the edited buffer and rebuild the
+// region-section md in the same order.
+func regionLayout(a *archive.Archive, fileID, pageID, bgHash string) ([]archive.RegionSection, []string, error) {
+	templates, err := a.Templates()
+	if err != nil {
+		return nil, nil, err
+	}
+	tmpl := templates.MatchBackground(bgHash)
+	if tmpl == nil {
+		return nil, nil, nil
+	}
+	md, err := a.ReadAnalysisMD(fileID, pageID)
+	if err != nil {
+		return nil, nil, err
+	}
+	existing := archive.ParseRegions(md)
+	known := map[string]bool{}
+	var sections []archive.RegionSection
+	for _, box := range tmpl.Boxes {
+		known[box.ID] = true
+		sections = append(sections, archive.RegionSection{
+			ID: box.ID, Label: box.Label, Text: archive.RegionText(existing, box.ID),
+		})
+	}
+	for _, s := range existing { // tombstones: keep them editable, never drop
+		if !known[s.ID] {
+			sections = append(sections, s)
+		}
+	}
+	ids := make([]string, len(sections))
+	for i, s := range sections {
+		ids[i] = s.ID
+	}
+	return sections, ids, nil
 }
 
 // Apply stores an edited buffer (as produced by Serialize) for pageID: the content
@@ -112,8 +156,12 @@ func Apply(a *archive.Archive, pageID, buffer string) (Outcome, int, error) {
 	if err != nil {
 		return "", 0, err
 	}
+	sections, regionIDs, err := regionLayout(a, fileID, pageID, pd.BackgroundHash)
+	if err != nil {
+		return "", 0, err
+	}
 
-	titleNames, linkNames, content, err := parse(buffer, len(pd.Titles), len(pd.Links))
+	titleNames, linkNames, regionTexts, content, err := parse(buffer, len(pd.Titles), len(pd.Links), regionIDs)
 	if err != nil {
 		return "", 0, fmt.Errorf("page %s: %w (no changes saved)", pageID, err)
 	}
@@ -125,14 +173,34 @@ func Apply(a *archive.Archive, pageID, buffer string) (Outcome, int, error) {
 		}
 	}
 
-	switch archive.NormMD(content) {
-	case archive.NormMD(cur):
-		return Unchanged, namesChanged, nil
-	case archive.NormMD(base):
-		return Reverted, namesChanged, a.WriteAnalysisEdit(fileID, pageID, base, content)
-	default:
-		return Edited, namesChanged, a.WriteAnalysisEdit(fileID, pageID, base, content)
+	// The page has exactly one effective md document: for a templated page the
+	// region sections rebuilt from the edited texts (canonical order, matching
+	// what analyze regenerates), otherwise the free-form content. Either flows
+	// through the same edit-diff sidecar against the same AI base.
+	doc := content
+	if len(regionIDs) > 0 {
+		for i := range sections {
+			sections[i].Text = regionTexts[sections[i].ID]
+		}
+		doc = archive.AssembleRegions(sections)
 	}
+
+	outcome := Unchanged
+	switch archive.NormMD(doc) {
+	case archive.NormMD(cur):
+		outcome = Unchanged
+	case archive.NormMD(base):
+		outcome = Reverted
+		if err := a.WriteAnalysisEdit(fileID, pageID, base, doc); err != nil {
+			return "", 0, err
+		}
+	default:
+		outcome = Edited
+		if err := a.WriteAnalysisEdit(fileID, pageID, base, doc); err != nil {
+			return "", 0, err
+		}
+	}
+	return outcome, namesChanged, nil
 }
 
 // applyNames overwrites each region name that the user changed and marks it as

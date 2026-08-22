@@ -296,7 +296,7 @@ func TestMigrateLegacyEditDiff(t *testing.T) {
 	if err := a.WriteAnalysisMD("F_TEST", "Pa", content); err != nil {
 		t.Fatal(err)
 	}
-	diffPath := a.editDiffPath("F_TEST", "Pa")
+	diffPath := a.diffPath("F_TEST", "Pa")
 	if err := os.WriteFile(diffPath, []byte(legacyDiff(t, base, content)), 0o644); err != nil {
 		t.Fatal(err)
 	}

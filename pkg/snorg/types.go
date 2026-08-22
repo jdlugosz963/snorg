@@ -40,6 +40,7 @@ type (
 	LinkView         = retrieve.LinkView
 	PageAnalysisView = retrieve.PageAnalysisView
 	NameAnalysisView = retrieve.NameAnalysisView
+	RegionView       = retrieve.RegionView
 )
 
 // The raw on-disk JSON documents, returned by Client.ReadNote / Client.ReadPage for
@@ -54,6 +55,7 @@ type (
 	LinkDoc       = archive.LinkDoc
 	TitleAnalysis = archive.TitleAnalysis
 	LinkAnalysis  = archive.LinkAnalysis
+	RegionDoc     = archive.RegionDoc
 )
 
 // The device-agnostic domain model, produced by ingest (see IngestResult.Note). A

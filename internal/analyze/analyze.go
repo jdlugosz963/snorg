@@ -16,8 +16,6 @@ package analyze
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
 	"image"
 	"strings"
@@ -92,17 +90,85 @@ func Page(ctx context.Context, a *archive.Archive, t Transcriber, g Generator, s
 	if err != nil {
 		return "", err
 	}
-	hash := pathHash(svg)
-	if !force && pd.Analysis != nil && pd.Analysis.SourceHash == hash {
-		return Skipped, nil
-	}
-
-	// Only rasterize once the page is known to need analysis (the skip check above
-	// works off the SVG bytes alone).
-	img, err := rasterize(svg)
+	// A page drawn on a known template is matched to it by its background hash and
+	// analyzed per region (docs/templates); everything else keeps the whole-page
+	// content path. The template set (from the merged config, injected into the
+	// archive) needs no provider creds. It is resolved before the skip check because
+	// a templated page's skip also depends on the per-box fingerprints, not just
+	// page geometry.
+	templates, err := a.Templates()
 	if err != nil {
 		return "", err
 	}
+	tmpl := templates.MatchBackground(pd.BackgroundHash)
+
+	// One canonical black-on-white rasterization drives everything: the page hash,
+	// the per-box region hashes, and the LLM crops (so a Page call rasterizes
+	// exactly once, on every path including a skip). It is built before the skip
+	// check because the fingerprint is the ink mask of this very image.
+	img, err := rasterize(canonicalSVG(svg))
+	if err != nil {
+		return "", err
+	}
+	m := newMask(img)
+	hash := m.hash()
+	if !force && pd.Analysis != nil && pd.Analysis.SourceHash == hash {
+		// An unchanged page skips a non-templated page outright; a templated page
+		// skips only when every analyze box's fingerprint also matches, so a
+		// moved/added box rect (config change, same handwriting) still re-triggers.
+		if tmpl == nil || regionsCurrent(m, tmpl, pd) {
+			return Skipped, nil
+		}
+	}
+
+	// A templated page transcribes per region; every other page transcribes its
+	// whole content. Either runs before the title/link regions so the page/content
+	// image is the first LLM call.
+	var outcome Outcome
+	if tmpl != nil {
+		outcome, err = analyzeRegions(ctx, a, t, spec, img, m, fileID, pageID, &pd, tmpl, hash, force)
+	} else {
+		outcome, err = analyzeContent(ctx, a, t, g, spec, img, fileID, pageID, &pd, hash)
+	}
+	if err != nil {
+		return "", err
+	}
+
+	// Title/link region transcription is template-independent (device metadata) and
+	// runs for every page. A user-overridden name (analyze-edit set Edited) is kept
+	// as-is and not re-transcribed — the override wins and it saves an LLM call.
+	// --force only bypasses the source-hash skip, it never discards user edits.
+	for i, title := range pd.Titles {
+		if title.Analysis != nil && title.Analysis.Edited {
+			continue
+		}
+		name, err := transcribeRegion(ctx, t, img, title.Rect, spec.Title)
+		if err != nil {
+			return "", fmt.Errorf("title %d: %w", i, err)
+		}
+		pd.Titles[i].Analysis = &archive.TitleAnalysis{Name: name}
+	}
+	for i, link := range pd.Links {
+		if link.Analysis != nil && link.Analysis.Edited {
+			continue
+		}
+		name, err := transcribeRegion(ctx, t, img, link.Rect, spec.Link)
+		if err != nil {
+			return "", fmt.Errorf("link %d: %w", i, err)
+		}
+		pd.Links[i].Analysis = &archive.LinkAnalysis{Name: name}
+	}
+
+	if err := a.WritePage(fileID, pd); err != nil {
+		return "", err
+	}
+	return outcome, nil
+}
+
+// analyzeContent transcribes the whole page into the <PAGEID>.md content sidecar
+// (the non-template path), 3-way-merging with user edits and generating custom
+// fields from the effective content. It sets pd.Analysis (source hash + fields).
+func analyzeContent(ctx context.Context, a *archive.Archive, t Transcriber, g Generator, spec Spec, img *image.RGBA, fileID, pageID string, pd *archive.PageDoc, hash string) (Outcome, error) {
 	page, err := toPNG(img)
 	if err != nil {
 		return "", err
@@ -127,31 +193,6 @@ func Page(ctx context.Context, a *archive.Archive, t Transcriber, g Generator, s
 	}
 	content = strings.TrimSpace(content)
 
-	// A user-overridden name (analyze-edit set Edited) is kept as-is and its
-	// region is not re-transcribed — the override wins over re-analysis, and it
-	// saves an LLM call. --force does not change this: force only bypasses the
-	// source-hash skip, never discards user edits (as with the content merge).
-	for i, title := range pd.Titles {
-		if title.Analysis != nil && title.Analysis.Edited {
-			continue
-		}
-		name, err := transcribeRegion(ctx, t, img, title.Rect, spec.Title)
-		if err != nil {
-			return "", fmt.Errorf("title %d: %w", i, err)
-		}
-		pd.Titles[i].Analysis = &archive.TitleAnalysis{Name: name}
-	}
-	for i, link := range pd.Links {
-		if link.Analysis != nil && link.Analysis.Edited {
-			continue
-		}
-		name, err := transcribeRegion(ctx, t, img, link.Rect, spec.Link)
-		if err != nil {
-			return "", fmt.Errorf("link %d: %w", i, err)
-		}
-		pd.Links[i].Analysis = &archive.LinkAnalysis{Name: name}
-	}
-
 	// The merge writes the md: theirs (the fresh transcription) reconciled with
 	// any user edits. Fields derive from the effective content — what the user
 	// actually sees — not the raw LLM output.
@@ -174,24 +215,124 @@ func Page(ctx context.Context, a *archive.Archive, t Transcriber, g Generator, s
 		}
 		analysis.Fields[f.Name] = strings.TrimSpace(out)
 	}
-
-	pd.Analysis = analysis
-	if err := a.WritePage(fileID, pd); err != nil {
-		return "", err
-	}
+	pd.Analysis = analysis // a non-template page carries no region state (analysis.Regions stays nil)
 	return outcome, nil
 }
 
-// pathHash fingerprints a page by the geometry of its handwriting: the d
-// attribute of every <path>, whitespace-normalized and concatenated in document
-// order. It is invariant under everything the SVG pipeline does that does not
-// change the drawing itself — recolor (rewrites fill=), background mode (touches
-// the <image>), the link/nav overlays (<a><rect>, no d) and the formatSVG reflow
-// (only whitespace within d) — so none of those force a re-analysis, while an
-// actual stroke edit (a different potrace d) does. It reads the SVG bytes alone,
-// so the skip decision needs no rasterization.
-func pathHash(svg []byte) string {
-	h := sha256.New()
+// analyzeRegions transcribes each analyze:true box of the matched template into
+// the <PAGEID>.md sidecar as id-keyed sections (a templated page's md holds these
+// sections in place of free-form content). A box whose region fingerprint is
+// unchanged (and not force) reuses its previous AI text without an LLM call;
+// changed boxes are cropped and re-transcribed. The assembled document (config box
+// order, then tombstoned sections for ids no longer in the config) is 3-way-merged
+// with any user edits, and pd.Analysis.Regions records each analyze box's new fingerprint.
+func analyzeRegions(ctx context.Context, a *archive.Archive, t Transcriber, spec Spec, img *image.RGBA, m *mask, fileID, pageID string, pd *archive.PageDoc, tmpl *archive.Template, hash string, force bool) (Outcome, error) {
+	base, err := a.ReadAnalysisBase(fileID, pageID)
+	if err != nil {
+		return "", err
+	}
+	baseSections := archive.ParseRegions(base)
+
+	prev := map[string]string{}
+	if pd.Analysis != nil {
+		for _, r := range pd.Analysis.Regions {
+			prev[r.ID] = r.SourceHash
+		}
+	}
+
+	var sections []archive.RegionSection
+	var regions []archive.RegionDoc
+	known := map[string]bool{}
+	for _, box := range tmpl.Boxes {
+		known[box.ID] = true
+		if !box.Analyze {
+			// A non-analyze box never gets a fresh transcription, but preserve any
+			// existing text (e.g. a box toggled off) rather than dropping it.
+			if txt := archive.RegionText(baseSections, box.ID); txt != "" {
+				sections = append(sections, archive.RegionSection{ID: box.ID, Label: box.Label, Text: txt})
+			}
+			continue
+		}
+		rh := m.regionHash(box.Rect)
+		var text string
+		if !force && prev[box.ID] == rh {
+			text = archive.RegionText(baseSections, box.ID) // unchanged: reuse AI base
+		} else {
+			png, err := crop(img, box.Rect)
+			if err != nil {
+				return "", fmt.Errorf("region %s: %w", box.ID, err)
+			}
+			prompt := box.Prompt
+			if prompt == "" {
+				prompt = spec.Content
+			}
+			out, err := t.Transcribe(ctx, prompt, png)
+			if err != nil {
+				return "", fmt.Errorf("region %s: %w", box.ID, err)
+			}
+			text = strings.TrimSpace(out)
+		}
+		sections = append(sections, archive.RegionSection{ID: box.ID, Label: box.Label, Text: text})
+		regions = append(regions, archive.RegionDoc{ID: box.ID, SourceHash: rh})
+	}
+	// Tombstone sections whose id is no longer any config box: keep them at the end
+	// (never delete transcribed text), ignored by export.
+	for _, s := range baseSections {
+		if !known[s.ID] {
+			sections = append(sections, s)
+		}
+	}
+
+	theirs := archive.AssembleRegions(sections)
+	_, conflicts, err := a.MergeAnalysis(fileID, pageID, theirs)
+	if err != nil {
+		return "", err
+	}
+
+	outcome := Analyzed
+	if strings.TrimSpace(base) != "" {
+		outcome = Updated
+	}
+	if conflicts {
+		outcome = Conflicted
+	}
+	// Keep a page-level source hash so the whole-page skip and list/query metadata
+	// still work; the region sections are the md content, so no fields here. The
+	// per-box fingerprints ride along under Analysis (analyze-produced state).
+	pd.Analysis = &archive.PageAnalysis{SourceHash: hash, Regions: regions}
+	return outcome, nil
+}
+
+// regionsCurrent reports whether pd.Analysis.Regions already matches the template's
+// analyze boxes at their current rects: same set of ids and same per-box
+// fingerprints (each a crop of the canonical page mask). A false means either the
+// config changed (a box moved, was added or removed) or a box's cropped ink
+// changed, so the page must be re-analyzed. The mask is already in hand from the
+// page-hash check, so this adds no rasterization.
+func regionsCurrent(m *mask, tmpl *archive.Template, pd archive.PageDoc) bool {
+	stored := map[string]string{}
+	if pd.Analysis != nil {
+		for _, r := range pd.Analysis.Regions {
+			stored[r.ID] = r.SourceHash
+		}
+	}
+	boxes := tmpl.AnalyzeBoxes()
+	if len(boxes) != len(stored) {
+		return false
+	}
+	for _, box := range boxes {
+		h, ok := stored[box.ID]
+		if !ok || h != m.regionHash(box.Rect) {
+			return false
+		}
+	}
+	return true
+}
+
+// forEachPathData calls fn with the d of every <path> element in document order.
+// It is the shared scan behind canonicalSVG (which renders the page's handwriting
+// to the fingerprint mask).
+func forEachPathData(svg []byte, fn func(d string)) {
 	s := string(svg)
 	for {
 		i := strings.Index(s, "<path")
@@ -204,12 +345,10 @@ func pathHash(svg []byte) string {
 			break
 		}
 		if d, ok := pathData(s[:end+1]); ok {
-			h.Write([]byte(strings.Join(strings.Fields(d), " ")))
-			h.Write([]byte{'\n'})
+			fn(d)
 		}
 		s = s[end+1:]
 	}
-	return hex.EncodeToString(h.Sum(nil))
 }
 
 // pathData returns the d attribute value of a single <path .../> element.
