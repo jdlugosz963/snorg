@@ -49,7 +49,7 @@ func setupTemplated(t *testing.T, boxRect snote.Rect) (*archive.Archive, string)
 		t.Fatal(err)
 	}
 	pd.BackgroundHash = hash
-	if err := a.WritePage("F_A", pd); err != nil {
+	if _, err := a.WritePage("F_A", pd); err != nil {
 		t.Fatal(err)
 	}
 	return a, hash

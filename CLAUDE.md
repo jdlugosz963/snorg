@@ -84,13 +84,15 @@ Flow: `cmd/snorg` → `pkg/snorg` (public API) → `internal/ingest` orchestrate
   so this adapter is a straight mapping — no footer-key parsing here. Its SVG (pen-shade fills `#000000/#9d9d9d/#c9c9c9/#fefefe`,
   inline `xlink:href="data:image/…"` background, `xmlns:xlink` root, `<path fill d>`) is
   exactly what the archive SVG pipeline (recolor/background/nav/links) and the analyze canonical-raster fingerprint expect.
-- `internal/archive` — owns the on-disk layout `<archive>/<FILE_ID>/{note.json,<PAGEID>.json,<PAGEID>.md[.diff],<PAGEID>.svg}` (a templated page's `.md` holds region sections in place of content) (template background images are ordinary files referenced by the config's `templates:` section, e.g. under `<archive>/templates/`);
+- `internal/archive` — owns the on-disk layout `<archive>/<FILE_ID>/{note.json,<PAGEID>.json,<PAGEID>.md[.diff],<PAGEID>.svg}` (a templated page's `.md` holds region sections in place of content) (template background images are ordinary files referenced by the config's `templates:` section, e.g. under `<archive>/templates/`), plus `<archive>/orphans/` (the orphan store, `orphan.go`).
+  **Invariant: a PAGEID names exactly one page in exactly one note directory.** The device mints it, and a page can be moved between notes there, so `Write` enforces the invariant rather than assuming it (`adopt.go`): `locateForeign` (in the preflight, gated, before any mutation) finds any page of the incoming note living under another note or in `orphans/`; `adopt` moves its non-regenerable sidecars in (`movePageFiles` — an **exclusion** list of `.json`/`.svg`, so a future sidecar travels by default), repairs the donor's `note.json` (`dropPageRef`, renumbering from 1 so the donor's own next ingest is a no-op) **before** deleting the page's files there (the reverse order would leave a crash window where `note.json` lists a missing page — the state `query`/`retrieve` hard-error on), and purges any further duplicate, so an archive duplicated by an older snorg heals on the next ingest of any of the notes involved. A page this note **already** owns keeps its own state and the foreign copy is simply purged. Symmetrically, `prunePage` (`orphan.go`) parks a departing page's `.json`/`.md`/`.md.diff` in `orphans/` when it carries anything non-regenerable (a transcription, hand-edits, tags or an analysis; otherwise it is deleted as before), which is what makes the outcome independent of whether the source or destination note is ingested first. The store is a note directory without a `note.json` — invisible to `List` and so to every read surface — which is exactly why the same accessors address it by passing `orphanDir` where a FILE_ID goes. Nothing collects it automatically (an entry is the last copy of text snorg cannot reproduce); `MigrateAll` walks it explicitly since `List` cannot reach it;
   `doc.go` is the JSON serialization boundary (the stable plaintext contract; add fields freely —
   per-title/per-link `analysis` is nested on the items (`name` + `edited` = user-override flag), page
   `analysis` holds `source_hash`+`fields`+`regions[].{id,source_hash}` (per-box fingerprint state),
   the content transcription lives in the `<PAGEID>.md`
   sidecar; the top-level `tags` (snorg-managed labels from the `tag` command, sorted/deduped,
-  carried across re-ingest like `analysis` since they aren't `.note`-derived); the top-level
+  carried across re-ingest like `analysis` since they aren't `.note`-derived — `NoteDoc.tags` is the
+  note-scoped variant every page inherits via `EffectiveTags`, see `tags.go`); the top-level
   `background_hash` (template selector, sha256 of the decoded background,
   stamped by ingest) + `analysis.regions[]` support template regions —
   `templates.go` builds the template set from specs injected via `SetTemplateSpecs`
@@ -167,8 +169,11 @@ Flow: `cmd/snorg` → `pkg/snorg` (public API) → `internal/ingest` orchestrate
   carry an `include:` list of other config paths (relative to that file's dir, `~` expanded):
   `loadInto` merges each include **over** the including file ("above includer"), recursively, with
   stack-based cycle detection — so the low→high order for a file is its body then its includes.
+  **Sequences concatenate** on merge (lower layer first; maps still merge per key, scalars still
+  overwrite), so a `templates:` list adds up across files instead of the highest layer replacing it —
+  additive only (no way to drop an entry; a duplicate image errors in `archive.Templates`).
   Each `templates[].image` is resolved to an absolute path relative to the declaring file **before**
-  merge (provenance survives the wholesale sequence overwrite); the specs are the raw
+  merge, so every layer's entries keep their own provenance; the specs are the raw
   `config.TemplateSpec`/`config.Box` (`snote.Rect`), bridged to `archive.TemplateSpec` by
   `pkg/snorg.Open` (config and archive stay mutually independent). Provider key
   resolution is a separate `ResolveAPIKey` (called by analyze, not `Load`, so export never runs it):

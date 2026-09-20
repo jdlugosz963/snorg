@@ -145,7 +145,7 @@ func TestPagesUnanalyzed(t *testing.T) {
 		t.Fatal(err)
 	}
 	pd.Analysis = &archive.PageAnalysis{SourceHash: "abc"}
-	if err := a.WritePage("F_A", pd); err != nil {
+	if _, err := a.WritePage("F_A", pd); err != nil {
 		t.Fatal(err)
 	}
 

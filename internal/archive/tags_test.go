@@ -111,3 +111,93 @@ func TestTagsSurviveReingest(t *testing.T) {
 		t.Errorf("tags after re-ingest = %v, want %v (carry-forward)", pd.Tags, want)
 	}
 }
+
+func TestTagNoteAddRemove(t *testing.T) {
+	a := New(t.TempDir())
+	writeTagNote(t, a)
+
+	for _, tag := range []string{"todo", "important", "todo"} {
+		if _, err := a.TagNote("F_TAG", tag, false); err != nil {
+			t.Fatal(err)
+		}
+	}
+	changed, err := a.TagNote("F_TAG", "todo", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changed {
+		t.Error("re-adding an existing note tag reported a change")
+	}
+
+	nd, err := a.ReadNote("F_TAG")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"important", "todo"}; !reflect.DeepEqual(nd.Tags, want) {
+		t.Errorf("note tags = %v, want sorted/deduped %v", nd.Tags, want)
+	}
+	// The tag lives in note.json only — the pages stay untouched.
+	pd, err := a.ReadPage("F_TAG", "Pa")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pd.Tags) != 0 {
+		t.Errorf("page tags = %v, want empty (note tags are not written to pages)", pd.Tags)
+	}
+
+	if _, err := a.TagNote("F_TAG", "todo", true); err != nil {
+		t.Fatal(err)
+	}
+	if changed, err := a.TagNote("F_TAG", "todo", true); err != nil {
+		t.Fatal(err)
+	} else if changed {
+		t.Error("removing an absent note tag reported a change")
+	}
+	if nd, err = a.ReadNote("F_TAG"); err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"important"}; !reflect.DeepEqual(nd.Tags, want) {
+		t.Errorf("note tags after remove = %v, want %v", nd.Tags, want)
+	}
+}
+
+func TestEffectiveTags(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		note, page []string
+		want       []string
+	}{
+		{"none", nil, nil, nil},
+		{"page only", nil, []string{"own"}, []string{"own"}},
+		{"note only", []string{"note"}, nil, []string{"note"}},
+		{"union sorted", []string{"work"}, []string{"todo"}, []string{"todo", "work"}},
+		{"overlap deduped", []string{"work", "x"}, []string{"work"}, []string{"work", "x"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := EffectiveTags(NoteDoc{Tags: tc.note}, PageDoc{Tags: tc.page})
+			if !reflect.DeepEqual(got, tc.want) && !(len(got) == 0 && len(tc.want) == 0) {
+				t.Errorf("EffectiveTags = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// Re-ingest must preserve a note's snorg tags: note.json is rebuilt from the .note,
+// which knows nothing about them, so Write carries them from the preflight doc.
+func TestNoteTagsSurviveReingest(t *testing.T) {
+	a := New(t.TempDir())
+	writeTagNote(t, a)
+	if _, err := a.TagNote("F_TAG", "keep", false); err != nil {
+		t.Fatal(err)
+	}
+
+	writeTagNote(t, a)
+
+	nd, err := a.ReadNote("F_TAG")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"keep"}; !reflect.DeepEqual(nd.Tags, want) {
+		t.Errorf("note tags after re-ingest = %v, want %v (carry-forward)", nd.Tags, want)
+	}
+}

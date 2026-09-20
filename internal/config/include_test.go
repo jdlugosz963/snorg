@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 )
 
@@ -125,5 +126,64 @@ func TestTemplateImageFromIncludeResolvesToIncludeDir(t *testing.T) {
 	want := filepath.Join(sub, "bg.png")
 	if len(cfg.Templates) != 1 || cfg.Templates[0].Image != want {
 		t.Fatalf("image = %+v, want %q", cfg.Templates, want)
+	}
+}
+
+// tmplYAML is a one-template templates: section naming image, so a test can hand
+// each layer its own distinguishable entry.
+func tmplYAML(image string) string {
+	return "templates:\n  - image: " + image + "\n    boxes:\n      - {id: a, rect: {x: 0, y: 0, w: 10, h: 10}, analyze: true}\n"
+}
+
+// images lists the resolved image path of every template, in order.
+func images(cfg *Config) []string {
+	out := make([]string, 0, len(cfg.Templates))
+	for _, t := range cfg.Templates {
+		out = append(out, t.Image)
+	}
+	return out
+}
+
+// TestTemplatesConcatAcrossIncludes: a sequence is merged, not replaced — the
+// including file's own templates and each include's all apply, body first, includes
+// in listed order, each image still resolved against its own declaring file.
+func TestTemplatesConcatAcrossIncludes(t *testing.T) {
+	root := t.TempDir()
+	sub := filepath.Join(root, "sub")
+	if err := os.Mkdir(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeIn(t, root, "one.yaml", tmplYAML("one.png"))
+	writeIn(t, sub, "two.yaml", tmplYAML("two.png"))
+	main := writeIn(t, root, "main.yaml", "include:\n  - one.yaml\n  - sub/two.yaml\n"+tmplYAML("main.png"))
+
+	cfg, err := Load([]string{main})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		filepath.Join(root, "main.png"),
+		filepath.Join(root, "one.png"),
+		filepath.Join(sub, "two.png"),
+	}
+	if got := images(cfg); !slices.Equal(got, want) {
+		t.Errorf("templates = %v, want %v", got, want)
+	}
+}
+
+// TestSequencesConcatAcrossTopLevelPaths: the same merge applies between top-level
+// -c layers — a later file adds to the earlier file's list instead of replacing it.
+func TestSequencesConcatAcrossTopLevelPaths(t *testing.T) {
+	dir := t.TempDir()
+	a := writeIn(t, dir, "a.yaml", tmplYAML("a.png"))
+	b := writeIn(t, dir, "b.yaml", tmplYAML("b.png"))
+
+	cfg, err := Load([]string{a, b})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{filepath.Join(dir, "a.png"), filepath.Join(dir, "b.png")}
+	if got := images(cfg); !slices.Equal(got, want) {
+		t.Errorf("templates = %v, want %v", got, want)
 	}
 }

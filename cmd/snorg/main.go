@@ -145,9 +145,7 @@ func ingestCmd(a *app) *cli.Command {
 		Name:      "ingest",
 		Usage:     "register a .note file (or all *.note under a dir) into the archive",
 		ArgsUsage: "<file-or-dir>",
-		Flags: []cli.Flag{
-			&cli.IntFlag{Name: "jobs", Aliases: []string{"j"}, Usage: "max concurrent notes (0 = number of CPUs)"},
-		},
+		Flags:     []cli.Flag{},
 		Action: func(_ context.Context, cmd *cli.Command) error {
 			if cmd.Args().Len() != 1 {
 				return fmt.Errorf("usage: snorg [-a <archive-path>] ingest [-j N] <file-or-dir>")
@@ -171,7 +169,7 @@ func ingestCmd(a *app) *cli.Command {
 				paths = []string{inputPath}
 			}
 
-			results, err := a.client.Ingest(paths, cmd.Int("jobs"))
+			results, err := a.client.Ingest(paths, snorg.IngestOptions{})
 			if err != nil {
 				return err
 			}
@@ -373,8 +371,9 @@ func queryCmd(a *app) *cli.Command {
 // where note is the source filename sans ".note", page# comes from note.json's
 // placement, * marks a starred page (empty otherwise), headings are the analyzed
 // title names (empty until analyze runs), keywords (device metadata, present
-// without analysis) are rendered as #kw and snorg-managed tags as @tag, so a fuzzy
-// finder can filter on either.
+// without analysis) are rendered as #kw and snorg-managed tags as @tag — the page's
+// effective set, its own plus the ones inherited from its note — so a fuzzy finder
+// can filter on either.
 // PAGEID stays the first whitespace field on purpose (`awk '{print $1}'` extracts
 // it for the fzf → serve workflow). Fixed \t separators keep the columns machine-
 // splittable (cut -f) regardless of value widths. This is deliberately NOT the
@@ -415,7 +414,7 @@ func printQueryLong(c *snorg.Client, matches []snorg.Match) error {
 		for _, k := range pd.Keywords {
 			keywords = append(keywords, "#"+k.Text)
 		}
-		for _, t := range pd.Tags {
+		for _, t := range snorg.EffectiveTags(*nd, pd) {
 			tags = append(tags, "@"+t)
 		}
 		star := ""
@@ -432,28 +431,40 @@ func printQueryLong(c *snorg.Client, matches []snorg.Match) error {
 func tagCmd(a *app) *cli.Command {
 	return &cli.Command{
 		Name:      "tag",
-		Usage:     "add (or -r remove) a snorg-managed tag on pages (no PAGEIDs = read them from stdin)",
-		ArgsUsage: "<tag> [PAGEID ...]",
+		Usage:     "add (or -r remove) a snorg-managed tag on pages, or with -n on whole notes (no ids = read them from stdin)",
+		ArgsUsage: "<tag> [PAGEID ...] (with -n: <tag> [FILE_ID ...])",
 		Flags: []cli.Flag{
 			&cli.BoolFlag{Name: "remove", Aliases: []string{"r"}, Usage: "remove the tag instead of adding it"},
+			&cli.BoolFlag{Name: "note", Aliases: []string{"n"}, Usage: "tag whole notes: the ids are FILE_IDs and the tag lives in note.json, inherited by every page of the note"},
 		},
 		Action: func(_ context.Context, cmd *cli.Command) error {
 			args := cmd.Args().Slice()
-			if len(args) == 0 {
-				return fmt.Errorf("usage: snorg [-a <archive-path>] tag [-r] <tag> [PAGEID ...]")
+			notes := cmd.Bool("note")
+			// -n swaps the id kind wholesale: FILE_IDs (pipe from `list`) instead of
+			// PAGEIDs (pipe from `query`), so the two modes share one arg shape.
+			unit, idKind := "pages", "PAGEID"
+			if notes {
+				unit, idKind = "notes", "FILE_ID"
 			}
-			tag, pageIDs := args[0], args[1:]
-			if len(pageIDs) == 0 {
+			if len(args) == 0 {
+				return fmt.Errorf("usage: snorg [-a <archive-path>] tag [-n] [-r] <tag> [%s ...]", idKind)
+			}
+			tag, ids := args[0], args[1:]
+			if len(ids) == 0 {
 				var err error
-				if pageIDs, err = readLines(os.Stdin); err != nil {
+				if ids, err = readLines(os.Stdin); err != nil {
 					return err
 				}
-				if len(pageIDs) == 0 {
-					return fmt.Errorf("no PAGEIDs given (arguments or stdin lines)")
+				if len(ids) == 0 {
+					return fmt.Errorf("no %ss given (arguments or stdin lines)", idKind)
 				}
 			}
 			remove := cmd.Bool("remove")
-			changed, err := a.client.Tag(tag, pageIDs, remove)
+			tagFn := a.client.Tag
+			if notes {
+				tagFn = a.client.TagNote
+			}
+			changed, err := tagFn(tag, ids, remove)
 			if err != nil {
 				return err
 			}
@@ -461,7 +472,7 @@ func tagCmd(a *app) *cli.Command {
 			if remove {
 				verb = "untagged"
 			}
-			fmt.Printf("%s %d of %d pages\n", verb, changed, len(pageIDs))
+			fmt.Printf("%s %d of %d %s\n", verb, changed, len(ids), unit)
 			return nil
 		},
 	}
@@ -646,14 +657,14 @@ func migrateCmd(a *app) *cli.Command {
 			var err error
 			switch {
 			case cmd.Args().Len() > 0:
-				results, err = a.client.Migrate(cmd.Args().Slice())
+				results, err = a.client.Migrate(cmd.Args().Slice(), snorg.MigrateOptions{})
 			case stdinPiped():
 				var ids []string
 				if ids, err = readLines(os.Stdin); err == nil {
-					results, err = a.client.Migrate(ids)
+					results, err = a.client.Migrate(ids, snorg.MigrateOptions{})
 				}
 			default:
-				results, err = a.client.MigrateAll()
+				results, err = a.client.MigrateAll(snorg.MigrateOptions{})
 			}
 			if err != nil {
 				return err

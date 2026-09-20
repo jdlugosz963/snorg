@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 
@@ -62,24 +63,39 @@ func DefaultSVGPipeline() SVGPipeline {
 func New(root string) *Archive { return &Archive{Root: root, SVG: DefaultSVGPipeline()} }
 
 // WriteReport is what one Write changed on disk: whether note.json was rewritten,
-// the pages that were newly written or changed (Pages), and the ids of pages
-// pruned because they left the note. It is the incremental reconcile made
-// observable — an all-false/empty report means the note was already current.
+// the pages that were newly written or changed (Pages), the ids of pages pruned
+// because they left the note, and the other notes this write had to touch because a
+// page moved out of them. It is the incremental reconcile made observable — an
+// all-false/empty report means the note was already current.
 type WriteReport struct {
 	FileID      string
 	NoteChanged bool
 	Pages       []PageWriteReport
-	Pruned      []string
+	// Pruned are the pages that left this note, sorted.
+	Pruned []string
+	// Parked are the pruned pages whose state went to the orphan store rather than
+	// being deleted, sorted — a subset of Pruned (see orphan.go).
+	Parked []string
+	// Repaired are the FILE_IDs of other notes whose note.json this write rewrote
+	// because a page moved out of them into this one, sorted.
+	Repaired []string
 }
 
 // PageWriteReport is one page's change detail from Write. It is present only for a
 // page that was new or whose bytes changed; a page written unchanged produces no
-// entry. New means the page's <PAGEID>.json did not exist before this write.
-// DroppedRegions lists title/link analyses that were not carried forward because
-// their rect moved (empty on a first ingest, where there is nothing to carry).
+// entry. New means no page doc for it existed anywhere in the archive before this
+// write — not merely in this note's directory — so it is what tells a caller the page
+// still needs transcribing. DroppedRegions lists title/link analyses that were not
+// carried forward because their rect moved (empty on a first ingest, where there is
+// nothing to carry).
 type PageWriteReport struct {
-	PageID            string
-	New               bool
+	PageID string
+	New    bool
+	// AdoptedFrom names where this page's state came from when the page moved into
+	// this note on the device, sorted; the orphan store appears as "orphans". The
+	// first entry supplied the carried analysis/tags/transcription, any further one
+	// was a duplicate copy this write purged. Mutually exclusive with New.
+	AdoptedFrom       []string
 	JSONChanged       bool
 	SVGChanged        bool
 	BackgroundChanged bool
@@ -96,8 +112,11 @@ type DroppedRegion struct {
 }
 
 // Write registers a note keyed by its file id, reconciling the note's directory
-// in place rather than rebuilding it. Pages no longer present are pruned (all of
-// their <PAGEID>.* files, including derived analyses); note.json and per-page
+// in place rather than rebuilding it. Pages no longer present are pruned — their
+// reclaimable state parked in the orphan store, the rest deleted (orphan.go) — and a
+// page the note has gained that currently lives elsewhere in the archive is adopted
+// from there rather than duplicated, with its old note repaired (adopt.go), so a
+// PAGEID always names exactly one page in exactly one note. note.json and per-page
 // files are written only when their content changed. Crucially, other <PAGEID>.*
 // artifacts of pages that remain are left untouched, so expensive per-page
 // analyses survive re-ingest. svgs maps page id to rendered SVG bytes; each one
@@ -120,10 +139,17 @@ func (a *Archive) Write(n *snote.Note, svgs map[string][]byte) (*WriteReport, er
 		current[p.ID] = true
 	}
 
-	// Preflight the kept pages through the schema-gated reader before any write, so a
-	// stale-schema page aborts (ErrSchemaVersion) with the archive untouched rather
-	// than after note.json is already rewritten. The map carries analyses forward.
-	oldPages, err := a.preflight(n.FileID, n.Pages)
+	// Preflight the note and its kept pages through the schema-gated readers before
+	// any write, so a stale-schema file aborts (ErrSchemaVersion) with the archive
+	// untouched rather than after note.json is already rewritten. The docs it returns
+	// carry the snorg-managed state (tags, analyses) forward.
+	oldNote, oldPages, err := a.preflight(n.FileID, n.Pages)
+	if err != nil {
+		return nil, err
+	}
+	// The other half of the preflight: pages this note has gained that currently live
+	// under another note or in the orphan store. Also gated, also before any write.
+	foreign, err := a.locateForeign(n.FileID, n.Pages, oldPages)
 	if err != nil {
 		return nil, err
 	}
@@ -132,29 +158,61 @@ func (a *Archive) Write(n *snote.Note, svgs map[string][]byte) (*WriteReport, er
 		return nil, fmt.Errorf("create %s: %w", dir, err)
 	}
 
-	// Prune pages that disappeared from the note (with all their artifacts).
+	// Move in every page that moved here on the device, before the prune below reads
+	// the directory. A page this note already owns keeps its own state; the stale copy
+	// elsewhere is purged either way, which is how an archive duplicated by an older
+	// snorg heals itself.
+	adopted := make(map[string][]string, len(foreign.Origins))
+	for _, id := range sortedKeys(foreign.Origins) {
+		o := foreign.Origins[id]
+		_, keepOwn := oldPages[id]
+		repaired, err := a.adopt(dir, id, o, foreign.Notes, keepOwn)
+		if err != nil {
+			return nil, err
+		}
+		report.Repaired = append(report.Repaired, repaired...)
+		if !keepOwn {
+			oldPages[id] = o.Doc
+			adopted[id] = o.Donors
+		}
+	}
+	sort.Strings(report.Repaired)
+	report.Repaired = slices.Compact(report.Repaired)
+	a.dropOrphanDirIfEmpty()
+
+	// Prune pages that disappeared from the note, parking what cannot be rebuilt.
 	existing, err := archivedPageIDs(dir)
 	if err != nil {
 		return nil, err
 	}
 	for id := range existing {
 		if !current[id] {
-			if err := removePageFiles(dir, id); err != nil {
+			parked, err := a.prunePage(n.FileID, id)
+			if err != nil {
 				return nil, err
 			}
 			report.Pruned = append(report.Pruned, id)
+			if parked {
+				report.Parked = append(report.Parked, id)
+			}
 		}
 	}
 	sort.Strings(report.Pruned)
+	sort.Strings(report.Parked)
 
-	noteChanged, err := writeJSONIfChanged(filepath.Join(dir, "note.json"), noteDoc(n))
+	// noteDoc rebuilds note.json from the .note, so the note's snorg-managed tags —
+	// which the .note knows nothing about — must be carried over from the preflight
+	// doc, exactly like a page's tags/analysis below.
+	nd := noteDoc(n)
+	nd.Tags = oldNote.Tags
+	noteChanged, err := writeJSONIfChanged(filepath.Join(dir, "note.json"), nd)
 	if err != nil {
 		return nil, err
 	}
 	report.NoteChanged = noteChanged
 	for i, p := range n.Pages {
 		pd := pageDoc(p)
-		pc := PageWriteReport{PageID: p.ID}
+		pc := PageWriteReport{PageID: p.ID, AdoptedFrom: adopted[p.ID]}
 		// Stamp the template selector from the source SVG (before the background
 		// pipeline runs), so it is captured under every background mode. Absent
 		// inline background (blank page) leaves it empty.
@@ -217,19 +275,30 @@ func (a *Archive) Write(n *snote.Note, svgs map[string][]byte) (*WriteReport, er
 			}
 			pc.SVGChanged = svgChanged
 		}
-		if pc.New || pc.JSONChanged || pc.SVGChanged || pc.BackgroundChanged || len(pc.DroppedRegions) > 0 {
+		if pc.New || len(pc.AdoptedFrom) > 0 || pc.JSONChanged || pc.SVGChanged || pc.BackgroundChanged || len(pc.DroppedRegions) > 0 {
 			report.Pages = append(report.Pages, pc)
 		}
 	}
 	return report, nil
 }
 
-// preflight reads the note's kept pages through the schema-gated reader before Write
-// mutates anything, so a stale-schema page aborts (ErrSchemaVersion) with no partial
-// write. It returns the old page docs keyed by id for the analysis carry-forward;
-// os.ErrNotExist is the normal first-ingest case for a page (and for the whole note
-// dir, so it is safe to call before MkdirAll).
-func (a *Archive) preflight(fileID string, pages []snote.Page) (map[string]PageDoc, error) {
+// preflight reads the note and its kept pages through the schema-gated readers
+// before Write mutates anything, so a stale-schema file aborts (ErrSchemaVersion)
+// with no partial write. It covers the note's own directory; locateForeign is the
+// other half, reading the donors of any page this note has gained. It returns the old note doc (for the note-tag
+// carry-forward) and the old page docs keyed by id (for the analysis/tag
+// carry-forward); os.ErrNotExist is the normal first-ingest case for a page or the
+// whole note dir, so it is safe to call before MkdirAll.
+func (a *Archive) preflight(fileID string, pages []snote.Page) (NoteDoc, map[string]PageDoc, error) {
+	var oldNote NoteDoc
+	switch nd, err := a.ReadNote(fileID); {
+	case err == nil:
+		oldNote = nd
+	case errors.Is(err, os.ErrNotExist):
+		// first ingest of this note — nothing to carry
+	default:
+		return NoteDoc{}, nil, err
+	}
 	old := make(map[string]PageDoc, len(pages))
 	for _, p := range pages {
 		pd, err := a.ReadPage(fileID, p.ID)
@@ -239,10 +308,10 @@ func (a *Archive) preflight(fileID string, pages []snote.Page) (map[string]PageD
 		case errors.Is(err, os.ErrNotExist):
 			// first ingest of this page — nothing to carry
 		default:
-			return nil, err
+			return NoteDoc{}, nil, err
 		}
 	}
-	return old, nil
+	return oldNote, old, nil
 }
 
 // carryRegionAnalyses copies per-title/per-link analyses from old into pd,
@@ -372,4 +441,14 @@ func writeFileIfChanged(path string, data []byte) (bool, error) {
 		return false, fmt.Errorf("write %s: %w", path, err)
 	}
 	return true, nil
+}
+
+// sortedKeys is the deterministic iteration order for a map keyed by page or file id.
+func sortedKeys[V any](m map[string]V) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
 }

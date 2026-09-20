@@ -117,7 +117,7 @@ func TestWriteReportDroppedRegion(t *testing.T) {
 		t.Fatal(err)
 	}
 	pd.Titles[0].Analysis = &TitleAnalysis{Name: "Chapter"}
-	if err := a.WritePage("F_TEST", pd); err != nil {
+	if _, err := a.WritePage("F_TEST", pd); err != nil {
 		t.Fatal(err)
 	}
 

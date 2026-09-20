@@ -174,7 +174,7 @@ func TestGetAssemblesAnalysis(t *testing.T) {
 	pd.Titles[0].Analysis = &archive.TitleAnalysis{Name: "Chapter", Edited: true}
 	pd.Links[0].Analysis = &archive.LinkAnalysis{Name: "see also", Edited: true}
 	pd.Analysis = &archive.PageAnalysis{SourceHash: "abc", Fields: map[string]string{"description": "short"}}
-	if err := a.WritePage("F_TEST", pd); err != nil {
+	if _, err := a.WritePage("F_TEST", pd); err != nil {
 		t.Fatal(err)
 	}
 	if err := a.WriteAnalysisMD("F_TEST", "Pa", "# Chapter\n\nbody"); err != nil {
@@ -242,5 +242,45 @@ func TestListEnumeratesNotes(t *testing.T) {
 	}
 	if want := []string{"F_A", "F_B"}; !reflect.DeepEqual(ids, want) {
 		t.Errorf("List = %v want %v", ids, want)
+	}
+}
+
+// A note tag surfaces on the NoteView and is unioned into every page's effective
+// tags, while the page docs on disk keep only their own.
+func TestGetUnionsNoteTags(t *testing.T) {
+	a := archive.New(t.TempDir())
+	writeNote(t, a, &snote.Note{
+		FileID: "F_TAGS",
+		Source: "note.note",
+		Pages:  []snote.Page{{ID: "Pa", Number: 1}, {ID: "Pb", Number: 2}},
+	}, map[string]string{"Pa": "<svg/>", "Pb": "<svg/>"})
+	if _, err := a.TagNote("F_TAGS", "work", false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.TagPage("Pa", "todo", false); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := retrieve.Get(a, []string{"Pa", "Pb"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	note := res.Notes[0]
+	if want := []string{"work"}; !reflect.DeepEqual(note.Tags, want) {
+		t.Errorf("note tags = %v, want %v", note.Tags, want)
+	}
+	if want := []string{"todo", "work"}; !reflect.DeepEqual(note.Pages[0].Tags, want) {
+		t.Errorf("Pa tags = %v, want the sorted union %v", note.Pages[0].Tags, want)
+	}
+	if want := []string{"work"}; !reflect.DeepEqual(note.Pages[1].Tags, want) {
+		t.Errorf("Pb tags = %v, want the inherited %v", note.Pages[1].Tags, want)
+	}
+	// Inheritance is a read-time union: Pb's own doc stays tag-free.
+	pd, err := a.ReadPage("F_TAGS", "Pb")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pd.Tags) != 0 {
+		t.Errorf("stored Pb tags = %v, want empty", pd.Tags)
 	}
 }

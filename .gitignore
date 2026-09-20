@@ -2,3 +2,4 @@
 /dist/
 *.out
 .claude/
+/docs/doc.md

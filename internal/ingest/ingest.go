@@ -1,17 +1,15 @@
 // Package ingest orchestrates registering .note files into an archive: read the
 // domain model from a snote.Source, render all pages to SVG in one pass, and write
 // everything through the archive store. Run handles one note; RunMany ingests a
-// batch concurrently (one note per worker), and NoteFiles discovers notes under a tree.
+// batch one note at a time, and NoteFiles discovers notes under a tree.
 package ingest
 
 import (
 	"fmt"
 	"io/fs"
 	"path/filepath"
-	"runtime"
 	"sort"
 	"strings"
-	"sync"
 
 	"github.com/jdlugosz963/snorg/internal/archive"
 	"github.com/jdlugosz963/snorg/internal/snote"
@@ -55,41 +53,26 @@ type Result struct {
 	Err    error
 }
 
-// RunMany ingests paths into store concurrently, one note per worker. jobs caps
-// the worker count; jobs <= 0 falls back to runtime.NumCPU() (the work is
-// CPU-bound native SVG rendering (potrace tracing), so more workers than cores only thrashes).
-// A failed note never aborts the batch — every path yields a Result, in input
-// order. Concurrency is safe because src is stateless and each note writes to its
-// own <FILE_ID>/ directory under the shared store.
-func RunMany(src snote.Source, store *archive.Archive, paths []string, jobs int) []Result {
-	results := make([]Result, len(paths))
-	if len(paths) == 0 {
-		return results
-	}
-	if jobs <= 0 {
-		jobs = runtime.NumCPU()
-	}
-	if jobs > len(paths) {
-		jobs = len(paths)
-	}
+// Options tunes a batch ingest.
+type Options struct {
+	// OnResult, when set, is called with each note's Result as it lands, so a
+	// caller can report progress instead of waiting for the whole batch. Calls
+	// are sequential, on the calling goroutine, in the order of the paths passed
+	// to RunMany. Every Result passed here is also in the returned slice.
+	OnResult func(Result)
+}
 
-	indices := make(chan int)
-	var wg sync.WaitGroup
-	for w := 0; w < jobs; w++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for i := range indices {
-				note, report, err := Run(src, store, paths[i])
-				results[i] = Result{Path: paths[i], Note: note, Report: report, Err: err}
-			}
-		}()
+// RunMany ingests paths into store one note at a time. A failed note never
+// aborts the batch — every path yields a Result, in input order.
+func RunMany(src snote.Source, store *archive.Archive, paths []string, opts Options) []Result {
+	results := make([]Result, len(paths))
+	for i, path := range paths {
+		note, report, err := Run(src, store, path)
+		results[i] = Result{Path: path, Note: note, Report: report, Err: err}
+		if opts.OnResult != nil {
+			opts.OnResult(results[i])
+		}
 	}
-	for i := range paths {
-		indices <- i
-	}
-	close(indices)
-	wg.Wait()
 	return results
 }
 

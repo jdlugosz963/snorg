@@ -1,8 +1,9 @@
 # Configuration
 
 `snorg` commands are driven by YAML config files. Pass one or more with the
-repeatable global `-c` flag (before the archive path); later files override
-earlier ones (deep-merge). Split secrets from committed config:
+repeatable global `-c` flag (global, so it comes before the command, in any order
+relative to `-a`); later files override earlier ones (deep-merge). Split secrets
+from committed config:
 
 ```sh
 snorg -c secrets.yaml -c analysis.yaml -a <archive> analyze <PAGEID>
@@ -270,9 +271,14 @@ Each `image:` path is resolved **relative to the config file that declared it**
 (`~` expanded), so a per-archive config you pass with `-c` can reference images
 under the archive while a shared user config carries its own alongside it. The
 image is hashed to match a page's background, so register the device-form grayscale
-PNG exactly (a re-encode hashes differently). Because a `templates:` list is a
-sequence, a higher layer's list **replaces** a lower one wholesale (sequences are
-overwritten, not merged).
+PNG exactly (a re-encode hashes differently).
+
+Because sequences concatenate, the `templates:` lists of the user config, an archive
+config, every `-c` file and every `include:` all apply **together** — a file can
+declare one template and pull in more, and each generator can ship its own file.
+The one thing to watch: nothing is de-duplicated, so registering the same image
+twice (e.g. including the same file from two places) makes two templates share a
+background hash, which errors on the next command. Include it once.
 
 ## Fields are derived from content, not the image
 

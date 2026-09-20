@@ -168,7 +168,7 @@ func Apply(a *archive.Archive, pageID, buffer string) (Outcome, int, error) {
 
 	namesChanged := applyNames(&pd, titleNames, linkNames)
 	if namesChanged > 0 {
-		if err := a.WritePage(fileID, pd); err != nil {
+		if _, err := a.WritePage(fileID, pd); err != nil {
 			return "", 0, err
 		}
 	}

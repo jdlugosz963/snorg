@@ -3,12 +3,12 @@
 ## CLI
 
 ```
-snorg [-a <archive-path>] [-c config.yaml ...] [--no-user-config] <command> [command flags] [args]
+snorg [-a <archive-path>] [-c config.yaml ...] [--no-user-config] [-v] <command> [command flags] [args]
 
-snorg [-a <archive-path>] ingest [-j N] <file-or-dir>
+snorg [-a <archive-path>] ingest <file-or-dir>
 snorg [-a <archive-path>] list [-l] | list keywords|tags [-l]
-snorg [-a <archive-path>] query <filter> [arg]
-snorg [-a <archive-path>] tag [-r] <tag> [PAGEID ...]
+snorg [-a <archive-path>] query <expr>
+snorg [-a <archive-path>] tag [-r] <tag> [PAGEID ...] | tag -n [-r] <tag> [FILE_ID ...]
 snorg [-a <archive-path>] retrieve [PAGEID ...]
 snorg [-a <archive-path>] analyze [--force] [PAGEID ...]
 snorg [-a <archive-path>] analyze-edit <PAGEID>
@@ -96,7 +96,8 @@ migrates its owning `note.json`. Idempotent, needs no provider config.
 <archive>/templates/*.png     # optional device-form background PNGs (template selectors);
                               #   image: paths are relative to the declaring config file (see docs/templates.md)
 <archive>/<FILE_ID>/
-    note.json          # schema_version + file metadata + ordered page placement (id, number)
+    note.json          # schema_version + file metadata + tags[] (snorg-managed, note-scoped:
+                       #   inherited by every page of the note) + ordered page placement (id, number)
     <PAGEID>.json      # schema_version + per page: starred, background_hash, tags[] (snorg-managed),
                        # titles(rect,level,analysis), keywords(text), links(...,analysis),
                        # analysis{source_hash, fields, regions[](id,source_hash)}
@@ -108,6 +109,8 @@ migrates its owning `note.json`. Idempotent, needs no provider config.
     <PAGEID>.svg       # per page rendered vector (one <path>/command per line)
     backgrounds/
         <sha256>.png   # page backgrounds, content-addressed, deduped per note
+<archive>/orphans/            # the orphan store: page state parked when a page leaves
+    <PAGEID>.{json,md,md.diff}#   a note, reclaimed when another note claims it
 ```
 Stable filenames + indented JSON → clean VCS diffs. The page transcription lives
 in the `<PAGEID>.md` sidecar — multiline Markdown diffs like prose, not like a
@@ -164,15 +167,57 @@ patch; the file exists iff they diverge). On re-analysis the LLM is prompted
 with the base — **user edits never reach the LLM** — and the fresh output is
 3-way merged (base, user's md, new transcription); the md becomes the merge
 result and the diff is rebased onto the new base. Overlaps leave standard
-conflict markers (`<<<<<<< edited` / `>>>>>>> reanalyzed`) in the md and the
-`conflict` outcome; resolving is another `analyze-edit`. A page never analyzed
+conflict markers (`<<<<<<< edited` / `>>>>>>> reanalyzed`) in the md and set
+`TextChange.Conflicts` on the reported change; resolving is another `analyze-edit`. A page never analyzed
 by AI has an empty base, so a hand-written transcription meets its first AI run
 as one conflict to resolve once. The diff/merge is pure Go (no PATH tool),
 isolated in `internal/textmerge`.
 
+**Page moves.** A PAGEID is minted by the device and names exactly one page in
+exactly one note directory. That is an invariant `archive.Write` **enforces**, not one
+it assumes: a page can be moved to another note on the tablet, and re-ingesting only
+that note would otherwise store the page twice — the new copy stripped of the
+analysis, tags and transcription still sitting in the old one, which the old note's
+next ingest would then delete. So `Write` looks archive-wide for any page it is about
+to write (`archive.locateForeign`, in the preflight, through the gated readers, before
+the first mutation — a stale donor aborts the write with nothing moved). A page found
+elsewhere is **moved**: its non-regenerable sidecars are renamed into the new note,
+its analysis and tags are carried through the same path re-ingest already uses for its
+own pages, and the note it left is repaired — dropped from that `note.json`'s page
+placement with the survivors renumbered from 1, which is byte-for-byte what the
+donor's own next ingest will write, so the repair converges instead of producing a
+second diff later. The donor's `note.json` is rewritten *before* the page's files are
+deleted there: the reverse order leaves a crash window in which a note lists a page
+whose file is gone, and that is precisely the state `query` and `retrieve` hard-error
+on. More than one donor means the archive was already duplicated by an older snorg;
+all of them are purged (the copy holding a transcription supplies the state), so any
+ingest of any note involved heals it.
+
+The other half is ordering. Whichever note is ingested first, the transcription must
+survive, so a page that **leaves** a note is not simply deleted: if it carries
+anything that cannot be rebuilt from the `.note` — a `<PAGEID>.md`, a `.md.diff`,
+snorg tags or an analysis — that state is parked in `<archive>/orphans/`
+(`archive.prunePage`), where the note that later claims the page reclaims it. A page
+with none of that is deleted as before, so the store stays empty in ordinary use. The
+store is deliberately a note directory without a `note.json`: `List` only reports
+directories holding one, so it is invisible to every read surface, and the same
+accessors address it by passing `orphans` where a FILE_ID goes — reclaiming a parked
+page and adopting one from a live note are one code path. It holds no `.svg` (that is
+re-derivable, and its background href only resolves beside a note's `backgrounds/`
+folder). Nothing collects it automatically, because an entry is the last copy of text
+snorg cannot reproduce; entries vanish when a note claims the page, and the rest are a
+few KB of plaintext to delete by hand. `migrate` walks the store explicitly, since
+`List` cannot reach it and adoption reads a parked doc through the gated reader.
+
+Two residues are left deliberately. The note a page moved **out** of keeps stale
+`<PAGEID>.svg` nav/link hrefs pointing at it until that note is itself re-ingested —
+the same designed condition as the dangling cross-note links above — and its
+`backgrounds/` PNG may become unreferenced, which nothing has ever collected.
+
 **Incremental update.** Re-ingest does not rebuild the directory (that would discard
 expensive per-page LLM analyses). Instead `archive.Write` reconciles: pages dropped
-from the note have all their `<PAGEID>.*` files pruned (`.md` included); `note.json`
+from the note have all their `<PAGEID>.*` files pruned, their reclaimable state parked
+first (see Page moves); `note.json`
 and per-page files are written only when their bytes change; any other `<PAGEID>.*`
 artifacts of pages that remain are left untouched. A page's `analysis` (fields +
 source hash) is carried over, and per-title/per-link transcriptions are carried by
@@ -229,7 +274,9 @@ stdin / bare = whole archive), but a page selection also migrates its owning
 - `internal/archive` — owns the on-disk layout; `doc.go` is the JSON serialization boundary
   (per-title/per-link `analysis` nested on the items; page-level `analysis` holds
   `source_hash` + `fields` + `regions[]` (per-box fingerprint state); the top-level
-  `background_hash` (ingest-stamped selector) + `analysis.regions[]` support template regions; both
+  `background_hash` (ingest-stamped selector) + `analysis.regions[]` support template regions;
+  the top-level `tags` are the snorg-managed labels, note-scoped in `note.json` and
+  page-scoped in `<PAGEID>.json`; both
   docs carry `schema_version` = `CurrentSchemaVersion`);
   `Write` reconciles a note's directory in place, stamps `background_hash` (sha256 of the
   decoded background, from `background.go`) and runs the

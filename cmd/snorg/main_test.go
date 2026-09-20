@@ -120,7 +120,7 @@ func TestQueryLong(t *testing.T) {
 	pd.Titles[0].Analysis = &archive.TitleAnalysis{Name: "Agenda"}
 	pd.Titles[1].Analysis = &archive.TitleAnalysis{Name: "Action items"}
 	pd.Tags = []string{"important"}
-	if err := a.WritePage("F_TEST", pd); err != nil {
+	if _, err := a.WritePage("F_TEST", pd); err != nil {
 		t.Fatal(err)
 	}
 

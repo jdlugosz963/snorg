@@ -1,9 +1,10 @@
 // Package config loads snorg's runtime configuration: provider credentials,
 // analysis prompts, ingest SVG toggles, the export template and template regions.
 // Configuration is split across one or more YAML files that are deep-merged (later
-// files win), so secrets (api_key) can live in a separate, gitignored file from the
-// committed configuration. A file may also pull in other files via the include:
-// key, whose contents override the including file's own keys (see Load).
+// files win, sequences concatenate), so secrets (api_key) can live in a separate,
+// gitignored file from the committed configuration. A file may also pull in other
+// files via the include: key, whose contents override the including file's own keys
+// (see Load).
 //
 // Its allowed external dependencies are yaml.v3 and internal/snote (snote.Rect, a
 // pure domain type used by template boxes).
@@ -68,10 +69,12 @@ type Config struct {
 	Export   Export   `yaml:"export"`
 	Ingest   Ingest   `yaml:"ingest"`
 	// Templates lists the archive's template regions (see docs/templates.md),
-	// folded into the merged config so they layer like every other section. Each
-	// entry's Image is resolved to an absolute path by Load, relative to the config
-	// file that declared it; pkg/snorg bridges these specs to the archive, which
-	// hashes each image to match it against a page's background.
+	// folded into the merged config so they layer like every other section: the
+	// lists from every file add up (lower layer first), so one file can declare a
+	// template and an included one add more. Each entry's Image is resolved to an
+	// absolute path by Load, relative to the config file that declared it;
+	// pkg/snorg bridges these specs to the archive, which hashes each image to
+	// match it against a page's background.
 	Templates []TemplateSpec `yaml:"templates"`
 }
 
@@ -153,10 +156,11 @@ type Task struct {
 	UpdatePrompt string `yaml:"update_prompt"`
 }
 
-// Load reads each path, deep-merges them (later paths override earlier ones),
-// decodes the result into a Config and fills in defaults. It is an error for a file
-// to be unreadable or malformed. Load does not enforce required fields; callers run
-// the validation for the section they need (e.g. ValidateProvider).
+// Load reads each path, deep-merges them (later paths override earlier ones; a
+// sequence such as templates: is concatenated, lower layer first, rather than
+// replaced), decodes the result into a Config and fills in defaults. It is an error
+// for a file to be unreadable or malformed. Load does not enforce required fields;
+// callers run the validation for the section they need (e.g. ValidateProvider).
 //
 // A file may carry an include: list of other config paths (relative to that file's
 // directory, ~ expanded). Includes are merged *over* the including file's own keys
@@ -166,8 +170,8 @@ type Task struct {
 // order given, later winning. An include cycle is an error.
 //
 // Each template's image: path is resolved to an absolute path relative to the file
-// that declared it, before the merge, so provenance survives even though a
-// templates: sequence is overwritten wholesale (not deep-merged) on conflict.
+// that declared it, before the merge, so every layer's entries keep their own
+// provenance once the templates: lists from all of them are concatenated.
 func Load(paths []string) (*Config, error) {
 	merged := map[string]any{}
 	for _, p := range paths {
@@ -326,13 +330,22 @@ func ExpandHome(p string) string {
 	return filepath.Join(home, strings.TrimPrefix(p[1:], "/"))
 }
 
-// deepMerge recursively merges src into dst: nested maps merge per key, every other
-// value (scalars, sequences) is overwritten by src.
+// deepMerge recursively merges src into dst: nested maps merge per key, sequences
+// concatenate (dst's items first, src's appended after), and every other value
+// (scalars) is overwritten by src. So a list setting adds up across layers rather
+// than the highest layer replacing it; the concatenation builds a fresh slice, so
+// neither parsed document is aliased.
 func deepMerge(dst, src map[string]any) {
 	for k, sv := range src {
-		if sm, ok := sv.(map[string]any); ok {
+		switch s := sv.(type) {
+		case map[string]any:
 			if dm, ok := dst[k].(map[string]any); ok {
-				deepMerge(dm, sm)
+				deepMerge(dm, s)
+				continue
+			}
+		case []any:
+			if dl, ok := dst[k].([]any); ok {
+				dst[k] = append(append(make([]any, 0, len(dl)+len(s)), dl...), s...)
 				continue
 			}
 		}

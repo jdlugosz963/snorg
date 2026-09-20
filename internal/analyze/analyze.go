@@ -176,7 +176,7 @@ func Page(ctx context.Context, a *archive.Archive, t Transcriber, g Generator, s
 		pd.Links[i].Analysis = &archive.LinkAnalysis{Name: name}
 	}
 
-	if err := a.WritePage(fileID, pd); err != nil {
+	if _, err := a.WritePage(fileID, pd); err != nil {
 		return PageResult{}, err
 	}
 	return PageResult{Outcome: outcome, Regions: regions}, nil

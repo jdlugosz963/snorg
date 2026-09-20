@@ -27,21 +27,27 @@ type Result struct {
 }
 
 // NoteView is the assembled, consumer-facing representation of one archived note.
+// Tags are the note's own snorg-managed tags — every page of the note inherits
+// them, so they also appear in each PageView.Tags; they are exposed here as well so
+// a consumer can still tell a note-wide label from a page's own.
 type NoteView struct {
 	FileID    string     `json:"file_id"`
 	Signature string     `json:"signature"`
 	Device    string     `json:"device"`
 	Source    string     `json:"source"`
+	Tags      []string   `json:"tags,omitempty"`
 	Pages     []PageView `json:"pages"`
 }
 
 // PageView is one page in placement order, with its SVG path relative to the
 // archive root (join it with Result.Archive to resolve the file).
 type PageView struct {
-	Number   int               `json:"number"`
-	PageID   string            `json:"page_id"`
-	Starred  bool              `json:"starred"`
-	SVG      string            `json:"svg"`
+	Number  int    `json:"number"`
+	PageID  string `json:"page_id"`
+	Starred bool   `json:"starred"`
+	SVG     string `json:"svg"`
+	// Tags is the page's effective tag set: its own tags unioned with the ones
+	// inherited from its note, sorted — inherited and own are indistinguishable here.
 	Tags     []string          `json:"tags,omitempty"`
 	Titles   []TitleView       `json:"titles"`
 	Keywords []KeywordView     `json:"keywords"`
@@ -90,6 +96,9 @@ type NameAnalysisView struct {
 	Name string `json:"name"`
 }
 
+// KeywordView is one device keyword on a page — invisible metadata set on the
+// Supernote, not handwriting, so it has no rect. Snorg-managed labels are the
+// separate PageView.Tags.
 type KeywordView struct {
 	Text string `json:"text"`
 }
@@ -148,7 +157,7 @@ func Get(a *archive.Archive, pageIDs []string) (*Result, error) {
 				continue
 			}
 			delete(pending, ref.ID)
-			pv, err := getPage(a, templates, fileID, ref)
+			pv, err := getPage(a, templates, nd, ref)
 			if err != nil {
 				return nil, err
 			}
@@ -158,6 +167,7 @@ func Get(a *archive.Archive, pageIDs []string) (*Result, error) {
 					Signature: nd.Signature,
 					Device:    nd.Device,
 					Source:    nd.Source,
+					Tags:      nd.Tags,
 				}
 				views = append(views, view)
 			}
@@ -182,7 +192,8 @@ func Get(a *archive.Archive, pageIDs []string) (*Result, error) {
 // getPage assembles one PageView, joining <PAGEID>.json with the .md sidecar —
 // parsed as the region-section document for a templated page (boxes resolved from
 // templates), or exposed as free-form content otherwise.
-func getPage(a *archive.Archive, templates *archive.Templates, fileID string, ref archive.NotePageRef) (PageView, error) {
+func getPage(a *archive.Archive, templates *archive.Templates, nd archive.NoteDoc, ref archive.NotePageRef) (PageView, error) {
+	fileID := nd.FileID
 	pd, err := a.ReadPage(fileID, ref.ID)
 	if err != nil {
 		return PageView{}, fmt.Errorf("page %s: %w", ref.ID, err)
@@ -215,7 +226,7 @@ func getPage(a *archive.Archive, templates *archive.Templates, fileID string, re
 		}
 		analysis.Regions = regions
 	}
-	return pageView(fileID, ref, pd, a.SVGRel(fileID, ref.ID), analysis), nil
+	return pageView(nd, ref, pd, a.SVGRel(fileID, ref.ID), analysis), nil
 }
 
 // getRegions resolves a templated page's boxes to RegionViews: one per config box
@@ -235,7 +246,8 @@ func getRegions(tmpl *archive.Template, md string) []RegionView {
 	return regions
 }
 
-func pageView(fileID string, ref archive.NotePageRef, pd archive.PageDoc, svg string, analysis *PageAnalysisView) PageView {
+func pageView(nd archive.NoteDoc, ref archive.NotePageRef, pd archive.PageDoc, svg string, analysis *PageAnalysisView) PageView {
+	fileID := nd.FileID
 	titles := make([]TitleView, 0, len(pd.Titles))
 	for _, t := range pd.Titles {
 		var an *NameAnalysisView
@@ -271,7 +283,7 @@ func pageView(fileID string, ref archive.NotePageRef, pd archive.PageDoc, svg st
 		PageID:   ref.ID,
 		Starred:  pd.Starred,
 		SVG:      svg,
-		Tags:     pd.Tags,
+		Tags:     archive.EffectiveTags(nd, pd),
 		Titles:   titles,
 		Keywords: keywords,
 		Links:    links,

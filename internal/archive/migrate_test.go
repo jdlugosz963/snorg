@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -63,7 +64,7 @@ func TestMigrateV0ToCurrent(t *testing.T) {
 		t.Fatal("ReadNote should reject a stale note.json")
 	}
 
-	results, err := a.MigrateAll()
+	results, err := a.MigrateAll(MigrateOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -111,7 +112,7 @@ func TestMigrateIdempotent(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	results, err := a.MigrateAll()
+	results, err := a.MigrateAll(MigrateOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -136,7 +137,7 @@ func TestMigrateNewerThanBinary(t *testing.T) {
 	}
 	bumpVersion(t, filepath.Join(dir, "Pa.json")) // sets schema_version = 999
 
-	results, err := a.MigrateAll()
+	results, err := a.MigrateAll(MigrateOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -164,7 +165,7 @@ func TestMigratePagesSelection(t *testing.T) {
 		stripVersion(t, filepath.Join(dir, p))
 	}
 
-	results, err := a.MigratePages([]string{"Pa", "Pnope"})
+	results, err := a.MigratePages([]string{"Pa", "Pnope"}, MigrateOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -240,7 +241,7 @@ func TestMigrateV1LinkKinds(t *testing.T) {
 	}
 	downgradeLinksToV1(t, filepath.Join(dir, "Pa.json"))
 
-	if _, err := a.MigratePages([]string{"Pa"}); err != nil {
+	if _, err := a.MigratePages([]string{"Pa"}, MigrateOptions{}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -302,7 +303,7 @@ func TestMigrateLegacyEditDiff(t *testing.T) {
 	}
 	stripVersion(t, filepath.Join(dir, "Pa.json")) // simulate a stale archive.
 
-	results, err := a.MigrateAll()
+	results, err := a.MigrateAll(MigrateOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -341,7 +342,7 @@ func TestMigrateLegacyEditDiff(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	results2, err := a.MigrateAll()
+	results2, err := a.MigrateAll(MigrateOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -352,5 +353,32 @@ func TestMigrateLegacyEditDiff(t *testing.T) {
 	}
 	if after, _ := os.Stat(diffPath); !after.ModTime().Equal(before.ModTime()) {
 		t.Error("already-unified .md.diff was rewritten (mtime changed)")
+	}
+}
+
+// TestMigrateStreamsResults: the callback stream is the returned slice, element for
+// element — including the extra `diff` result a page can yield, which is why the
+// two must come from one emit path rather than two append sites.
+func TestMigrateStreamsResults(t *testing.T) {
+	root := t.TempDir()
+	a := New(root)
+	if _, err := a.Write(note("Pa", "Pb"), svgMap(map[string]string{"Pa": "<svg/>", "Pb": "<svg/>"})); err != nil {
+		t.Fatal(err)
+	}
+	stripVersion(t, filepath.Join(root, "F_TEST", "note.json"))
+	stripVersion(t, filepath.Join(root, "F_TEST", "Pa.json"))
+
+	var streamed []MigrateResult
+	results, err := a.MigrateAll(MigrateOptions{
+		OnResult: func(r MigrateResult) { streamed = append(streamed, r) },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) == 0 {
+		t.Fatal("precondition: the fixture archive must yield results")
+	}
+	if !reflect.DeepEqual(streamed, results) {
+		t.Errorf("stream = %+v, want the returned slice %+v", streamed, results)
 	}
 }

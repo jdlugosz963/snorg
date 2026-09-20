@@ -11,15 +11,23 @@ import "github.com/jdlugosz963/snorg/internal/snote"
 // migration step) whenever the JSON contract changes; a future `migrate` command
 // walks stale files forward one version at a time. 0 (absent field) is
 // pre-versioning, and is also stale.
-const CurrentSchemaVersion = 4
+const CurrentSchemaVersion = 5
 
 // NoteDoc is note.json — file metadata plus ordered page placement.
+//
+// Tags are snorg-managed labels attached from the tag command's note mode, and are
+// inherited by every page of the note: note.json is the only place a note tag is
+// stored (the pages' own PageDoc.Tags stay untouched), and the read side unions the
+// two via EffectiveTags. Like the page tags they are not sourced from the .note
+// (noteDoc leaves them empty), so re-ingest carries them forward; kept sorted and
+// de-duplicated for deterministic, VCS-friendly output.
 type NoteDoc struct {
 	SchemaVersion int           `json:"schema_version"`
 	FileID        string        `json:"file_id"`
 	Signature     string        `json:"signature"`
 	Device        string        `json:"device"`
 	Source        string        `json:"source"`
+	Tags          []string      `json:"tags,omitempty"`
 	Pages         []NotePageRef `json:"pages"`
 }
 
@@ -96,16 +104,27 @@ type LinkAnalysis struct {
 	Edited bool   `json:"edited,omitempty"`
 }
 
+// TitleDoc is one handwritten title region of a page: its rect in the 1920x2560
+// page pixel space, the heading Level the device recorded, and the transcription
+// once analyze has read it.
 type TitleDoc struct {
 	Rect     snote.Rect     `json:"rect"`
 	Level    int            `json:"level"`
 	Analysis *TitleAnalysis `json:"analysis,omitempty"`
 }
 
+// KeywordDoc is one device keyword: invisible page-level metadata typed on the
+// Supernote, with no rect and no handwriting. It is read-only here — snorg's own
+// labels are tags (see tags.go).
 type KeywordDoc struct {
 	Text string `json:"text"`
 }
 
+// LinkDoc is one link region of a page. Kind classifies the destination
+// (note/file/web/unknown) and decides which of the target fields are set: a note
+// link carries TargetPageID plus TargetFileID, a file or web link carries the
+// decoded Target (device path or URL) and, for a file, TargetDocPage. Name is the
+// device-derived label; Analysis is the transcription of the handwriting in Rect.
 type LinkDoc struct {
 	Rect          snote.Rect    `json:"rect"`
 	Kind          string        `json:"kind"`

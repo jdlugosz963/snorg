@@ -44,6 +44,7 @@ consumer never needs to know the on-disk file split. A whole note is
   "archive": "/home/you/notes/sn",
   "notes": [{
     "file_id": "F...", "signature": "...", "device": "...", "source": "note.note",
+    "tags": ["semester-2"],
     "pages": [{
       "number": 1, "page_id": "P...", "starred": false,
       "svg": "F.../P....svg",
@@ -66,6 +67,10 @@ consumer never needs to know the on-disk file split. A whole note is
 - `pages` are in placement order (1-based `number`).
 - `tags` are snorg-managed labels (from the `tag` command), sorted and de-duplicated;
   omitted when empty. Distinct from device `keywords` (read-only, set on the Supernote).
+  A note carries its own `tags` (set with `tag -n`, stored in `note.json` only) and every
+  page of that note **inherits** them: a page's `tags` is the union of its own and its
+  note's, so an inherited label is indistinguishable there — read `notes[].tags` to tell
+  which labels are note-wide.
 - `svg` is **relative to the archive root**; resolve it as `join(archive, svg)`.
   Per-page paths stay relative (portable); the one absolute root travels in `archive`.
 - `kind` classifies the link: `note` (another `.note`), `file` (non-note document on

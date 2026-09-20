@@ -32,7 +32,10 @@ func verifySchema(kind, id string, got int) error {
 // of knowing the directory structure themselves.
 
 // List returns the FILE_IDs present in the archive (sub-directories that hold a
-// note.json), sorted for deterministic output.
+// note.json), sorted for deterministic output. Requiring a note.json is also what
+// keeps snorg's own sub-directories out of every read surface: the orphan store
+// (orphans/, see orphan.go) and a user's templates/ folder are not notes and must
+// never be listed as one.
 func (a *Archive) List() ([]string, error) {
 	entries, err := os.ReadDir(a.Root)
 	if err != nil {
@@ -92,8 +95,11 @@ func (a *Archive) ReadSVG(fileID, pageID string) ([]byte, error) {
 }
 
 // FindPage returns the FILE_ID of the note that owns pageID, scanning every note
-// directory. PAGEIDs are stable per-note ids; in practice unique across a single
-// archive. It errors when no note (or more than one) holds the page.
+// directory. A PAGEID names exactly one page in exactly one note — the invariant
+// Write enforces by adopting a page that moved between notes on the device (adopt.go)
+// — so more than one hit means an archive left duplicated by an older snorg, which
+// re-ingesting either note repairs. It errors when no note, or more than one, holds
+// the page.
 func (a *Archive) FindPage(pageID string) (string, error) {
 	ids, err := a.List()
 	if err != nil {
@@ -111,17 +117,27 @@ func (a *Archive) FindPage(pageID string) (string, error) {
 	case 1:
 		return found[0], nil
 	default:
-		return "", fmt.Errorf("page %s is ambiguous, found in notes: %v", pageID, found)
+		return "", fmt.Errorf("page %s is in more than one note: %v — re-ingest them to repair the archive", pageID, found)
 	}
 }
 
 // WritePage writes pd to <fileID>/<pageID>.json in the canonical format, leaving
 // every sibling artifact (svg, other pages, backgrounds) untouched. It stamps the
 // current schema version so a persisted doc always reports the grammar it was
-// written in (and never fails its own next read).
-func (a *Archive) WritePage(fileID string, pd PageDoc) error {
+// written in (and never fails its own next read). It reports whether the bytes
+// actually changed, so a caller can tell a real metadata write from a no-op.
+func (a *Archive) WritePage(fileID string, pd PageDoc) (bool, error) {
 	pd.SchemaVersion = CurrentSchemaVersion
-	_, err := writeJSONIfChanged(filepath.Join(a.Root, fileID, pd.PageID+".json"), pd)
+	return writeJSONIfChanged(filepath.Join(a.Root, fileID, pd.PageID+".json"), pd)
+}
+
+// WriteNote writes nd to <nd.FileID>/note.json in the canonical format, leaving
+// every sibling artifact (pages, svgs, backgrounds) untouched. Like WritePage it
+// stamps the current schema version so a persisted doc always reports the grammar
+// it was written in.
+func (a *Archive) WriteNote(nd NoteDoc) error {
+	nd.SchemaVersion = CurrentSchemaVersion
+	_, err := writeJSONIfChanged(filepath.Join(a.Root, nd.FileID, "note.json"), nd)
 	return err
 }
 

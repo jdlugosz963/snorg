@@ -165,15 +165,22 @@ func (c *Client) FindPage(pageID string) (string, error) { return c.arch.FindPag
 // for Ingest when registering a directory.
 func NoteFiles(root string) ([]string, error) { return ingest.NoteFiles(root) }
 
+// IngestOptions tunes a batch ingest.
+type IngestOptions struct {
+	// OnResult, when set, is called with each note's result as it lands, so a
+	// caller can report progress instead of waiting for the whole batch. Results
+	// fire in the returned slice's order, on the calling goroutine.
+	OnResult func(IngestResult)
+}
+
 // Ingest registers each note path into the archive, running the config's SVG
-// pipeline; jobs caps concurrent notes (0 = number of CPUs). Results preserve input
-// order; a note's failure is reported in its IngestResult.Err without aborting the
-// batch.
-func (c *Client) Ingest(paths []string, jobs int) ([]IngestResult, error) {
+// pipeline. Results preserve input order; a note's failure is reported in its
+// IngestResult.Err without aborting the batch.
+func (c *Client) Ingest(paths []string, opts IngestOptions) ([]IngestResult, error) {
 	if err := c.cfg.ValidateIngest(); err != nil {
 		return nil, err
 	}
-	return ingest.RunMany(sntool.New(), c.arch, paths, jobs), nil
+	return ingest.RunMany(sntool.New(), c.arch, paths, ingest.Options{OnResult: opts.OnResult}), nil
 }
 
 // Export retrieves the given pages and renders them through the config's export
@@ -216,15 +223,24 @@ func (c *Client) ServeHandler(pageIDs []string, flat bool) (http.Handler, error)
 	return serve.Handler(c.arch, res.Notes, flat), nil
 }
 
+// MigrateOptions tunes a migration batch.
+type MigrateOptions struct {
+	// OnResult, when set, is called with each file's result as it lands, in the
+	// returned slice's order (the walk is sequential).
+	OnResult func(MigrateResult)
+}
+
 // Migrate upgrades the given pages (and their owning notes) to the current schema
 // version; an empty pageIDs migrates the whole archive (see MigrateAll). Per-file
 // errors are reported in the results, not returned.
-func (c *Client) Migrate(pageIDs []string) ([]MigrateResult, error) {
+func (c *Client) Migrate(pageIDs []string, opts MigrateOptions) ([]MigrateResult, error) {
 	if len(pageIDs) == 0 {
-		return c.arch.MigrateAll()
+		return c.MigrateAll(opts)
 	}
-	return c.arch.MigratePages(pageIDs)
+	return c.arch.MigratePages(pageIDs, archive.MigrateOptions{OnResult: opts.OnResult})
 }
 
 // MigrateAll upgrades every note and page in the archive to the current schema.
-func (c *Client) MigrateAll() ([]MigrateResult, error) { return c.arch.MigrateAll() }
+func (c *Client) MigrateAll(opts MigrateOptions) ([]MigrateResult, error) {
+	return c.arch.MigrateAll(archive.MigrateOptions{OnResult: opts.OnResult})
+}

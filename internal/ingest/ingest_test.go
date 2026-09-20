@@ -7,9 +7,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
-	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/jdlugosz963/snorg/internal/archive"
 	"github.com/jdlugosz963/snorg/internal/ingest"
@@ -229,34 +227,43 @@ func readJSON(t *testing.T, path string, v any) {
 	}
 }
 
-// fakeSource is an in-memory snote.Source for the concurrency tests, so they need
-// no real .note parsing. Each path becomes a one-page note keyed by its basename;
-// paths in failOn error from Read. It records peak concurrent RenderSVGs calls.
+// fakeSource is an in-memory snote.Source, so the batch tests need no real .note
+// parsing. Each path becomes a note whose FILE_ID is "F_<basename>"; its pages are
+// the ids in pages[path], defaulting to one page "P_<basename>" — distinct per
+// path, since a PAGEID is unique archive-wide. Paths in failOn error from Read.
 type fakeSource struct {
-	failOn    map[string]bool
-	active    int32
-	maxActive int32
+	failOn map[string]bool
+	pages  map[string][]string
+}
+
+// base is the note name a path maps to: its basename without the .note extension.
+func base(path string) string { return strings.TrimSuffix(filepath.Base(path), ".note") }
+
+func (f *fakeSource) pageIDs(path string) []string {
+	if ids, ok := f.pages[path]; ok {
+		return ids
+	}
+	return []string{"P_" + base(path)}
 }
 
 func (f *fakeSource) Read(path string) (*snote.Note, error) {
 	if f.failOn[path] {
 		return nil, fmt.Errorf("boom: %s", path)
 	}
-	id := "F_" + strings.TrimSuffix(filepath.Base(path), ".note")
-	return &snote.Note{FileID: id, Pages: []snote.Page{{ID: "P1", Number: 1}}}, nil
+	n := &snote.Note{FileID: "F_" + base(path)}
+	for i, id := range f.pageIDs(path) {
+		n.Pages = append(n.Pages, snote.Page{ID: id, Number: i + 1})
+	}
+	return n, nil
 }
 
 func (f *fakeSource) RenderSVGs(path string) ([][]byte, error) {
-	n := atomic.AddInt32(&f.active, 1)
-	for {
-		m := atomic.LoadInt32(&f.maxActive)
-		if n <= m || atomic.CompareAndSwapInt32(&f.maxActive, m, n) {
-			break
-		}
+	ids := f.pageIDs(path)
+	svgs := make([][]byte, len(ids))
+	for i := range ids {
+		svgs[i] = []byte("<svg/>")
 	}
-	time.Sleep(5 * time.Millisecond)
-	atomic.AddInt32(&f.active, -1)
-	return [][]byte{[]byte("<svg/>")}, nil
+	return svgs, nil
 }
 
 func TestRunManyArchivesAllInOrder(t *testing.T) {
@@ -264,7 +271,7 @@ func TestRunManyArchivesAllInOrder(t *testing.T) {
 	a := archive.New(root)
 	paths := []string{"a.note", "b.note", "c.note", "d.note"}
 
-	results := ingest.RunMany(&fakeSource{}, a, paths, 2)
+	results := ingest.RunMany(&fakeSource{}, a, paths, ingest.Options{})
 	if len(results) != len(paths) {
 		t.Fatalf("results = %d want %d", len(results), len(paths))
 	}
@@ -290,7 +297,7 @@ func TestRunManyContinuesOnError(t *testing.T) {
 	src := &fakeSource{failOn: map[string]bool{"b.note": true}}
 	paths := []string{"a.note", "b.note", "c.note"}
 
-	results := ingest.RunMany(src, archive.New(root), paths, 0) // 0 -> NumCPU
+	results := ingest.RunMany(src, archive.New(root), paths, ingest.Options{})
 	if results[0].Err != nil || results[2].Err != nil {
 		t.Errorf("ok notes errored: %v, %v", results[0].Err, results[2].Err)
 	}
@@ -299,18 +306,6 @@ func TestRunManyContinuesOnError(t *testing.T) {
 	}
 	if results[1].Note != nil {
 		t.Error("failed result should carry no note")
-	}
-}
-
-func TestRunManyRespectsJobLimit(t *testing.T) {
-	src := &fakeSource{}
-	paths := make([]string, 8)
-	for i := range paths {
-		paths[i] = fmt.Sprintf("n%d.note", i)
-	}
-	ingest.RunMany(src, archive.New(t.TempDir()), paths, 2)
-	if src.maxActive > 2 {
-		t.Errorf("peak concurrency = %d want <= 2", src.maxActive)
 	}
 }
 
@@ -337,5 +332,128 @@ func TestNoteFiles(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("NoteFiles = %v want %v", got, want)
+	}
+}
+
+// TestRunManyStreamsResults: OnResult fires once per path as each note lands, so a
+// front-end can report progress mid-batch, in the same order as the returned slice.
+func TestRunManyStreamsResults(t *testing.T) {
+	root := t.TempDir()
+	paths := []string{"a.note", "b.note", "c.note", "d.note"}
+	src := &fakeSource{}
+
+	streamed := map[string]int{}
+	var order []string
+	results := ingest.RunMany(src, archive.New(root), paths, ingest.Options{
+		OnResult: func(r ingest.Result) {
+			streamed[r.Path]++
+			order = append(order, r.Path)
+		},
+	})
+
+	if !reflect.DeepEqual(order, paths) {
+		t.Errorf("OnResult order = %v, want %v (input order)", order, paths)
+	}
+
+	if len(streamed) != len(paths) {
+		t.Errorf("OnResult saw %d distinct paths, want %d", len(streamed), len(paths))
+	}
+	for _, p := range paths {
+		if streamed[p] != 1 {
+			t.Errorf("OnResult fired %d times for %s, want once", streamed[p], p)
+		}
+	}
+	for i, p := range paths {
+		if results[i].Path != p {
+			t.Errorf("results[%d].Path = %s, want %s (input order)", i, results[i].Path, p)
+		}
+	}
+}
+
+// TestIngestOrderIndependent is the reason the orphan store exists. A page moved to
+// another note on the device must end up in that note with its transcription intact,
+// no matter which of the two notes snorg sees first — and it must never end up in
+// both. Ingesting the source note first used to delete the transcription before the
+// destination note could ever claim it.
+func TestIngestOrderIndependent(t *testing.T) {
+	// After the move: a.note kept P1/P2, b.note gained P3.
+	moved := map[string][]string{
+		"a.note": {"P1", "P2"},
+		"b.note": {"P3"},
+	}
+	cases := []struct {
+		name string
+		runs [][]string // one RunMany call per element
+	}{
+		{"destination first", [][]string{{"b.note"}, {"a.note"}}},
+		{"source first", [][]string{{"a.note"}, {"b.note"}}},
+		{"one batch, destination first", [][]string{{"b.note", "a.note"}}},
+		{"one batch, source first", [][]string{{"a.note", "b.note"}}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			a := archive.New(t.TempDir())
+
+			// Before the move: a.note holds all three pages, and P3 has been analyzed.
+			before := &fakeSource{pages: map[string][]string{"a.note": {"P1", "P2", "P3"}}}
+			if res := ingest.RunMany(before, a, []string{"a.note"}, ingest.Options{}); res[0].Err != nil {
+				t.Fatal(res[0].Err)
+			}
+			if err := a.WriteAnalysisMD("F_a", "P3", "handwritten notes"); err != nil {
+				t.Fatal(err)
+			}
+			pd, err := a.ReadPage("F_a", "P3")
+			if err != nil {
+				t.Fatal(err)
+			}
+			pd.Analysis = &archive.PageAnalysis{SourceHash: "h3"}
+			pd.Tags = []string{"keep"}
+			if _, err := a.WritePage("F_a", pd); err != nil {
+				t.Fatal(err)
+			}
+
+			src := &fakeSource{pages: moved}
+			for _, paths := range tc.runs {
+				for _, r := range ingest.RunMany(src, a, paths, ingest.Options{}) {
+					if r.Err != nil {
+						t.Fatalf("ingest %s: %v", r.Path, r.Err)
+					}
+				}
+			}
+
+			owner, err := a.FindPage("P3")
+			if err != nil {
+				t.Fatalf("P3 not uniquely owned: %v", err)
+			}
+			if owner != "F_b" {
+				t.Errorf("P3 owned by %s, want F_b", owner)
+			}
+			md, err := a.ReadAnalysisMD("F_b", "P3")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if md != "handwritten notes\n" {
+				t.Errorf("transcription = %q, want it carried over with the page", md)
+			}
+			moved, err := a.ReadPage("F_b", "P3")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if moved.Analysis == nil || moved.Analysis.SourceHash != "h3" {
+				t.Errorf("analysis = %+v, want it carried over (else analyze pays to re-transcribe)", moved.Analysis)
+			}
+			if len(moved.Tags) != 1 || moved.Tags[0] != "keep" {
+				t.Errorf("tags = %v, want [keep]", moved.Tags)
+			}
+			nd, err := a.ReadNote("F_a")
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, ref := range nd.Pages {
+				if ref.ID == "P3" {
+					t.Error("the source note still lists the page it lost")
+				}
+			}
+		})
 	}
 }

@@ -16,8 +16,12 @@ import (
 )
 
 // note builds a synthetic note with the given page ids in order.
-func note(ids ...string) *snote.Note {
-	n := &snote.Note{FileID: "F_TEST"}
+func note(ids ...string) *snote.Note { return noteIn("F_TEST", ids...) }
+
+// noteIn is note for a named FILE_ID, for the tests that need two notes in one
+// archive (a page moving between them).
+func noteIn(fileID string, ids ...string) *snote.Note {
+	n := &snote.Note{FileID: fileID}
 	for i, id := range ids {
 		n.Pages = append(n.Pages, snote.Page{ID: id, Number: i + 1})
 	}
@@ -48,7 +52,7 @@ func TestWritePreservesAnalysisOnReingest(t *testing.T) {
 		t.Fatal(err)
 	}
 	pd.Analysis = &PageAnalysis{SourceHash: "abc", Fields: map[string]string{"summary": "hello"}}
-	if err := a.WritePage("F_TEST", pd); err != nil {
+	if _, err := a.WritePage("F_TEST", pd); err != nil {
 		t.Fatal(err)
 	}
 	if err := a.WriteAnalysisMD("F_TEST", "Pa", "# hello"); err != nil {
@@ -95,7 +99,7 @@ func TestWriteCarriesRegionAnalysesByRect(t *testing.T) {
 	}
 	pd.Titles[0].Analysis = &TitleAnalysis{Name: "Essay"}
 	pd.Links[0].Analysis = &LinkAnalysis{Name: "see also"}
-	if err := a.WritePage("F_TEST", pd); err != nil {
+	if _, err := a.WritePage("F_TEST", pd); err != nil {
 		t.Fatal(err)
 	}
 
@@ -394,7 +398,7 @@ func TestSchemaVersionStamped(t *testing.T) {
 	}
 	// WritePage re-stamps even when handed a zeroed version.
 	pd.SchemaVersion = 0
-	if err := a.WritePage("F_TEST", pd); err != nil {
+	if _, err := a.WritePage("F_TEST", pd); err != nil {
 		t.Fatal(err)
 	}
 	if pd2, err := a.ReadPage("F_TEST", "Pa"); err != nil {
@@ -508,4 +512,15 @@ func bumpVersion(t *testing.T, path string) {
 	if err := os.WriteFile(path, out, 0o644); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// mustJSON marshals a doc the way the archive stores it, for tests that hand-build a
+// file the writers would not produce (a stale schema, a duplicated page).
+func mustJSON(t *testing.T, v any) []byte {
+	t.Helper()
+	b, err := json.MarshalIndent(v, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return append(b, '\n')
 }

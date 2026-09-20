@@ -3,6 +3,7 @@ package archive
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -88,6 +89,10 @@ var schemaMigrations = []func(migKind, map[string]any) error{
 	// omitempty, so an absent key unmarshals to nil and canonicalDoc reproduces a
 	// fresh-ingest byte layout — no transformation needed.
 	func(migKind, map[string]any) error { return nil },
+	// v4 → v5: notes gained their own snorg-managed `tags` list (inherited by every
+	// page of the note). Additive and omitempty like the page tags before it, so an
+	// absent key unmarshals to nil — no transformation needed.
+	func(migKind, map[string]any) error { return nil },
 }
 
 // realID reports whether a decoded JSON value is a present, non-"none" id string —
@@ -115,24 +120,54 @@ type MigrateResult struct {
 	Err     error
 }
 
+// MigrateOptions tunes a migration batch.
+type MigrateOptions struct {
+	// OnResult, when set, is called with each file's result as it lands. The walk
+	// is sequential, so results arrive in exactly the returned slice's order,
+	// letting a caller report progress instead of waiting for the whole archive.
+	OnResult func(MigrateResult)
+}
+
+// emit records results in order and streams them to opts.OnResult, so the
+// callback can never diverge from the returned slice.
+func emit(out *[]MigrateResult, opts MigrateOptions, rs ...MigrateResult) {
+	for _, r := range rs {
+		*out = append(*out, r)
+		if opts.OnResult != nil {
+			opts.OnResult(r)
+		}
+	}
+}
+
 // MigrateAll migrates every note.json and page JSON in the archive: note first,
 // then its pages, in List/sorted order. The only top-level error is an enumeration
 // failure (a directory that cannot be read); per-file failures land in the results.
-func (a *Archive) MigrateAll() ([]MigrateResult, error) {
+func (a *Archive) MigrateAll(opts MigrateOptions) ([]MigrateResult, error) {
 	fileIDs, err := a.List()
 	if err != nil {
 		return nil, err
 	}
 	var out []MigrateResult
 	for _, fileID := range fileIDs {
-		out = append(out, a.migrateNote(fileID))
+		emit(&out, opts, a.migrateNote(fileID))
 		pageIDs, err := a.sortedPageIDs(fileID)
 		if err != nil {
 			return nil, err
 		}
 		for _, pid := range pageIDs {
-			out = append(out, a.migratePage(fileID, pid)...)
+			emit(&out, opts, a.migratePage(fileID, pid)...)
 		}
+	}
+	// The orphan store holds schema-versioned page docs too, and List cannot reach it
+	// (it has no note.json). Walking it here is what keeps a parked page from a note
+	// deleted long ago blocking an unrelated ingest: adoption reads it through the
+	// gated reader, so a stale entry would abort a write it has nothing to do with.
+	parked, err := a.sortedPageIDs(orphanDir)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return nil, err
+	}
+	for _, pid := range parked {
+		emit(&out, opts, a.migratePage(orphanDir, pid)...)
 	}
 	return out, nil
 }
@@ -140,7 +175,7 @@ func (a *Archive) MigrateAll() ([]MigrateResult, error) {
 // MigratePages migrates the given pages' JSON plus each owning note's note.json
 // (once per note). Notes come before their pages, both in sorted order. An unknown
 // PAGEID yields a result with Err rather than aborting the batch.
-func (a *Archive) MigratePages(pageIDs []string) ([]MigrateResult, error) {
+func (a *Archive) MigratePages(pageIDs []string, opts MigrateOptions) ([]MigrateResult, error) {
 	index, err := a.pageIndex()
 	if err != nil {
 		return nil, err
@@ -153,7 +188,7 @@ func (a *Archive) MigratePages(pageIDs []string) ([]MigrateResult, error) {
 	for _, pid := range pageIDs {
 		fileID, ok := index[pid]
 		if !ok {
-			out = append(out, MigrateResult{Kind: kindPage.String(), ID: pid,
+			emit(&out, opts, MigrateResult{Kind: kindPage.String(), ID: pid,
 				Err: fmt.Errorf("page %s not found in archive", pid)})
 			continue
 		}
@@ -165,11 +200,11 @@ func (a *Archive) MigratePages(pageIDs []string) ([]MigrateResult, error) {
 	sort.Strings(noteOrder)
 
 	for _, fileID := range noteOrder {
-		out = append(out, a.migrateNote(fileID))
+		emit(&out, opts, a.migrateNote(fileID))
 		pages := notes[fileID]
 		sort.Strings(pages)
 		for _, pid := range pages {
-			out = append(out, a.migratePage(fileID, pid)...)
+			emit(&out, opts, a.migratePage(fileID, pid)...)
 		}
 	}
 	return out, nil
