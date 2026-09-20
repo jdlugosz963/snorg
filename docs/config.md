@@ -226,11 +226,14 @@ Beyond the pongo2 built-ins (registered by `internal/export`):
 ## Merge semantics
 
 Each file (including any it pulls in via `include:`) is parsed and deep-merged:
-scalars (and sequences) are overwritten by later sources; nested maps merge per key.
-So `analysis.fields` from different files union by name, while a whole `templates:`
-list from a higher layer replaces a lower one. After merge, unset prompts get
-built-in defaults and unset `ingest.svg` toggles default to true (an explicit
-`false` survives the merge).
+scalars are overwritten by later sources; nested maps merge per key; **sequences
+concatenate**, lower layer first. So `analysis.fields` from different files union by
+name, and a `templates:` list from every layer adds up rather than the highest one
+replacing the rest. Lists are additive only — a higher layer can neither drop nor
+replace a lower layer's entries (`templates: []` contributes nothing), and two
+layers declaring the same template image is an error (see below). After merge, unset
+prompts get built-in defaults and unset `ingest.svg` toggles default to true (an
+explicit `false` survives the merge).
 
 ## Incremental analysis
 

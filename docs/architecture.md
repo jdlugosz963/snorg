@@ -23,32 +23,65 @@ with the global config flags: the root's `Before`
 hook loads the merged config once (see [config.md](config.md)) and hands it to the
 command, which picks and validates only the sections it uses. The CLI is built on
 `urfave/cli/v3`. `ingest` takes
-a single `.note` or a directory (walked recursively for `*.note`) and ingests
-notes through a worker pool: `-j N` caps concurrent notes, default
-`runtime.NumCPU()` (work is CPU-bound native SVG rendering); `-c` config
+a single `.note` or a directory (walked recursively for `*.note`) and ingests the
+notes **one at a time** — snorg is single-threaded outside `internal/serve`, which
+keeps every write path free of locks and ordering caveats; `-c` config
 controls the SVG pipeline (see below). A failed note never aborts the batch — all
 are attempted and failures summarized (non-zero exit). Re-ingest reconciles the
-note's directory in place (see Archive layout); it is the update path.
+note's directory in place (see Archive layout); it is the update path. A write also
+reaches beyond that directory in one case: a page the device moved into this note
+from another is adopted rather than duplicated (see Page moves).
+
+**Reporting.** The batch commands (`ingest`, `analyze`, `migrate`) report per item on
+**stderr**, so stdout stays the machine-readable channel and `2>/dev/null` silences
+progress without losing data. Three modes: an animated bar when stderr is a terminal,
+plain one-line-per-item when it is not, and — under the global `-v`/`--verbose` — a
+detailed account of what each item changed, diff included, instead of a bar. Under
+`-v` an ingested note also reports the page moves: `adopted from <FILE_ID>`, `parked
+<PAGEID> (transcription kept)` and `repaired <FILE_ID>/note.json`. `migrate`
+draws a live counter rather than a bar, because one page can yield two results (the
+JSON walk and the `.md.diff` normalization) so no denominator is knowable up front.
+`query`/`list`/`retrieve`/`export` write only their data, on stdout; `tag` and
+`analyze-edit` report a completed write rather than progress, so their result line
+also stays on stdout.
 
 `list`, `query` and `retrieve` are the read side — the platform-agnostic interface
 external tools build on (see [retrieval.md](retrieval.md)). `list` prints FILE_IDs,
 or (with the `keywords`/`tags` subcommands) the archive's distinct labels. `query`
-takes one filter per call — `all`, `note <FILE_ID>`, `unanalyzed`, `keyword <regexp>`
-(device keywords, matched against `Keyword.Text`), `tag <regexp>` (snorg-managed
-tags), `content <regexp>` (matched against the page's transcribed `<PAGEID>.md`),
-`starred`, `date <spec>`, and a `not <filter>`
-prefix that inverts any of them — and prints the PAGEID of each
-matching page, one per line. `retrieve`, `analyze` and `export` all take PAGEIDs
+takes one boolean **expression** — terms joined by `AND`/`OR`/`NOT` and grouped
+with parentheses — and prints the PAGEID of each matching page, one per line.
+A term is a standalone word (`all`, `starred`, `unanalyzed`, `templated` — the
+page's `background_hash` resolves to a config `templates:` entry, so `NOT
+templated` selects the free-form pages) or a field with an operator and a value:
+`note`, `keyword` (device keywords, matched against `Keyword.Text`), `tag`
+(snorg-managed tags, the page's own plus the ones inherited from its note),
+`content` (the page's transcribed `<PAGEID>.md`), `region[<box-id>]` (the text of
+one template box inside that file; unscoped = any box) and `date:<spec>`. The
+operator chooses the match: `:` substring (case-insensitive), `~` regexp, `=`
+exact. So `snorg query 'starred AND (tag:work OR date:2026-04-04..)'`. `retrieve`, `analyze` and `export` all take PAGEIDs
 as arguments, or read them one-per-line from stdin when none are given, so
 `query` pipes into any of them. `tag` is the one write on the read side: it adds or
 removes a snorg-managed tag on the PAGEIDs (args or stdin), the archive-side
-organizing mechanism independent of device keywords.
+organizing mechanism independent of device keywords. With `-n` the ids are FILE_IDs
+instead (pipe from `list`) and the tag is stored on the note — in `note.json` only —
+and inherited by every page of that note, so a whole note is labelled by one write.
 
-`retrieve` prints the selected pages assembled into a JSON array of `NoteView`s,
+`retrieve` prints the selected pages assembled into a JSON **object**
+`{archive, notes}`: `archive` is the absolute archive root the pages'
+archive-relative `svg` paths resolve against, `notes` the array of `NoteView`s
 grouped per owning note (full note metadata, only the requested pages); a whole
-note is `query note <FILE_ID> | retrieve`. `export` groups the same way and
-renders the config's template once over the whole array (context key `notes`),
-so one template invocation sees every selected note.
+note is `query note=<FILE_ID> | retrieve`. `export` groups the same way and
+renders the config's template once over that whole object, so one template
+invocation sees every selected note and can build absolute svg paths from
+`{{ archive }}`.
+
+Both `list` and `query` have a `-l`/`--long` form for human browsing: `list -l`
+appends the note name (`<FILE_ID>\t<name>`), and `query -l` switches to an
+annotated, tab-separated line per page (`<PAGEID>\t<note>\tp<page#>\t<*?>\t<headings>\t#<keyword>…\t@<tag>…`).
+PAGEID stays the first field so `cut -f1`/`awk '{print $1}'` still extracts it,
+but the annotated form is **browse-only** — never feed it downstream as the
+bare-PAGEID pipe contract. The `keywords`/`tags` subcommands take `-l` too, where
+it appends a per-value page count.
 
 `analyze` processes its pages sequentially (LLM rate limits; a failed page
 never aborts the batch). Unchanged pages are skipped without an LLM call (see
@@ -61,8 +94,8 @@ snorg -a <archive> query all | snorg -c cfg.yaml -a <archive> analyze
 `analyze-edit` opens the page's transcription in `$VISUAL`/`$EDITOR` (exactly one
 PAGEID, no stdin — the editor needs the terminal) and needs no provider config:
 a page can be transcribed entirely by hand, without any LLM involved. Manual
-edits survive re-analysis (see "User edits" below); `analyze` reports `conflict`
-where an edit and the new transcription overlap, resolved by another
+edits survive re-analysis (see "User edits" below); `analyze` sets `Conflicts` on the
+affected text where an edit and the new transcription overlap, resolved by another
 `analyze-edit`.
 
 `serve` is the built-in, zero-setup viewer: it assembles the selected pages
@@ -246,6 +279,15 @@ stdin / bare = whole archive), but a page selection also migrates its owning
 `note.json`. Version 0 (absent field) = pre-versioning, migrated to 1 by the first
 (no-op) step.
 
+`migrate` additionally normalizes each page's `<PAGEID>.md.diff`
+(`archive.migrateEditDiff`). That sidecar carries no `schema_version`, so there is no
+chain to walk: it is **content-sniffed** instead, and a legacy JSON `go-diffpatch`
+patch is rewritten as a unified diff via `textmerge.ConvertLegacyDiff`. This runs
+independently of the JSON version walk — idempotent, so it self-heals a crash between
+the two writes — and is reported as its own `diff <PAGEID>: migrated` result. That is
+why one page can yield two results, and hence why `migrate` draws a counter rather
+than a bar.
+
 ## Packages
 
 - `cmd/snorg` — CLI entry: one `urfave/cli/v3` command tree, thin actions over the
@@ -253,18 +295,25 @@ stdin / bare = whole archive), but a page selection also migrates its owning
   hook builds one `snorg.Client` (via `snorg.Resolve`) shared by every command; the
   actions parse flags, source PAGEIDs from args or stdin, and format results. What
   stays CLI-only: flag parsing, the PAGEID stdin conventions, and result formatting
-  (`printQueryLong`, JSON, progress/exit codes).
+  (`printQueryLong`, JSON, exit codes) plus two files of reporting: `progress.go` (the
+  stderr reporter — three modes, a fixed-width bar or a counter, TTY-detected with the
+  same `os.Stat`/`ModeCharDevice` idiom as `stdinPiped`, zero new dependencies) and
+  `describe.go` (pure functions turning the change vocabulary into the printed lines,
+  so an analyzed page, an `analyze-edit` save and an ingested note read alike).
 - `pkg/snorg` — the **public Go API** (import `github.com/jdlugosz963/snorg/pkg/snorg`).
   A `Client` (built by `Open` — explicit root + optional config — or `Resolve` — the
   CLI's config layering) bundles an archive with merged config and exposes every
   capability as a method: `List`/`Query`/`Retrieve`/`Export`/`ServeHandler` (read),
-  `Ingest`/`Migrate` (write), `Analyze`/`AnalyzePage` (LLM), `PageBuffer`/`ApplyPage`
+  `RenderRegion` (a page rect → PNG bytes, canonical or styled), `Ingest`/`Migrate`
+  (write), `NewProvider`/`Analyze` (LLM — the caller builds the
+  provider once and passes it in), `PageBuffer`/`ApplyPage`
   (programmatic, no-`$EDITOR` edit) and `EditPage` (the interactive convenience the
   CLI uses). It imports the internal packages and re-exports, as type **aliases**,
   every type its signatures return (`Result`, `NoteView`, `Match`, `Spec`, config
   types, …) so an external consumer that imports only this package can name and
   traverse them — the sole seam that lets snorg be used as a library. See
-  [library.md](library.md).
+  [library.md](library.md) for the guide; the per-identifier reference is rendered
+  on demand (`gomarkdoc ./pkg/snorg`, or pkg.go.dev), not checked in.
 - `internal/snote` — device-agnostic domain model (`Note`/`Page`/`Title`/`Keyword`/`Link`)
   and the `Source` interface (the format seam); the concrete impl sits behind it.
 - `internal/snote/sntool` — the `Source` impl: the native-Go
@@ -339,35 +388,53 @@ stdin / bare = whole archive), but a page selection also migrates its owning
   black and drops background/nav/link overlays, `oksvg`/`rasterx`) drives everything —
   its 1-bit ink `mask` gives `analysis.source_hash` (`mask.hash`) for the skip check, the
   per-box fingerprints, and the LLM crops, so a `Page` call rasterizes exactly once
-  (including on a skip). Unchanged pages are skipped; otherwise it transcribes the page
+  (including on a skip). Unchanged pages are skipped, and a page with **zero ink**
+  (`mask.blank`) transcribes to empty with no LLM call at all — no content call and no custom
+  fields, since there is nothing to read; otherwise it transcribes the page
   (through the update prompt + the previous AI base when one exists — never the user-edited
-  text), 3-way merges the result with any user edits (`archive.MergeAnalysis`; overlap → the
-  `conflict` outcome), crops title/link rects, runs the custom fields over the effective
-  content, and writes `<PAGEID>.md` + `<PAGEID>.json`. The mask depends only on the
+  text), 3-way merges the result with any user edits (`archive.MergeAnalysis`, which returns the
+  `TextChange` — overlap sets its `Conflicts`), crops title/link rects, runs the custom fields
+  over the effective content, and writes `<PAGEID>.md` + `<PAGEID>.json`. It reports a
+  `PageResult`: the page's `Content`/`Regions` change plus the facts only analysis can produce —
+  a fingerprint `Skipped`, a `Blank` box, the `Calls` the page cost. The mask depends only on the
   handwriting geometry, so it is invariant under recolor/background/overlays and restyling
   never re-triggers analysis. **Template regions**: a page whose `background_hash` matches
   `a.Templates()` is analyzed per box instead — `mask.regionHash` hashes the box rect cropped
   out of the page mask (pixel-space, so a stroke crossing the edge counts only its in-box
   pixels), so an unchanged box is skipped and a moved/added box rect re-triggers (the
-  page-level skip is template-aware); the id-keyed region document is 3-way merged into the
-  page's `<PAGEID>.md` (in place of free-form content). External deps: `openai-go`,
+  page-level skip is template-aware); a box with no ink (`mask.blankRegion`, the same clamped
+  crop) is transcribed as empty without a call, so a partly-filled form costs one call per box
+  actually written in; the id-keyed region document is 3-way merged into the
+  page's `<PAGEID>.md` (in place of free-form content). `render.go` also exports
+  `RenderRegion(svg, rect, canonical)` — rasterize + crop a page rect to PNG bytes, canonical
+  (what the model sees) or the styled SVG as-is — the package's image entry point outside the
+  analysis flow, exposed as `pkg/snorg.Client.RenderRegion`. External deps: `openai-go`,
   `oksvg`/`rasterx`.
 - `internal/edit` — the `analyze-edit` command's orchestration: opens the page's
   transcription in the user's editor (`sh -c`, terminal inherited, temp copy so an
   aborted editor changes nothing) and stores the effective md via `archive.WriteAnalysisEdit`;
   a templated page's body is `<!-- region <id> -->` sections (keyed by id, no content marker)
-  assembled into that same md.
+  assembled into that same md. Returns a `PageEdit` — the content `TextChange`, the per-section
+  `RegionChange`s and the `NameChange`s — in the vocabulary `internal/archive/change.go` defines.
 - `internal/textmerge` — diff/patch and 3-way-merge plumbing, pure Go (no PATH tool):
-  `Diff`/`Unapply` (line diff + reverse-apply of a serialized patch) via
-  `github.com/njchilds90/go-diffpatch`, `Merge` (3-way merge, git-standard conflict
-  markers) via `github.com/epiclabs-io/diff3`; pure text-in/text-out.
-- `internal/export` — renders the retrieved `[]*retrieve.NoteView` through one pongo2
-  template in a single pass (`export` cmd): views → JSON → context under the `notes`
-  key, so templates bind to the `retrieve` json array verbatim and can span notes;
-  output to stdout. Filters, one file per concern: `denote.go`
+  `Diff`/`Unapply` (line diff + reverse-apply of a patch) via
+  `github.com/njchilds90/go-diffpatch`, serialized to and from a **normal unified diff**
+  (`patchToFileDiff`/`fileDiffToPatch` via `github.com/sourcegraph/go-diff`), so the
+  stored `.md.diff` is a readable `--- /+++ /@@ /+/-` diff rather than a struct dump —
+  `ConvertLegacyDiff` upgrades a pre-unified JSON-patch sidecar to that form for
+  `migrate`; `Stat` (added/removed line counts off the same
+  patch — lazy, called only when something is displayed), `HasConflicts` (marker sniff
+  for one slice of an already-merged document), `Merge` (3-way merge, git-standard
+  conflict markers) via `github.com/epiclabs-io/diff3`; pure text-in/text-out.
+- `internal/export` — renders the retrieved `*retrieve.Result` through one pongo2
+  template in a single pass (`Render(res, template)`, `export` cmd): the whole Result →
+  JSON → back into the context map as-is (`archive` + `notes`), so templates bind to the
+  `retrieve` shape verbatim, can span notes and can resolve svg paths against
+  `{{ archive }}`; output to stdout. Filters, one file per concern: `denote.go`
   (FILE_ID/PAGEID → denote id), `orgmode.go` (org-mode-only: `org` via pandoc
-  shell-out, `nestorgheadings:N`), `markdown.go` (Markdown-only: `nestmdheadings:N`).
-  External dep: `pongo2/v6`; PATH tool: `pandoc` (only for the `org` filter).
+  shell-out, `nestorgheadings:N`), `html.go` (HTML-only: `html` via pandoc shell-out,
+  marked safe), `markdown.go` (Markdown-only: `nestmdheadings:N`).
+  External dep: `pongo2/v6`; PATH tool: `pandoc` (the `org` and `html` filters).
 - `internal/serve` — the built-in HTTP viewer (`serve` cmd): `Handler(a, views, flat)` builds
   a `net/http.ServeMux` over the assembled `[]*retrieve.NoteView` — `/` (note gallery, or one
   flat page gallery under `--flat`), `/note/{fid}` (page gallery + `<object>` lightbox with the
@@ -383,12 +450,17 @@ stdin / bare = whole archive), but a page selection also migrates its owning
 - `examples/emacs/snorg.el` — Emacs org consumer (outside the Go tree): drives the CLI
   (`list`/`query`/`retrieve`/`export`) to import notes into a pluggable backend (denote or
   org-roam; the backend owns the FILE_ID→note-id translation), adds the `snorg:` (page SVG)
-  and backend-agnostic `snorg-note:` (page-jump) org links, and a dual-window review mode.
+  and backend-agnostic `snorg-note:` (page-jump) org links — both keyed by a bare PAGEID,
+  whose owning note `retrieve` resolves — and a dual-window review mode.
+- `examples/web/` — static HTML site consumer (outside the Go tree): `export.sh` reads
+  PAGEIDs on stdin and runs `snorg export` over that set twice — `index.yaml` for the
+  note index, `note.yaml` once per note — then copies the selected pages' SVGs beside
+  the generated HTML. Uses the `html` filter, so it needs `pandoc`.
 
 ## Extension points
 
-New retrieval/export commands add cases in `cmd/snorg` and read via `archive`
-accessors, projecting into a `retrieve` view. Analysis enriches the `Doc`
+New retrieval/export commands are thin actions in `cmd/snorg` over a `pkg/snorg`
+capability, projecting into a `retrieve` view. Analysis enriches the `Doc`
 JSON schemas (and the views) with new fields (free to add — no backcompat). A native
 parser is a new `snote.Source` implementation. New link kinds extend
 `archive.linkAnchor`; new export filters register in their own file in

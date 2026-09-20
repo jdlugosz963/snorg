@@ -6,9 +6,10 @@ package archive
 // (the base) is kept in the <PAGEID>.md.diff sidecar as a unified diff base→md,
 // so the base can be reconstructed (ReadAnalysisBase) and a re-analysis can
 // 3-way merge the fresh AI output with the user's edits (MergeAnalysis) instead
-// of overwriting them. The diff exists iff md diverges from base. Ingest needs
-// no special handling: the <PAGEID>.* prune glob removes the diff with its
-// page, and reconcile never touches unknown page artifacts.
+// of overwriting them. The diff exists iff md diverges from base. Ingest needs no
+// special handling: both sidecars travel with their page — parked in the orphan store
+// when the page leaves a note, moved along when it is adopted by another one (see
+// orphan.go, adopt.go) — and reconcile never touches unknown page artifacts.
 
 import (
 	"fmt"
@@ -71,66 +72,109 @@ func (a *Archive) ReadAnalysisBase(fileID, pageID string) (string, error) {
 	return base, nil
 }
 
-// WriteAnalysisEdit stores content as the page's effective transcription while
+// writeEffective stores content as the page's effective transcription while
 // keeping base as the AI side: the md gets the content, the diff records
-// base→content, and content returning to base removes the diff. The md is written
-// before the diff so a crash in between fails loudly in ReadAnalysisBase rather
-// than silently losing edits.
-func (a *Archive) WriteAnalysisEdit(fileID, pageID, base, content string) error {
+// base→content, and content returning to base removes the diff. It returns the
+// md's previous contents, so the caller can classify the transition. The md is
+// written before the diff so a crash in between fails loudly in ReadAnalysisBase
+// rather than silently losing edits.
+//
+// It is the shared body of WriteAnalysisEdit and MergeAnalysis, which differ only
+// in how they classify what it did.
+func (a *Archive) writeEffective(fileID, pageID, base, content string) (was string, err error) {
+	was, err = a.readMD(fileID, pageID)
+	if err != nil {
+		return "", err
+	}
 	b, c := NormMD(base), NormMD(content)
 	// No base and no content means no transcription at all: leave no empty
 	// sidecars behind.
 	if b == "" && c == "" {
 		if err := os.Remove(a.mdPath(fileID, pageID)); err != nil && !os.IsNotExist(err) {
-			return err
+			return "", err
 		}
-		return a.removeEditDiff(fileID, pageID)
+		return was, a.removeEditDiff(fileID, pageID)
 	}
 	if err := a.writeMD(fileID, pageID, content); err != nil {
-		return err
+		return "", err
 	}
 	if b == c {
-		return a.removeEditDiff(fileID, pageID)
+		return was, a.removeEditDiff(fileID, pageID)
 	}
 	diff, err := textmerge.Diff(b, c)
 	if err != nil {
-		return err
+		return "", err
 	}
-	return a.writeEditDiff(fileID, pageID, diff)
+	return was, a.writeEditDiff(fileID, pageID, diff)
+}
+
+// WriteAnalysisEdit stores content as the page's effective transcription while
+// keeping base as the AI side (see writeEffective for the sidecar rules). It
+// returns the TextChange from the md's previous contents to content.
+//
+// This is the one writer holding the AI base, so it is the one place that can
+// report TextReverted: content returning to the base is a property of the write,
+// not of the two texts.
+func (a *Archive) WriteAnalysisEdit(fileID, pageID, base, content string) (TextChange, error) {
+	was, err := a.writeEffective(fileID, pageID, base, content)
+	if err != nil {
+		return TextChange{}, err
+	}
+	// An empty base is no AI transcription at all, so there is nothing to return
+	// to: emptying such a page is a clear, not a revert. Both leave the same
+	// (absent) sidecars; only the verdict differs, and "cleared" says what
+	// happened to the text rather than merely where it landed.
+	c := TextChangeOf(was, content)
+	if c.Changed() && NormMD(base) != "" && NormMD(content) == NormMD(base) {
+		c.Kind = TextReverted
+	}
+	return c, nil
 }
 
 // MergeAnalysis reconciles a fresh AI transcription (theirs) with any user edits:
 // without an edit diff the md simply becomes theirs; with one, the previous base,
 // the current md (the user's version) and theirs go through a 3-way merge, the md
 // becomes the merge result and the diff is rebased onto theirs (removed when the
-// result equals it). Returns the effective content and whether conflict markers
-// were written. A conflicted md still reverse-applies to theirs, so re-analyzing
-// before the user resolves simply re-merges; resolution is another analyze-edit.
-func (a *Archive) MergeAnalysis(fileID, pageID, theirs string) (string, bool, error) {
+// result equals it). It returns the TextChange from the md's previous contents to
+// the merge result — Now is the new effective content, Was the old one, and
+// Conflicts says whether markers were written. A merge can never revert, so no
+// base is consulted for the verdict. A conflicted md still reverse-applies to
+// theirs, so re-analyzing before the user resolves simply re-merges; resolution is
+// another analyze-edit.
+func (a *Archive) MergeAnalysis(fileID, pageID, theirs string) (TextChange, error) {
 	diff, err := a.readEditDiff(fileID, pageID)
 	if err != nil {
-		return "", false, err
+		return TextChange{}, err
 	}
 	if diff == "" {
-		if err := a.writeMD(fileID, pageID, theirs); err != nil {
-			return "", false, err
+		// No user edit: the md simply becomes theirs. It still goes through
+		// writeEffective (base == content, so no diff is produced) so the
+		// no-sidecar-for-no-transcription rule holds here too — a blank page
+		// leaves no empty <PAGEID>.md behind.
+		was, err := a.writeEffective(fileID, pageID, theirs, theirs)
+		if err != nil {
+			return TextChange{}, err
 		}
-		return theirs, false, nil
+		return TextChangeOf(was, theirs), nil
 	}
 	base, err := a.ReadAnalysisBase(fileID, pageID)
 	if err != nil {
-		return "", false, err
+		return TextChange{}, err
 	}
 	mine, err := a.readMD(fileID, pageID)
 	if err != nil {
-		return "", false, err
+		return TextChange{}, err
 	}
 	merged, conflicts, err := textmerge.Merge(NormMD(base), NormMD(mine), NormMD(theirs))
 	if err != nil {
-		return "", false, err
+		return TextChange{}, err
 	}
-	if err := a.WriteAnalysisEdit(fileID, pageID, theirs, merged); err != nil {
-		return "", false, err
+	was, err := a.writeEffective(fileID, pageID, theirs, merged)
+	if err != nil {
+		return TextChange{}, err
 	}
-	return merged, conflicts, nil
+	c := TextChangeOf(was, merged)
+	// The structural answer from the merge beats the marker sniff.
+	c.Conflicts = c.Conflicts || conflicts
+	return c, nil
 }

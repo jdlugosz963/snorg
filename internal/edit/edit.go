@@ -17,14 +17,19 @@ import (
 	"github.com/jdlugosz963/snorg/internal/archive"
 )
 
-// Outcome says what Page did with the editor's result.
-type Outcome string
-
-const (
-	Unchanged Outcome = "unchanged" // editor saved identical content; nothing written
-	Edited    Outcome = "edited"    // md updated, edit diff (re)written
-	Reverted  Outcome = "reverted"  // content returned to the AI base; edit diff removed
-)
+// PageEdit is what an editor round-trip changed, in the shared change vocabulary
+// (internal/archive change.go). Content is the page's effective document — the
+// free-form content, or, on a templated page, the assembled region document, which
+// Regions then breaks down section by section. Names are the title/link overrides
+// the save established. Sparse: a zero PageEdit means the buffer came back
+// identical and nothing was written.
+type PageEdit struct {
+	PageID      string
+	Content     archive.TextChange
+	Regions     []archive.RegionChange
+	Names       []archive.NameChange
+	JSONChanged bool
+}
 
 // EditorFromEnv returns the editor command line: $VISUAL, else $EDITOR.
 func EditorFromEnv() (string, error) {
@@ -40,33 +45,33 @@ func EditorFromEnv() (string, error) {
 // carry arguments) and stores the result: the content section becomes the
 // edited md (its divergence from the AI base lands in the edit-diff sidecar),
 // and any changed title/link name becomes a user override (Edited) in the page
-// JSON. It returns the content Outcome and how many names changed. The editor
-// runs on a temp copy, so aborting it (non-zero exit) leaves the page untouched.
-// Page is Serialize → run editor → Apply; a non-interactive caller uses those two
+// JSON. It returns what the round-trip changed. The editor runs on a temp copy,
+// so aborting it (non-zero exit) leaves the page untouched. Page is
+// Serialize → run editor → Apply; a non-interactive caller uses those two
 // directly (see the public snorg package).
-func Page(a *archive.Archive, pageID, editor string) (Outcome, int, error) {
+func Page(a *archive.Archive, pageID, editor string) (PageEdit, error) {
 	buf, err := Serialize(a, pageID)
 	if err != nil {
-		return "", 0, err
+		return PageEdit{}, err
 	}
 
 	dir, err := os.MkdirTemp("", "snorg-edit-")
 	if err != nil {
-		return "", 0, err
+		return PageEdit{}, err
 	}
 	defer os.RemoveAll(dir)
 	// The real PAGEID plus .md gives the editor a meaningful buffer name and
 	// its Markdown mode.
 	tmp := filepath.Join(dir, pageID+".md")
 	if err := os.WriteFile(tmp, []byte(buf), 0o600); err != nil {
-		return "", 0, err
+		return PageEdit{}, err
 	}
 	if err := runEditor(editor, tmp); err != nil {
-		return "", 0, err
+		return PageEdit{}, err
 	}
 	b, err := os.ReadFile(tmp)
 	if err != nil {
-		return "", 0, err
+		return PageEdit{}, err
 	}
 	return Apply(a, pageID, string(b))
 }
@@ -137,39 +142,36 @@ func regionLayout(a *archive.Archive, fileID, pageID, bgHash string) ([]archive.
 // Apply stores an edited buffer (as produced by Serialize) for pageID: the content
 // section becomes the edited md (its divergence from the AI base lands in the
 // edit-diff sidecar) and each changed title/link name becomes a user override
-// (Edited) in the page JSON. It returns the content Outcome and how many names
-// changed. A malformed header writes nothing.
-func Apply(a *archive.Archive, pageID, buffer string) (Outcome, int, error) {
+// (Edited) in the page JSON. It returns what the round-trip changed. A malformed
+// header writes nothing.
+func Apply(a *archive.Archive, pageID, buffer string) (PageEdit, error) {
+	res := PageEdit{PageID: pageID}
 	fileID, err := a.FindPage(pageID)
 	if err != nil {
-		return "", 0, err
+		return PageEdit{}, err
 	}
 	pd, err := a.ReadPage(fileID, pageID)
 	if err != nil {
-		return "", 0, err
+		return PageEdit{}, err
 	}
 	base, err := a.ReadAnalysisBase(fileID, pageID)
 	if err != nil {
-		return "", 0, err
-	}
-	cur, err := a.ReadAnalysisMD(fileID, pageID)
-	if err != nil {
-		return "", 0, err
+		return PageEdit{}, err
 	}
 	sections, regionIDs, err := regionLayout(a, fileID, pageID, pd.BackgroundHash)
 	if err != nil {
-		return "", 0, err
+		return PageEdit{}, err
 	}
 
 	titleNames, linkNames, regionTexts, content, err := parse(buffer, len(pd.Titles), len(pd.Links), regionIDs)
 	if err != nil {
-		return "", 0, fmt.Errorf("page %s: %w (no changes saved)", pageID, err)
+		return PageEdit{}, fmt.Errorf("page %s: %w (no changes saved)", pageID, err)
 	}
 
-	namesChanged := applyNames(&pd, titleNames, linkNames)
-	if namesChanged > 0 {
-		if _, err := a.WritePage(fileID, pd); err != nil {
-			return "", 0, err
+	res.Names = applyNames(&pd, titleNames, linkNames)
+	if len(res.Names) > 0 {
+		if res.JSONChanged, err = a.WritePage(fileID, pd); err != nil {
+			return PageEdit{}, err
 		}
 	}
 
@@ -180,35 +182,39 @@ func Apply(a *archive.Archive, pageID, buffer string) (Outcome, int, error) {
 	doc := content
 	if len(regionIDs) > 0 {
 		for i := range sections {
+			was := sections[i].Text
 			sections[i].Text = regionTexts[sections[i].ID]
+			// One entry per section written — including analyze:false boxes and
+			// tombstones, which the editor does let the user edit, so an edit
+			// reports a broader set than analyze's per-analyze-box list.
+			res.Regions = append(res.Regions, archive.RegionChange{
+				ID:    sections[i].ID,
+				Label: sections[i].Label,
+				Text:  archive.TextChangeOf(was, sections[i].Text),
+			})
 		}
 		doc = archive.AssembleRegions(sections)
 	}
 
-	outcome := Unchanged
-	switch archive.NormMD(doc) {
-	case archive.NormMD(cur):
-		outcome = Unchanged
-	case archive.NormMD(base):
-		outcome = Reverted
-		if err := a.WriteAnalysisEdit(fileID, pageID, base, doc); err != nil {
-			return "", 0, err
-		}
-	default:
-		outcome = Edited
-		if err := a.WriteAnalysisEdit(fileID, pageID, base, doc); err != nil {
-			return "", 0, err
-		}
+	// WriteAnalysisEdit classifies the transition and is a byte-level no-op when
+	// the document did not move (writeMD/writeEditDiff both go through
+	// writeFileIfChanged, removeEditDiff ignores a missing file), so an unchanged
+	// buffer needs no guard here — and the verdict comes from the writer that
+	// holds the AI base rather than from a second comparison.
+	if res.Content, err = a.WriteAnalysisEdit(fileID, pageID, base, doc); err != nil {
+		return PageEdit{}, err
 	}
-	return outcome, namesChanged, nil
+	return res, nil
 }
 
 // applyNames overwrites each region name that the user changed and marks it as
-// an override (Edited), returning how many changed. A name equal to the current
-// one is left untouched, so an untouched AI name keeps Edited=false and stays
-// overwritable by future analysis.
-func applyNames(pd *archive.PageDoc, titleNames, linkNames []string) int {
-	changed := 0
+// an override (Edited), returning one NameChange per name that moved — keyed by
+// kind and 1-based index, the same way the buffer's markers are, so a caller can
+// name the thing the user edited. A name equal to the current one is left
+// untouched, so an untouched AI name keeps Edited=false and stays overwritable by
+// future analysis.
+func applyNames(pd *archive.PageDoc, titleNames, linkNames []string) []archive.NameChange {
+	var changed []archive.NameChange
 	for i, name := range titleNames {
 		cur := ""
 		if pd.Titles[i].Analysis != nil {
@@ -216,7 +222,9 @@ func applyNames(pd *archive.PageDoc, titleNames, linkNames []string) int {
 		}
 		if name != cur {
 			pd.Titles[i].Analysis = &archive.TitleAnalysis{Name: name, Edited: true}
-			changed++
+			changed = append(changed, archive.NameChange{
+				Kind: "title", Index: i + 1, Was: cur, Now: name, Override: true,
+			})
 		}
 	}
 	for i, name := range linkNames {
@@ -226,7 +234,9 @@ func applyNames(pd *archive.PageDoc, titleNames, linkNames []string) int {
 		}
 		if name != cur {
 			pd.Links[i].Analysis = &archive.LinkAnalysis{Name: name, Edited: true}
-			changed++
+			changed = append(changed, archive.NameChange{
+				Kind: "link", Index: i + 1, Was: cur, Now: name, Override: true,
+			})
 		}
 	}
 	return changed

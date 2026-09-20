@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -36,7 +37,7 @@ func templatedPage(t *testing.T) *archive.Archive {
 	pd.Analysis = &archive.PageAnalysis{Regions: []archive.RegionDoc{{ID: "body", SourceHash: "h"}}}
 	a.WritePage("F_A", pd)
 	// Seed an AI region transcription (no diff → the md becomes the AI base).
-	if _, _, err := a.MergeAnalysis("F_A", "Pa",
+	if _, err := a.MergeAnalysis("F_A", "Pa",
 		archive.AssembleRegions([]archive.RegionSection{{ID: "body", Label: "Body", Text: "ai text"}})); err != nil {
 		t.Fatal(err)
 	}
@@ -70,7 +71,7 @@ func TestApplyRejectsContentMarkerOnTemplatedPage(t *testing.T) {
 		t.Fatal(err)
 	}
 	broken := buf + "\n<!-- content -->\nstray content\n"
-	if _, _, err := Apply(a, "Pa", broken); err == nil {
+	if _, err := Apply(a, "Pa", broken); err == nil {
 		t.Fatal("expected an error for a content marker on a templated page")
 	}
 	// Nothing changed: the region md still holds the seeded AI text.
@@ -87,12 +88,22 @@ func TestApplyRegionEditStored(t *testing.T) {
 		t.Fatal(err)
 	}
 	edited := strings.Replace(buf, "ai text", "hand-corrected text", 1)
-	outcome, _, err := Apply(a, "Pa", edited)
+	res, err := Apply(a, "Pa", edited)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if outcome != Edited {
-		t.Errorf("outcome = %q, want %q", outcome, Edited)
+	if res.Content.Kind != archive.TextUpdated {
+		t.Errorf("content = %+v, want %q", res.Content, archive.TextUpdated)
+	}
+	// The page-level document change breaks down per box, so a caller learns which
+	// region moved rather than only that the page did.
+	wantRegions := []archive.RegionChange{{
+		ID:    "body",
+		Label: "Body",
+		Text:  archive.TextChangeOf("ai text", "hand-corrected text"),
+	}}
+	if !reflect.DeepEqual(res.Regions, wantRegions) {
+		t.Errorf("regions = %+v, want %+v", res.Regions, wantRegions)
 	}
 	md, _ := a.ReadAnalysisMD("F_A", "Pa")
 	if got := archive.RegionText(archive.ParseRegions(md), "body"); got != "hand-corrected text" {
@@ -110,12 +121,15 @@ func TestApplyRegionUnchanged(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	outcome, _, err := Apply(a, "Pa", buf)
+	res, err := Apply(a, "Pa", buf)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if outcome != Unchanged {
-		t.Errorf("re-saving an untouched buffer = %q, want %q", outcome, Unchanged)
+	if res.Content.Kind != archive.TextUnchanged {
+		t.Errorf("re-saving an untouched buffer = %+v, want %q", res.Content, archive.TextUnchanged)
+	}
+	if len(res.Regions) != 1 || res.Regions[0].Text.Kind != archive.TextUnchanged {
+		t.Errorf("regions = %+v, want one unchanged box", res.Regions)
 	}
 	if _, err := os.Stat(filepath.Join(a.Root, "F_A", "Pa.md.diff")); !os.IsNotExist(err) {
 		t.Error("no edit diff should exist for an unchanged region buffer")

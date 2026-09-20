@@ -21,11 +21,18 @@
 //	snorg [-a <archive-path>] serve [-l ADDR] [--flat] [PAGEID ...]
 //	snorg [-a <archive-path>] migrate [PAGEID ...]
 //
+// The batch commands (ingest, analyze, migrate) report progress on stderr, so
+// stdout stays the machine-readable channel: an animated bar when stderr is a
+// terminal, plain per-item lines when it is not, and -v/--verbose replaces either
+// with a detailed per-item account of what actually changed. query, list, retrieve
+// and export write only their data, on stdout, and are untouched by -v.
+//
 // retrieve, analyze and export take PAGEIDs as arguments or stdin lines, so
 // query pipes into any of them. query itself also reads PAGEIDs from stdin when
-// they are piped in, restricting its filter to that set (query A | query B == A∩B).
-// A "not" prefix inverts any filter (query not starred == the non-starred pages),
-// so query A | query not B == A minus B.
+// they are piped in, restricting its expression to that set (query A | query B ==
+// A∩B); NOT inverts an expression, so query A | query 'NOT B' == A minus B. The
+// expression itself composes terms with AND/OR/NOT and parentheses, so most of what
+// used to need a pipeline is now one call (see snorg.QuerySyntax).
 // analyze-edit takes exactly one PAGEID (it opens $VISUAL/$EDITOR on the page's
 // transcription — content plus the title/link names — so it needs the terminal,
 // not a pipe).
@@ -36,8 +43,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"net/http"
 	"os"
+	"slices"
 	"strings"
 
 	"github.com/urfave/cli/v3"
@@ -55,7 +64,8 @@ func main() {
 // app is the state shared by every command, built by the root Before hook: a
 // snorg.Client for the resolved archive and merged config.
 type app struct {
-	client *snorg.Client
+	client  *snorg.Client
+	verbose bool
 }
 
 // archiveFlag is the global flag naming the archive root. Being on the root, it
@@ -84,6 +94,16 @@ func noUserConfigFlag() *cli.BoolFlag {
 	return &cli.BoolFlag{
 		Name:  "no-user-config",
 		Usage: "ignore the XDG user config (~/.config/snorg/config.yaml)",
+	}
+}
+
+// verboseFlag turns per-item reporting from a progress bar into a detailed account
+// of what each item changed. Global, so like -a/-c it precedes the command.
+func verboseFlag() *cli.BoolFlag {
+	return &cli.BoolFlag{
+		Name:    "verbose",
+		Aliases: []string{"v"},
+		Usage:   "describe what changed per item instead of drawing a progress bar",
 	}
 }
 
@@ -117,8 +137,8 @@ func root() *cli.Command {
 	return &cli.Command{
 		Name:                  "snorg",
 		Usage:                 "supernote-organizer: ingest .note files into a plaintext archive",
-		UsageText:             "snorg [-a <archive-path>] [-c config.yaml ...] [--no-user-config] <command> [command flags] [args]",
-		Flags:                 []cli.Flag{archiveFlag(), configFlag(), noUserConfigFlag()},
+		UsageText:             "snorg [-a <archive-path>] [-c config.yaml ...] [--no-user-config] [-v] <command> [command flags] [args]",
+		Flags:                 []cli.Flag{archiveFlag(), configFlag(), noUserConfigFlag(), verboseFlag()},
 		Commands:              commands(a),
 		EnableShellCompletion: true,
 		Before: func(ctx context.Context, cmd *cli.Command) (context.Context, error) {
@@ -131,6 +151,7 @@ func root() *cli.Command {
 				return ctx, err
 			}
 			a.client = client
+			a.verbose = cmd.Bool("verbose")
 			return ctx, nil
 		},
 		Action: func(_ context.Context, cmd *cli.Command) error {
@@ -169,24 +190,34 @@ func ingestCmd(a *app) *cli.Command {
 				paths = []string{inputPath}
 			}
 
-			results, err := a.client.Ingest(paths, snorg.IngestOptions{})
+			// Reporting is per note as it lands, in input order.
+			r := newReporter(os.Stderr, len(paths), "ingest", "notes", a.verbose)
+			defer r.close()
+			var failed int
+			results, err := a.client.Ingest(paths, snorg.IngestOptions{
+				OnResult: func(res snorg.IngestResult) {
+					if res.Err != nil {
+						failed++
+						r.fail(res.Path, res.Err)
+						return
+					}
+					r.item(res.Path, describeIngest(res), ingestDetail(res))
+				},
+			})
 			if err != nil {
 				return err
 			}
-			failed := 0
-			for _, r := range results {
-				if r.Err != nil {
-					failed++
-					fmt.Fprintf(os.Stderr, "failed %s: %v\n", r.Path, r.Err)
-					continue
-				}
-				fmt.Printf("ingested %s (%d pages) -> %s/%s\n", r.Note.Source, len(r.Note.Pages), a.client.ArchivePath(), r.Note.FileID)
+			r.finish(fmt.Sprintf("ingested %d, failed %d of %d",
+				len(results)-failed, failed, len(results)))
+			// A page in two of the batch's notes was copied, not moved; snorg keys a
+			// page by its device id and cannot represent that, so name it rather than
+			// let the two notes take the page from each other on every ingest.
+			dups := duplicatePages(results)
+			for _, pid := range sorted(slices.Collect(maps.Keys(dups))) {
+				fmt.Fprintf(os.Stderr, "warning: page %s is claimed by %v — a copied page cannot keep a unique id\n", pid, dups[pid])
 			}
-			if len(paths) > 1 || failed > 0 {
-				fmt.Printf("ingested %d, failed %d of %d\n", len(results)-failed, failed, len(results))
-			}
-			if failed > 0 {
-				return fmt.Errorf("%d of %d notes failed", failed, len(results))
+			if n := failed; n > 0 {
+				return fmt.Errorf("%d of %d notes failed", n, len(results))
 			}
 			return nil
 		},
@@ -495,23 +526,44 @@ func analyzeCmd(a *app) *cli.Command {
 			if err != nil {
 				return err
 			}
-			results, err := a.client.Analyze(ctx, pageIDs, snorg.AnalyzeOptions{Force: cmd.Bool("force")})
+			// Built once, before any page: bad credentials fail here rather than
+			// after the first LLM call.
+			prov, err := a.client.NewProvider()
 			if err != nil {
 				return err
 			}
 			// One failure never aborts the batch — analysis of the rest is still
-			// worth the wait.
-			failed, conflicted := 0, false
-			for _, r := range results {
-				if r.Err != nil {
-					failed++
-					fmt.Fprintf(os.Stderr, "failed %s: %v\n", r.PageID, r.Err)
-					continue
-				}
-				conflicted = conflicted || r.Outcome == snorg.Conflicted
-				fmt.Printf("%s: %s\n", r.PageID, r.Outcome)
+			// worth the wait. Reporting is per page as it lands, so a long batch
+			// shows progress instead of going quiet until the end.
+			r := newReporter(os.Stderr, len(pageIDs), "analyze", "pages", a.verbose)
+			defer r.close()
+			failed, skipped, analyzed, conflicted := 0, 0, 0, 0
+			_, err = a.client.Analyze(ctx, prov, pageIDs, snorg.AnalyzeOptions{
+				Force: cmd.Bool("force"),
+				OnResult: func(res snorg.AnalyzeResult) {
+					if res.Err != nil {
+						failed++
+						r.fail(res.PageID, res.Err)
+						return
+					}
+					switch {
+					case res.Skipped:
+						skipped++
+					default:
+						analyzed++
+					}
+					if conflictedResult(res) {
+						conflicted++
+					}
+					r.item(res.PageID, describeAnalyze(res), analyzeDetail(res))
+				},
+			})
+			if err != nil {
+				return err
 			}
-			if conflicted {
+			r.finish(fmt.Sprintf("analyzed %d, skipped %d, conflicted %d, failed %d of %d page(s)",
+				analyzed, skipped, conflicted, failed, len(pageIDs)))
+			if conflicted > 0 {
 				fmt.Fprintf(os.Stderr, "conflict markers written; resolve with: snorg -a %s analyze-edit <PAGEID>\n", a.client.ArchivePath())
 			}
 			if failed > 0 {
@@ -539,14 +591,17 @@ func analyzeEditCmd(a *app) *cli.Command {
 				return err
 			}
 			pageID := cmd.Args().Get(0)
-			outcome, namesChanged, err := a.client.EditPage(pageID, editor)
+			res, err := a.client.EditPage(pageID, editor)
 			if err != nil {
 				return err
 			}
-			if namesChanged > 0 {
-				fmt.Printf("%s: %s, %d name(s) updated\n", pageID, outcome, namesChanged)
-			} else {
-				fmt.Printf("%s: %s\n", pageID, outcome)
+			// One page, no batch: this is a result, not progress, so it stays on
+			// stdout like tag's line does.
+			fmt.Printf("%s: %s\n", pageID, describeEdit(res))
+			if a.verbose {
+				for _, d := range editDetail(res) {
+					fmt.Printf("  %s\n", d)
+				}
 			}
 			return nil
 		},
@@ -657,44 +712,72 @@ func migrateCmd(a *app) *cli.Command {
 			// Selection mirrors serve, but routes to the archive's un-gated
 			// migrator (not query): migrate must read the stale grammars it exists
 			// to repair, which the gated readers refuse.
+			// The result count is not knowable up front (a page can yield both a
+			// JSON result and a .md.diff one), so the reporter runs its counter
+			// form rather than a bar that could pass 100%.
+			r := newReporter(os.Stderr, 0, "migrate", "files", a.verbose)
+			defer r.close()
+			migrated, current, failed := 0, 0, 0
+			opts := snorg.MigrateOptions{OnResult: func(res snorg.MigrateResult) {
+				id := res.Kind + " " + res.ID
+				switch {
+				case res.Err != nil:
+					failed++
+					r.fail(id, res.Err)
+				case res.Outcome == snorg.MigrateUpgraded:
+					migrated++
+					r.item(id, string(res.Outcome), nil)
+				default:
+					// An already-current file is progress but not news: it moves
+					// the counter, and only -v spends a line on it.
+					current++
+					if a.verbose {
+						r.item(id, string(res.Outcome), nil)
+					} else {
+						r.tick(id)
+					}
+				}
+			}}
+
 			var results []snorg.MigrateResult
 			var err error
 			switch {
 			case cmd.Args().Len() > 0:
-				results, err = a.client.Migrate(cmd.Args().Slice(), snorg.MigrateOptions{})
+				results, err = a.client.Migrate(cmd.Args().Slice(), opts)
 			case stdinPiped():
 				var ids []string
 				if ids, err = readLines(os.Stdin); err == nil {
-					results, err = a.client.Migrate(ids, snorg.MigrateOptions{})
+					results, err = a.client.Migrate(ids, opts)
 				}
 			default:
-				results, err = a.client.MigrateAll(snorg.MigrateOptions{})
+				results, err = a.client.MigrateAll(opts)
 			}
 			if err != nil {
 				return err
 			}
 
-			migrated, current, failed := 0, 0, 0
-			for _, r := range results {
-				switch {
-				case r.Err != nil:
-					failed++
-					fmt.Fprintf(os.Stderr, "failed %s %s: %v\n", r.Kind, r.ID, r.Err)
-				case r.Outcome == snorg.MigrateUpgraded:
-					migrated++
-					fmt.Printf("%s %s: %s\n", r.Kind, r.ID, r.Outcome)
-				default:
-					current++
-				}
-			}
-			fmt.Printf("migrated %d, current %d, failed %d of %d file(s) -> schema v%d\n",
-				migrated, current, failed, len(results), snorg.CurrentSchemaVersion)
+			r.finish(fmt.Sprintf("migrated %d, current %d, failed %d of %d file(s) -> schema v%d",
+				migrated, current, failed, len(results), snorg.CurrentSchemaVersion))
 			if failed > 0 {
 				return fmt.Errorf("%d of %d file(s) failed to migrate", failed, len(results))
 			}
 			return nil
 		},
 	}
+}
+
+// conflictedResult reports whether an analyzed page left conflict markers anywhere:
+// in its whole-page content, or in any one of a templated page's boxes.
+func conflictedResult(r snorg.AnalyzeResult) bool {
+	if r.Content != nil && r.Content.Conflicts {
+		return true
+	}
+	for _, rr := range r.Regions {
+		if rr.Text.Conflicts {
+			return true
+		}
+	}
+	return false
 }
 
 // stdinPiped reports whether stdin is a pipe or redirect (not a terminal), i.e.

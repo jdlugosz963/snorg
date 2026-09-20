@@ -32,7 +32,7 @@ func TestRetrieveExposesRegionsAndHidesTombstones(t *testing.T) {
 	pd.BackgroundHash = hash
 	a.WritePage("F_A", pd)
 	// The md has the config box plus a stale "gone" section (a tombstone).
-	if _, _, err := a.MergeAnalysis("F_A", "Pa", archive.AssembleRegions([]archive.RegionSection{
+	if _, err := a.MergeAnalysis("F_A", "Pa", archive.AssembleRegions([]archive.RegionSection{
 		{ID: "title", Label: "Title", Text: "The Title"},
 		{ID: "gone", Label: "Gone", Text: "orphaned text"},
 	})); err != nil {
