@@ -2,7 +2,7 @@
 
 `snorg.el` brings archived Supernote notes into Emacs. It shells out to the
 `snorg` CLI (`list` / `query` / `retrieve` / `export` — the page-oriented
-commands get their PAGEIDs from `query note`) and imports notes as org files.
+commands get their PAGEIDs from `query note=<FILE_ID>`) and imports notes as org files.
 
 Where imported notes live is a pluggable backend: `snorg.el` holds the generic
 interface (`snorg-backend-find` / `snorg-backend-create`, dispatched on
@@ -33,17 +33,19 @@ Put the files on your `load-path`, require `snorg` plus one backend
       snorg-config-files '("~/work/snorg/examples/emacs/orgmode.yaml"))
 ```
 
-`snorg-archive` is optional: leave it nil and snorg resolves the archive from
-`archive:` in its own config (`~/.config/snorg/config.yaml`); the client learns
-the root from `retrieve` output to open page SVGs.
+`snorg-archive` is **required**. Every CLI call passes it as `-a`, adds the
+archive's own `config.yaml` as `-c` and suppresses the XDG user config with
+`--no-user-config` — so the client always targets exactly that archive and never
+silently inherits `archive:` from somewhere else. `snorg-config-files` layers
+extra configs *on top* of the archive's own.
 
 Config variables (all plain `defvar`s you may override):
 
 | Variable                  | Meaning                                                                                               |
 |---------------------------|-------------------------------------------------------------------------------------------------------|
-| `snorg-executable`        | CLI binary name/path (default `"snorg"`).                                                             |
-| `snorg-archive`           | Archive path, passed as `-a`. Optional: leave nil to use `archive:` from snorg's own config.           |
-| `snorg-config-files`      | List of `-c` config files; one must define `export.template`.                                         |
+| `snorg-executable`        | CLI binary name/path. `nil` (the default) resolves the **newest** executable `snorg` between `default-directory` and the project root, falling back to `PATH`. |
+| `snorg-archive`           | Archive path. Required; passed as `-a` together with `<archive>/config.yaml` and `--no-user-config`.  |
+| `snorg-config-files`      | Extra `-c` config files, layered over the archive's own; one layer must define `export.template`.     |
 | `snorg-backend`           | Active backend symbol (`denote` / `org-roam`); set by the first backend required.                     |
 | `snorg-import-directory`  | Import destination: a string is used directly, a list prompts for one, `nil` uses the backend default. |
 | `snorg-generated-heading` | Root heading text replaced on re-import (default `"Generated"`; keep in sync with the template).      |
@@ -85,7 +87,26 @@ Config variables (all plain `defvar`s you may override):
 - `M-x snorg-analyze` — with point on a page heading, (re-)transcribe it via
   the CLI's `analyze` (asks first — it may spend an LLM call; prefix argument
   forces re-transcription of an unchanged page), then refresh the subtree.
-- `M-x snorg-reset-cache` — drop the per-session `retrieve` cache.
+- `M-x snorg-query` — browse the archive by query. Prompts for a snorg query
+  expression (default `all` — e.g. `starred AND tag:work`, `date:today`,
+  `content~regexp`) and lists every matching **page** in `*snorg-query*`, one
+  row per page: note, page number, star, analyzed headings, device keywords and
+  snorg tags. The PAGEID is the row id rather than a column, so the table stays
+  readable while every command still knows which page it is on. Keys:
+  - `RET` opens the page overview (below);
+  - `e` visits the page SVG in Emacs, `E` hands it to the system viewer;
+  - `n`/`p` move by row, `g` re-runs the query, `q` buries the list;
+  - `h` (or `?`) shows the key list; the `Note`, `Page` (numerically) and
+    `Headings` columns sort on click.
+- `M-x snorg-show-page` — the page overview, `*snorg-page*`: everything snorg
+  knows about one page in plain text — the owning note, the page's position and
+  star, its snorg tags (effective) and the note's own, its device keywords, its
+  titles (`(unanalyzed)` until `analyze` has run), its links, and its
+  transcription — per region on a templated page — plus any generated fields.
+  `e`/`E` open the SVG as in the list, `g` re-fetches, `q` buries.
+- `M-x snorg-reset-cache` — drop every per-session cache: `retrieve` results,
+  page lookups, page counts and the resolved CLI binary. Run it after
+  rebuilding the CLI so `snorg-executable`'s search picks up the new binary.
 
 ## Keybindings
 
@@ -98,6 +119,7 @@ Config variables (all plain `defvar`s you may override):
 | `v` | `snorg-view`         |
 | `e` | `snorg-analyze-edit` |
 | `a` | `snorg-analyze`      |
+| `q` | `snorg-query`        |
 | `r` | `snorg-reset-cache`  |
 
 It is left unbound — pick a prefix key yourself:
@@ -108,15 +130,21 @@ It is left unbound — pick a prefix key yourself:
 
 ## Org links
 
-- `[[snorg:FILEID/PAGEID.svg][page N]]` — open a page SVG from the archive.
-- `[[snorg-note:FILE_ID::PAGEID]]` — jump to the backend note for the raw snorg
-  `FILE_ID` (resolved through the active backend) and move point to the heading
-  whose `:SNORG_PAGEID:` matches `PAGEID`.
+- `[[snorg:PAGEID][page N]]` — open that page's SVG from the archive.
+- `[[snorg-note:PAGEID]]` — jump to the backend note owning `PAGEID` and move
+  point to the heading whose `:SNORG_PAGEID:` matches.
+- `[[snorg-note:FILE_ID]]` — the same, for a link that targets a note rather
+  than one of its pages: open the note, no page jump.
 
-Both are defined by `snorg.el` and are backend-agnostic — the note link carries
-the snorg `FILE_ID`, not any backend's id, so it resolves under whichever backend
-is active. The shipped export template (`examples/emacs/orgmode.yaml`) emits
-`snorg:` links, stores the SVG path in each page's `:SNORG_SVGP:` property, and
-uses `snorg-note:` for cross-note links (no per-backend prefix to swap). Both
-link types support `C-c C-l` (`org-insert-link`) completion: pick an archived
-note, then one of its pages.
+Both are defined by `snorg.el` and carry one bare snorg id. A PAGEID is unique
+across an archive, so `retrieve` (cached) resolves the owning note itself — no
+`FILE_ID` in the link. `snorg-note:` tells the two apart by the device's own id
+prefix (`P…` page, `F…` note), so a note-scoped link stays a single id too. That
+also keeps them backend-agnostic: the resolved `FILE_ID` is a raw snorg id, which
+whichever backend is active translates to its own note. The shipped export
+template (`examples/emacs/orgmode.yaml`) emits `snorg:` links, stores the SVG path
+in each page's `:SNORG_SVGP:` property, and uses `snorg-note:` for cross-note
+links (no per-backend prefix to swap); a link out of the archive is not a
+`snorg-note:` link — a web link exports as its plain URL, a file link as its name
+and device path. Both link types support `C-c C-l` (`org-insert-link`) completion:
+pick an archived note, then one of its pages.

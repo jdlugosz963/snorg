@@ -26,7 +26,7 @@ snorg serve                               # browse the whole archive at http://1
 
 ```sh
 # Assemble notes as JSON for your own tooling.
-snorg query note <FILE_ID> | snorg retrieve
+snorg query note=<FILE_ID> | snorg retrieve
 
 # Optional AI pass: transcribe pages with a vision LLM (needs a provider config).
 snorg query all | snorg -c config.yaml analyze      # skips unchanged pages
@@ -35,7 +35,7 @@ snorg query all | snorg -c config.yaml analyze      # skips unchanged pages
 snorg analyze-edit <PAGEID>                          # opens $VISUAL/$EDITOR
 
 # Export through a template (see examples/config.yaml).
-snorg query note <FILE_ID> | snorg -c examples/config.yaml export
+snorg query note=<FILE_ID> | snorg -c examples/config.yaml export
 ```
 
 ## Usage
@@ -43,29 +43,45 @@ snorg query note <FILE_ID> | snorg -c examples/config.yaml export
 ```
 snorg ingest <file.note|dir>   register note(s) into the archive
 snorg list [-l]                FILE_IDs (-l appends the note name)
-snorg query <filter> [arg]     PAGEIDs of matching pages; filters: all, note <FILE_ID>,
-                               starred, keyword <re>, content <re>, date <spec>,
-                               unanalyzed, and a `not <filter>` prefix. -l = annotated
-                               browse form (tab-separated, PAGEID first)
+snorg query <expr>             PAGEIDs of matching pages. <expr> joins terms with
+                               AND/OR/NOT and parentheses; terms are all, starred,
+                               unanalyzed, templated, and note/keyword/tag/content/
+                               region[<box>] + an operator (`:` substring, `~` regexp,
+                               `=` exact), plus date:<spec>.
+                               e.g. 'starred AND (tag:work OR date:2026-04-04..)'
+                               -l = annotated browse form (tab-separated, PAGEID first)
+snorg tag [-r] <tag> [ID...]   add (-r removes) a snorg-managed tag on pages; with -n
+                               the ids are FILE_IDs and the tag goes on the note,
+                               inherited by all its pages
+snorg list keywords|tags [-l]  the archive's distinct device keywords / snorg tags
+                               (-l appends a per-value page count)
 snorg retrieve [PAGEID...]     assemble pages into JSON, grouped per note
 snorg serve [-f] [PAGEID...]   built-in HTTP viewer (whole archive if no PAGEIDs; -f = flat)
 snorg analyze [PAGEID...]      vision-LLM transcription (skips unchanged pages)
 snorg analyze-edit <PAGEID>    edit a transcription in $VISUAL/$EDITOR
 snorg export [PAGEID...]       render pages through a pongo2/Jinja2 template
+snorg migrate [PAGEID...]      upgrade archive JSON to the current schema version
+                               (whole archive if no PAGEIDs)
 ```
+
+`ingest`, `analyze` and `migrate` show progress while they run: a bar on a terminal,
+one line per item when piped, and a full account of what each item changed under the
+global `-v`. All of it goes to stderr, so pipes and redirects are unaffected.
 
 `retrieve`, `serve`, `analyze` and `export` take PAGEIDs as arguments **or** stdin
 lines, so `query` pipes into any of them. Because every step is just lines of PAGEIDs,
 you compose selections with ordinary shell tools (`sort -u`, `comm`, `grep`, `fzf`).
-`query` itself reads PAGEIDs from stdin when piped, so filters intersect:
-`snorg query keyword foo | snorg query date today` == foo ∩ today.
+`query` itself reads PAGEIDs from stdin when piped, so selections intersect:
+`snorg query keyword:foo | snorg query date:today` == foo ∩ today — though with
+AND/OR/NOT in the expression, one call usually does: `snorg query 'keyword:foo AND
+date:today'`.
 
 Archive layout: `<archive>/<FILE_ID>/{note.json,<PAGEID>.json,<PAGEID>.md[.diff],<PAGEID>.svg,backgrounds/}`.
 
 ## Browse and pick pages with fzf
 
 `query -l` prints one page per line — PAGEID first, then note name, page number, a
-`*` for starred and `#tags` for keywords — so a fuzzy finder can filter on any of it.
+`*` for starred, `#keywords` and `@tags` — so a fuzzy finder can filter on any of it.
 Pick pages, keep the PAGEID with `cut -f1`, and open just those in the flat viewer:
 
 ```sh
@@ -75,7 +91,7 @@ snorg query all -l | fzf -m | cut -f1 | snorg serve -f
 Or pick a whole note by name and pipe it into any consumer — here `retrieve`:
 
 ```sh
-snorg query note $(snorg list -l | fzf | cut -f1) | snorg retrieve
+snorg query "note=$(snorg list -l | fzf | cut -f1)" | snorg retrieve
 ```
 
 ## Shell completion
@@ -95,12 +111,29 @@ snorg completion fish > ~/.config/fish/completions/snorg.fish
 # Powershell: write `snorg completion powershell` to a file on your autocomplete path and run it.
 ```
 
+## Use it as a Go library
+
+Everything the CLI does is available from Go — one `Client` over an archive plus its
+config:
+
+```go
+import snorg "github.com/jdlugosz963/snorg/pkg/snorg"
+```
+
+[`docs/library.md`](docs/library.md) is the guide. For the mechanical reference —
+every exported identifier and its signature — read the package on pkg.go.dev or
+render it yourself with `gomarkdoc ./pkg/snorg`; snorg checks in no generated docs.
+
 ## Contributing
 
 Contributions are welcome — issues and pull requests both. Known limitations and
 open problems worth tackling:
 
 - **Only tested on the Supernote Manta.**
+- **A note keeps stale page links after a page moves out of it.** When a page is moved
+  to another note on the device, snorg moves it within the archive too, but the old
+  note's remaining page SVGs still carry navigation/link targets pointing at it until
+  that note is itself re-ingested.
 - **Analysis prompts need fine-tuning.** The vision-LLM prompts could interpret notes
   more deeply — reconstructing tables, diagrams, etc. — and should emit Markdown that
   survives the `pandoc` conversion to org (and other formats) cleanly.

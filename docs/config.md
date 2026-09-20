@@ -74,7 +74,8 @@ archive: ~/notes/sn
 
 ```yaml
 archive: ~/notes/sn                         # optional; default archive root when -a is absent
-                                            # (user config only; -a flag overrides; ~ expanded)
+                                            # (any layer may set it — naturally the user config;
+                                            #  -a flag overrides; relative = to this file, ~ expanded)
 
 include:                                    # optional; other configs to pull in (paths relative to
   - shared.yaml                             #   this file, ~ expanded). Included keys override this
@@ -142,12 +143,13 @@ white rectangle and `remove` deletes the background `<image>` entirely.
 ## Export template
 
 `snorg -a <archive> export [PAGEID ...]` (PAGEIDs as arguments or stdin lines,
-piped from `query`; a whole note is `query note <FILE_ID> | export`) groups the
+piped from `query`; a whole note is `query note=<FILE_ID> | export`) groups the
 pages per owning note and renders `export.template` **once** over all of them to
-stdout. The template context **is** the `snorg retrieve` JSON array, under the
-`notes` key (a template context needs a map root) — same keys, same nesting, no
+stdout. The template context **is** the `snorg retrieve` JSON object — `notes` (the
+note array) and `archive` (the absolute archive root) — same keys, same nesting, no
 hidden enrichment. One render sees every note, so a template can put pages from
-many notes under one shared root.
+many notes under one shared root, and `archive` is how it builds an absolute path to
+a page image: `{{ archive }}/{{ page.svg }}` (each page's `svg` is archive-relative).
 Iterate `notes`, then `note.pages`, then each page's `titles` / `keywords` /
 `links` / `analysis`:
 

@@ -7,7 +7,7 @@ inline, the analysis rendered as HTML), and the SVG assets copied alongside.
 ## Use
 
 ```sh
-snorg -a <archive> query <filter> | examples/web/export.sh <archive> <dest>
+snorg -a <archive> query <expr> | examples/web/export.sh <archive> <dest>
 # e.g. everything:
 snorg -a ~/notes/archive query all | examples/web/export.sh ~/notes/archive /tmp/site
 # or a subset (filters intersect):
@@ -21,7 +21,7 @@ with the two configs beside it:
 - **`index.yaml`** → `<dest>/index.html` — one pass over every selected note, each
   linking to its `<FILE_ID>.html`.
 - **`note.yaml`** → `<dest>/<FILE_ID>.html` — run once per selected note (via
-  `query note <FILE_ID>`, which intersects the piped PAGEIDs with the note's
+  `query note=<FILE_ID>`, which intersects the piped PAGEIDs with the note's
   pages). It also copies each selected page's SVG to
   `<dest>/<FILE_ID>/<PAGEID>.svg` so the inline `<img>` resolves. No JSON is copied.
 

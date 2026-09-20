@@ -67,7 +67,7 @@ supplies its own UI should use `PageBuffer`/`ApplyPage` instead.
 c, err := snorg.Open("/path/to/archive", nil)
 if err != nil { log.Fatal(err) }
 
-pred, _ := c.ParseFilter("date", []string{"today"})
+pred, _ := snorg.ParseQuery("date:today AND starred")
 matches, _ := c.Query(pred)
 
 ids := make([]string, len(matches))

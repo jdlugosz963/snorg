@@ -145,3 +145,31 @@ func clamp(v, max int) int {
 	}
 	return v
 }
+
+// blank reports whether the page holds no ink at all — nothing was drawn, so
+// there is nothing to transcribe. Bits past w*h are never set, so scanning the
+// packed bytes is exact.
+func (m *mask) blank() bool {
+	for _, b := range m.ink {
+		if b != 0 {
+			return false
+		}
+	}
+	return true
+}
+
+// blankRegion reports whether box holds no ink, clamping it to the page exactly
+// like regionHash — so blankness and the fingerprint agree on where a box begins
+// and ends, and a stroke crossing the edge counts only its in-box pixels.
+func (m *mask) blankRegion(box snote.Rect) bool {
+	x0, y0 := clamp(box.X, m.w), clamp(box.Y, m.h)
+	x1, y1 := clamp(box.X+box.W, m.w), clamp(box.Y+box.H, m.h)
+	for y := y0; y < y1; y++ {
+		for x := x0; x < x1; x++ {
+			if m.at(x, y) {
+				return false
+			}
+		}
+	}
+	return true
+}

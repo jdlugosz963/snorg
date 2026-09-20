@@ -3,6 +3,7 @@ module github.com/jdlugosz963/snorg
 go 1.24.13
 
 require (
+	github.com/alecthomas/participle/v2 v2.1.4
 	github.com/epiclabs-io/diff3 v0.0.0-20260520111523-3b1669897fb1
 	github.com/flosch/pongo2/v6 v6.1.0
 	github.com/jdlugosz963/sntool v1.3.0

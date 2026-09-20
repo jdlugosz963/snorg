@@ -77,6 +77,13 @@ func Open(archivePath string, cfg *Config) (*Client, error) {
 	// by config.Load) into the archive, which hashes each image to match a page's
 	// background. A hand-built Config with no templates leaves the feature inert.
 	arch.SetTemplateSpecs(templateSpecs(cfg))
+	// Resolve them right away: a templates: section that names a missing image or
+	// invalid boxes is a broken config, and it should fail here rather than half a
+	// command later — which is also why no read path (a query predicate included)
+	// has to carry a template-resolution error.
+	if _, err := arch.Templates(); err != nil {
+		return nil, err
+	}
 	return &Client{arch: arch, cfg: cfg}, nil
 }
 
@@ -136,9 +143,15 @@ func (c *Client) Config() *Config { return c.cfg }
 // List returns the archived FILE_IDs, sorted.
 func (c *Client) List() ([]string, error) { return retrieve.List(c.arch) }
 
-// Query returns the pages matching pred (see the Predicate constructors and
-// ParseFilter). Order follows the archive walk.
-func (c *Client) Query(pred Predicate) ([]Match, error) { return query.Pages(c.arch, pred) }
+// Query returns the pages matching pred (see the Match* constructors and
+// ParseQuery). Order follows the archive walk: List order, then note.json page
+// order. The walk hands each candidate to pred as a Page, this client included, so
+// a predicate can read whatever the two documents do not hold.
+func (c *Client) Query(pred Predicate) ([]Match, error) {
+	return query.Pages(c.arch, func(nd archive.NoteDoc, pd archive.PageDoc) bool {
+		return pred(Page{Client: c, Note: nd, Doc: pd})
+	})
+}
 
 // Retrieve assembles the given pages into a Result: the absolute archive root plus
 // the pages grouped per owning note in placement order. An unknown PAGEID is an
@@ -157,6 +170,17 @@ func (c *Client) ReadPage(fileID, pageID string) (PageDoc, error) {
 func (c *Client) ReadSVG(fileID, pageID string) ([]byte, error) {
 	return c.arch.ReadSVG(fileID, pageID)
 }
+
+// ReadAnalysis returns a page's transcription — the <PAGEID>.md sidecar, AI-produced
+// or hand-written. A never-analyzed page reads as empty, not as an error.
+func (c *Client) ReadAnalysis(fileID, pageID string) (string, error) {
+	return c.arch.ReadAnalysisMD(fileID, pageID)
+}
+
+// Templates returns the template set built from the config's templates: section,
+// against which a page's BackgroundHash is matched. Open already resolved it, so
+// this is a cached lookup and the error is there for symmetry only.
+func (c *Client) Templates() (*Templates, error) { return c.arch.Templates() }
 
 // FindPage returns the FILE_ID that owns pageID (error if none or ambiguous).
 func (c *Client) FindPage(pageID string) (string, error) { return c.arch.FindPage(pageID) }
@@ -207,7 +231,7 @@ func RenderTemplate(res *Result, template string) (string, error) {
 // serves the whole archive. Binding a listener is left to the caller.
 func (c *Client) ServeHandler(pageIDs []string, flat bool) (http.Handler, error) {
 	if len(pageIDs) == 0 {
-		matches, err := query.Pages(c.arch, query.All)
+		matches, err := query.Pages(c.arch, func(archive.NoteDoc, archive.PageDoc) bool { return true })
 		if err != nil {
 			return nil, err
 		}

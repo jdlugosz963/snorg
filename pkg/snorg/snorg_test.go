@@ -14,7 +14,10 @@ import (
 )
 
 // minimal SVG with a path so the archive's ingest fingerprint has geometry.
-const testSVG = `<svg xmlns="http://www.w3.org/2000/svg" width="1920" height="2560"><path d="M10 10 L100 100"/></svg>`
+// testSVG is a page with handwriting on it: a closed, filled contour, the form a
+// real archive SVG takes. A zero-area hairline would rasterize to no ink, making
+// the page blank — which analyze deliberately transcribes without a model call.
+const testSVG = `<svg xmlns="http://www.w3.org/2000/svg" width="1920" height="2560" viewBox="0 0 1920 2560"><path fill="#000000" d="M 100 100 L 500 100 L 500 500 L 100 500 Z"/></svg>`
 
 // seedArchive writes a two-page note directly through the archive layer (no
 // .note parsing/rendering needed) and returns an opened Client rooted there.
@@ -51,20 +54,20 @@ func TestOpenListQueryRetrieve(t *testing.T) {
 		t.Errorf("List = %v, want [F_A]", ids)
 	}
 
-	all, err := c.Query(All)
+	all, err := c.Query(MatchAll)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(all) != 2 {
-		t.Errorf("Query(All) = %d matches, want 2", len(all))
+		t.Errorf("Query(MatchAll) = %d matches, want 2", len(all))
 	}
 
-	starred, err := c.Query(Starred)
+	starred, err := c.Query(MatchStarred)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(starred) != 1 || starred[0].PageID != "P1" {
-		t.Errorf("Query(Starred) = %v, want [P1]", starred)
+		t.Errorf("Query(MatchStarred) = %v, want [P1]", starred)
 	}
 
 	res, err := c.Retrieve([]string{"P1", "P2"})
@@ -82,14 +85,14 @@ func TestOpenListQueryRetrieve(t *testing.T) {
 	}
 }
 
-func TestParseFilter(t *testing.T) {
+func TestParseQuery(t *testing.T) {
 	c := seedArchive(t)
 
-	run := func(filter string, args []string) []Match {
+	run := func(expr string) []Match {
 		t.Helper()
-		pred, err := c.ParseFilter(filter, args)
+		pred, err := ParseQuery(expr)
 		if err != nil {
-			t.Fatalf("ParseFilter(%q, %v): %v", filter, args, err)
+			t.Fatalf("ParseQuery(%q): %v", expr, err)
 		}
 		m, err := c.Query(pred)
 		if err != nil {
@@ -98,29 +101,32 @@ func TestParseFilter(t *testing.T) {
 		return m
 	}
 
-	if got := run("starred", nil); len(got) != 1 || got[0].PageID != "P1" {
+	if got := run("starred"); len(got) != 1 || got[0].PageID != "P1" {
 		t.Errorf("starred = %v, want [P1]", got)
 	}
-	// "not" inverts: the non-starred page.
-	if got := run("not", []string{"starred"}); len(got) != 1 || got[0].PageID != "P2" {
-		t.Errorf("not starred = %v, want [P2]", got)
+	// NOT inverts: the non-starred page.
+	if got := run("NOT starred"); len(got) != 1 || got[0].PageID != "P2" {
+		t.Errorf("NOT starred = %v, want [P2]", got)
 	}
-	if got := run("keyword", []string{"work"}); len(got) != 1 || got[0].PageID != "P1" {
-		t.Errorf("keyword work = %v, want [P1]", got)
+	if got := run("keyword:work"); len(got) != 1 || got[0].PageID != "P1" {
+		t.Errorf("keyword:work = %v, want [P1]", got)
 	}
 
-	// Error cases: unknown filter, wrong arity, bad regexp.
-	for _, tc := range []struct {
-		filter string
-		args   []string
-	}{
-		{"bogus", nil},
-		{"note", nil},              // arity: wants 1
-		{"starred", []string{"x"}}, // arity: wants 0
-		{"keyword", []string{"("}}, // invalid regexp
+	// Error cases: syntax, unknown term, a value on a term that takes none, a
+	// missing value, a bad regexp, a bad date.
+	for _, expr := range []string{
+		"",
+		"starred keyword:work",
+		"bogus",
+		"starred:x",
+		"keyword",
+		"keyword~(",
+		"date:not-a-date",
+		"date~today",
+		"tag[x]:y",
 	} {
-		if _, err := c.ParseFilter(tc.filter, tc.args); err == nil {
-			t.Errorf("ParseFilter(%q, %v): want error", tc.filter, tc.args)
+		if _, err := ParseQuery(expr); err == nil {
+			t.Errorf("ParseQuery(%q): want error", expr)
 		}
 	}
 }

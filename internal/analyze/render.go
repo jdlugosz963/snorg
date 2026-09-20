@@ -57,3 +57,26 @@ func toPNG(img image.Image) ([]byte, error) {
 	}
 	return buf.Bytes(), nil
 }
+
+// RenderRegion rasterizes the page SVG and returns r as PNG bytes at native page
+// resolution (the 1920x2560 pixel space every rect is expressed in). It is the
+// package's image entry point for callers outside the analysis flow; Page keeps
+// its own single-rasterization path.
+//
+// canonical selects the image: true renders exactly what the vision model sees —
+// every <path> forced black, background/nav/link overlays dropped — so the bytes
+// are invariant under the ingest.svg recolor/background/link config; false
+// rasterizes the SVG as-is, keeping pen shades and baked overlays. Neither
+// resolves the template background <image> (oksvg does not), so both render
+// handwriting on white.
+func RenderRegion(svg []byte, r snote.Rect, canonical bool) ([]byte, error) {
+	src := svg
+	if canonical {
+		src = canonicalSVG(svg)
+	}
+	img, err := rasterize(src)
+	if err != nil {
+		return nil, err
+	}
+	return crop(img, r)
+}

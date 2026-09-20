@@ -20,6 +20,9 @@ Read `docs/principles.md` (project rules), `docs/architecture.md` (modules/CLI),
   `internal/snote/sntool` uses `github.com/jdlugosz963/sntool` (the native-Go
   `.note` parser + SVG renderer, pure Go via `gotranspile/gotrace` potrace), so
   the `.note` format is parsed and rendered in-process with no PATH tool;
+  `internal/querylang` uses
+  `github.com/alecthomas/participle/v2` (the query-expression grammar — the only package that
+  knows the parser lib; the field vocabulary stays in `pkg/snorg`);
   `internal/textmerge` uses `github.com/njchilds90/go-diffpatch` (line diff
   compute + reverse-apply for `Diff`/`Unapply`) +
   `github.com/sourcegraph/go-diff` (renders/parses the stored patch as a normal
@@ -55,22 +58,55 @@ Flow: `cmd/snorg` → `pkg/snorg` (public API) → `internal/ingest` orchestrate
   only importable surface (everything else is `internal/`). A `Client` (from `Open`
   or `Resolve`) bundles archive + merged config and exposes every capability as a
   method (`List`/`Query`/`Retrieve`/`Export`/`ServeHandler`/`Ingest`/`Migrate`/
-  `Analyze`/`PageBuffer`+`ApplyPage` programmatic-edit/`EditPage` interactive); it
+  `NewProvider`+`Analyze`/`PageBuffer`+`ApplyPage` programmatic-edit/`EditPage` interactive/`RenderRegion` page-rect→PNG); it
   imports the internal packages and re-exports their returned types as **aliases**
   (`Result`, `Match`, `Spec`, `Config`, …) so an external caller names them without
   an `internal/*` import. `cmd/snorg` is a thin CLI over this package (flag parsing +
   PAGEID stdin conventions + formatting stay in `cmd`); the config layering, `~`
-  expansion, date-spec and query-filter DSL live here (`Resolve`, `ParseFilter`,
-  `ParseDateSpec`). `Open` also **bridges** the config's `templates:` specs into the
-  archive (`config.TemplateSpec` → `archive.TemplateSpec` via `SetTemplateSpecs`), keeping
+  expansion, date-spec and the query language's **semantics** live here (`Resolve`,
+  `ParseQuery`, `ParseDateSpec`, `QuerySyntax`). **Query filters live here too**: a
+  `Predicate` is `func(Page) bool`
+  over a `Page{Client, Note, Doc}` candidate — the two stored documents plus the client
+  they came from — so every filter is a standalone `Match*` function
+  (`MatchAll`/`MatchStarred`/`MatchUnanalyzed`/`MatchTemplated`/`MatchNot`/`MatchAnd`/
+  `MatchOr`/`MatchIDs`/`MatchNote`/`MatchKeyword`/`MatchTag`/`MatchDate`/`MatchContent`/
+  `MatchRegion(boxID, m)`) instead
+  of a `Client` method, and a hand-written predicate can read whatever the documents don't
+  hold (`Client.ReadAnalysis` for the `<PAGEID>.md`, `Client.Templates` for the boxes).
+  Every **text** filter takes a `TextMatcher` (`func(string) bool`), not a regexp, which is
+  what makes one `Match*` per field cover all three operators: `Substring` (`:`, case-folded),
+  `Regexp` (`~`), `Exact` (`=`), or a hand-written func. `ParseQuery` is the compiler over
+  `internal/querylang`'s AST — it owns the **field vocabulary** (which names exist, which take a
+  value or a `[scope]`, how a value becomes a matcher/date range), so every semantic error is
+  raised here with the term's column, while the grammar itself knows no field names.
+  `internal/query` keeps only the walk. `Open` also **bridges** the config's `templates:`
+  specs into the archive (`config.TemplateSpec` → `archive.TemplateSpec` via
+  `SetTemplateSpecs`) and **resolves** them once, so a broken `templates:` section fails at
+  `Open` and no read path carries a template error, keeping
   `internal/config` and `internal/archive` mutually independent. **Change reporting:**
   `Ingest` surfaces the incremental reconcile — each `IngestResult.Report` (`*WriteReport`)
   is the per-note/per-page/per-file change set (`NoteChanged`, `Pages[]` with
-  `New`/`JSONChanged`/`SVGChanged`/`BackgroundChanged` + `DroppedRegions` for
-  rect-moved title/link analyses, `Pruned`; empty when already current) and `Analyze`
-  reports per-template-box outcomes (`AnalyzeResult.Regions []RegionOutcome`,
-  `Skipped` vs re-transcribed). See `docs/library.md`. **When adding or changing a capability,
-  keep the facade in sync** (a new returned type needs an alias, or an external
+  `New`/`AdoptedFrom`/`JSONChanged`/`SVGChanged`/`BackgroundChanged` + `DroppedRegions` for
+  rect-moved title/link analyses, `Pruned`/`Parked`/`Repaired`; empty when already current).
+  `New` means "no page doc existed **anywhere** in the archive", not merely in this note's
+  directory — that is what tells a caller the page still needs transcribing. `Analyze` and
+  the edit path speak the **shared change vocabulary** (`internal/archive/change.go`,
+  aliased here): `TextChange` (`Kind` + `Conflicts` + the actual `Was`/`Now` text —
+  line counts are *not* stored, `TextStat`/`TextDiff` derive them on demand so the
+  write path never pays for a diff nobody reads), `NameChange` and `RegionChange`.
+  `analyze.PageResult` and `edit.PageEdit` are separate assemblies of those parts, so a
+  part never carries a fact only one write path can produce — the analyze-only cost
+  bools live on `analyze.RegionResult` (which embeds `RegionChange`), not on the shared
+  type. `AnalyzeResult` **embeds** `PageResult` rather than copying its fields, so a new
+  fact needs no re-plumbing. All three batch calls stream per item as it lands —
+  `AnalyzeOptions.OnResult`, `IngestOptions.OnResult` and `MigrateOptions.OnResult`, all
+  sequential, on the calling goroutine, in the returned slice's order. The analysis backend is **caller-owned**: `NewProvider()` resolves the key +
+  validates + builds it **once**, and `Analyze(ctx, prov, ids, opts)` takes it as an
+  argument (so a batch costs no credential setup and `api_key_command` runs once);
+  `opts.Spec` overrides the config prompts. The only doc for this package is `docs/library.md`,
+  the hand-written guide (why the pieces are shaped as they are); no per-identifier reference is
+  checked in — run `gomarkdoc ./pkg/snorg` (or read pkg.go.dev) for that. **When adding or changing
+  a capability, keep the facade in sync** (a new returned type needs an alias, or an external
   consumer can't name it).
 
 - `internal/snote` — device-agnostic domain model (`Note`/`Page`/`Title`/`Keyword`/`Link`)
