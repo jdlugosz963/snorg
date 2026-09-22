@@ -111,3 +111,36 @@ func TestRegionCropSplitsAtBoundary(t *testing.T) {
 		t.Error("moving the A-exclusive shape should change box A's fingerprint")
 	}
 }
+
+// TestMaskBlank: blankness is decided on the same clamped pixel crop as the
+// fingerprint, so a box over an empty band reads blank while one over ink does
+// not, and a page with no paths at all is blank.
+func TestMaskBlank(t *testing.T) {
+	top := filledRect(200, 200, 400, 400)  // y 200..600  → top band
+	bot := filledRect(200, 1800, 400, 400) // y 1800..2200 → bottom band
+	m := maskOf(t, svgDoc(pathEl(top+" "+bot, `fill="#000000"`)))
+
+	if m.blank() {
+		t.Error("a page with ink must not be blank")
+	}
+	if !m.blankRegion(snote.Rect{X: 0, Y: 1000, W: 1920, H: 400}) {
+		t.Error("the empty middle band must be blank")
+	}
+	if m.blankRegion(snote.Rect{X: 0, Y: 0, W: 1920, H: 1000}) {
+		t.Error("a band holding ink must not be blank")
+	}
+	// Blankness agrees with the fingerprint: a blank box hashes to the dims-only
+	// value its own empty crop produces.
+	blankBox := snote.Rect{X: 0, Y: 1000, W: 1920, H: 400}
+	if m.regionHash(blankBox) != maskOf(t, svgDoc()).regionHash(blankBox) {
+		t.Error("a blank box must hash like the same box on an empty page")
+	}
+
+	empty := maskOf(t, svgDoc())
+	if !empty.blank() {
+		t.Error("a page with no paths must be blank")
+	}
+	if !empty.blankRegion(snote.Rect{X: 0, Y: 0, W: 1920, H: 2560}) {
+		t.Error("every box of an empty page must be blank")
+	}
+}

@@ -9,21 +9,47 @@ through the CLI process boundary and stable JSON below.
 
 ```
 snorg [-a <archive-path>] list                  # one FILE_ID per line
+snorg [-a <archive-path>] list -l               # <FILE_ID>\t<note name>   (browse-only)
 snorg [-a <archive-path>] list keywords|tags    # distinct labels (-l adds a count)
-snorg [-a <archive-path>] query <filter> [arg]  # one PAGEID per line
-snorg [-a <archive-path>] retrieve [PAGEID ...] # assembled notes as indented JSON
+snorg [-a <archive-path>] query <expr>          # one PAGEID per line
+snorg [-a <archive-path>] query -l <expr>       # annotated page lines      (browse-only)
+snorg [-a <archive-path>] retrieve [PAGEID ...] # {archive, notes} as indented JSON
 ```
 
+The bare forms are the **pipe contract**: one id per line, nothing else. The
+`-l`/`--long` forms are for a human (or a fuzzy finder) and are **not** pipe-safe —
+`query -l` emits tab-separated columns
+`<PAGEID>\t<note>\tp<page#>\t<*?>\t<headings>\t#<keyword>…\t@<tag>…`, with the PAGEID
+kept first so `cut -f1` recovers the pipe contract from it.
+
+A PAGEID addresses exactly one page in exactly one note, archive-wide — it is minted
+by the device, and snorg keeps the invariant true when a page is moved between notes
+there (see "Page moves" in [architecture.md](architecture.md)) — so a consumer can
+treat it as a primary key and let `retrieve` resolve the owning note.
+
 `list` enumerates notes (or, with the `keywords`/`tags` subcommands, the archive's
-distinct labels); `query` enumerates pages (`all`, `note <FILE_ID>`,
-`unanalyzed`, `keyword <regexp>` (device keywords), `tag <regexp>`
-(snorg-managed tags), `content <regexp>` (matched against the page's
-transcribed `<PAGEID>.md`), `starred`, `date <spec>` where the day is the
-PAGEID's leading 8 digits and spec is `today`/`yesterday`/`YYYY-MM-DD`/`FROM..TO`
-with open ends; a `not <filter>` prefix inverts any filter). `query` also reads
-PAGEIDs from stdin when piped, restricting its filter to that set, so filters
-intersect: `query keyword foo | query date today`; with `not`, they subtract:
-`query keyword foo | query not date today`.
+distinct labels); `query` enumerates pages through a boolean **expression** — terms joined by
+`AND`/`OR`/`NOT` and grouped with parentheses:
+
+```
+starred AND (date:2026-04-04..2026-09-12 OR content:"some thing")
+```
+
+A term is either a standalone word — `all`, `starred`, `unanalyzed`, `templated`
+(the page is drawn on a configured template, so `NOT templated` is the free-form
+pages) — or a field with an operator and a value: `note`, `keyword` (device
+keywords), `tag` (snorg-managed tags, the page's own plus the ones inherited from
+its note), `content` (the page's transcribed `<PAGEID>.md`), `region[<box-id>]`
+(the text of one template box in that same file; without `[<box-id>]`, any box) and
+`date:<spec>`, where the day is the PAGEID's leading 8 digits and spec is
+`today`/`yesterday`/`YYYY-MM-DD`/`FROM..TO` with open ends. The operator picks how
+the value is matched: `:` substring (case-insensitive), `~` regexp, `=` exact. A
+value must follow its operator immediately; quote it (`"…"` or `'…'`) if it holds
+spaces or parens.
+
+`query` also reads PAGEIDs from stdin when piped, restricting its expression to
+that set, so selections still intersect across a pipe: `query keyword:foo | query
+date:today` — the same thing as `query 'keyword:foo AND date:today'`.
 `retrieve` takes PAGEIDs — as
 arguments, or one-per-line on stdin when none are given, so `query` pipes
 straight into it — and returns a JSON **object** `{archive, notes}`: `archive`
@@ -35,7 +61,7 @@ paths are archive-relative, so a consumer resolves them against `archive`
 without any out-of-band knowledge of where the archive lives. A `NoteView` is a
 denormalized join of `note.json` and the selected `<PAGEID>.json` files, so the
 consumer never needs to know the on-disk file split. A whole note is
-`query note <FILE_ID> | retrieve`; an unknown PAGEID is an error.
+`query note=<FILE_ID> | retrieve`; an unknown PAGEID is an error.
 
 ## Retrieve JSON
 
@@ -90,8 +116,8 @@ consumer never needs to know the on-disk file split. A whole note is
   absent before that. After a conflicted re-analysis, `content` carries standard
   merge conflict markers until the user resolves them. The view mirrors the on-disk
   structure, so export templates and external consumers see one shape.
-- `analysis.regions` is present on a **templated** page (its background matched a
-  `templates/config.yaml` entry): one entry per config box — `id`, `label`, `rect`
+- `analysis.regions` is present on a **templated** page (its background matched an
+  entry in the merged config's `templates:` section): one entry per config box — `id`, `label`, `rect`
   (pixel-space `{x,y,w,h}`, same as a title/link rect) resolved from the config, and `content` (the box's
   transcription). A templated page carries its transcription here, not in
   `analysis.content`. See `docs/templates.md`. Fields may be
@@ -110,7 +136,7 @@ Pseudocode (illustrative; an org-mode generator, but nothing here is org-specifi
 
 ```
 for id in `snorg -a <archive> list`:
-    data = json(`snorg -a <archive> query note id | snorg -a <archive> retrieve`)
+    data = json(`snorg -a <archive> query note=id | snorg -a <archive> retrieve`)
     view = data.notes[0]                                   # archive root is data.archive
     doc  = open_or_create(outdir/(id + ".ext"))
 
@@ -128,4 +154,4 @@ for id in `snorg -a <archive> list`:
 ## Status
 
 The first consumer is `examples/emacs/snorg.el`, an Elisp org/denote generator
-built on exactly this pattern (`query note` + `retrieve` + `export` per note).
+built on exactly this pattern (`query note=` + `retrieve` + `export` per note).

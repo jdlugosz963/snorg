@@ -2,7 +2,6 @@ package query_test
 
 import (
 	"reflect"
-	"regexp"
 	"testing"
 
 	"github.com/jdlugosz963/snorg/internal/archive"
@@ -43,26 +42,6 @@ func seedTagged(t *testing.T) *archive.Archive {
 	return a
 }
 
-func TestTagPredicate(t *testing.T) {
-	a := seedTagged(t)
-
-	ms, err := query.Pages(a, query.Tag(regexp.MustCompile("^todo$")))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if want := []string{"Pa", "Pb"}; !reflect.DeepEqual(pageIDs(ms), want) {
-		t.Errorf("tag todo = %v, want %v", pageIDs(ms), want)
-	}
-
-	ms, err = query.Pages(a, query.Tag(regexp.MustCompile("^important$")))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if want := []string{"Pa"}; !reflect.DeepEqual(pageIDs(ms), want) {
-		t.Errorf("tag important = %v, want %v", pageIDs(ms), want)
-	}
-}
-
 func TestTagsInventory(t *testing.T) {
 	a := seedTagged(t)
 
@@ -88,5 +67,32 @@ func TestKeywordsInventory(t *testing.T) {
 	want := []query.ValueCount{{Value: "home", Count: 1}, {Value: "work", Count: 2}}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("Keywords() = %v, want %v", got, want)
+	}
+}
+
+// The inventory counts effective tags per page: a note tag counts once for each of
+// its pages, and only once for a page that carries it itself too.
+func TestTagsInventoryCountsInherited(t *testing.T) {
+	a := seedTagged(t)
+	if _, err := a.TagNote("F_A", "todo", false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.TagNote("F_B", "shared", false); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := query.Tags(a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// "todo": F_A's two pages (Pa already carried it — still one each). "shared":
+	// F_B's single page. "important": Pa's own.
+	want := []query.ValueCount{
+		{Value: "important", Count: 1},
+		{Value: "shared", Count: 1},
+		{Value: "todo", Count: 2},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("Tags() = %v, want %v", got, want)
 	}
 }

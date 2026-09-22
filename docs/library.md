@@ -27,7 +27,7 @@ A `Client` bundles an archive root with merged configuration.
 | `List()` | archived FILE_IDs |
 | `Keywords()` / `Tags()` | distinct device keywords / snorg tags with per-value page counts (`[]ValueCount`) |
 | `Query(pred)` | pages matching a `Predicate` |
-| `ParseFilter(word, args)` | build a `Predicate` from the CLI filter DSL (`all`, `starred`, `note`, `keyword`, `tag`, `content`, `date`, `not …`) |
+| `ParseQuery(expr)` | compile a query expression into a `Predicate` (terms joined by `AND`/`OR`/`NOT`; see `QuerySyntax`) |
 | `Tag(tag, pageIDs, remove)` | add/remove a snorg-managed tag on pages (independent of device keywords); returns the count changed |
 | `Retrieve(pageIDs)` | assemble pages into a `*Result` (`{Archive, Notes}`) |
 | `ReadNote/ReadPage/ReadSVG/FindPage` | raw on-disk document access |
@@ -39,8 +39,13 @@ A `Client` bundles an archive root with merged configuration.
 | `Migrate(pageIDs, opts)` / `MigrateAll(opts)` | schema upgrade (`MigrateOptions.OnResult` streams results) |
 | `PageBuffer(id)` / `ApplyPage(id, buf)` | programmatic transcription edit — no `$EDITOR` |
 
-The predicate constructors (`All`, `Starred`, `Unanalyzed`, `Not`, `And`, `InSet`,
-`InNote`, `Keyword`, `Tag`, `Date`, plus `Client.Content`) compose filters directly.
+The predicate constructors compose filters directly, without going through the
+expression language: `MatchAll`, `MatchStarred`, `MatchUnanalyzed`, `MatchTemplated`,
+`MatchNot`/`MatchAnd`/`MatchOr`, `MatchIDs`, `MatchNote`, `MatchKeyword`, `MatchTag`,
+`MatchDate`, `MatchContent` and `MatchRegion(boxID, m)`. Every text filter takes a
+`TextMatcher` (`func(string) bool`) rather than a regexp — `Substring` (the `:`
+operator, case-folded), `Regexp` (`~`), `Exact` (`=`), or one you write yourself — so
+a single `Match*` per field serves all three operators.
 
 ### Knowing what changed
 
@@ -67,7 +72,7 @@ supplies its own UI should use `PageBuffer`/`ApplyPage` instead.
 c, err := snorg.Open("/path/to/archive", nil)
 if err != nil { log.Fatal(err) }
 
-pred, _ := c.ParseFilter("date", []string{"today"})
+pred, _ := snorg.ParseQuery("date:today AND starred")
 matches, _ := c.Query(pred)
 
 ids := make([]string, len(matches))

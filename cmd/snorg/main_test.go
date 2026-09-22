@@ -13,7 +13,7 @@ import (
 )
 
 // The config-layering, ~ expansion and date-spec helpers moved into the public
-// snorg package (with snorg.Resolve and snorg.ParseFilter); their unit tests live
+// snorg package (with snorg.Resolve and snorg.ParseQuery); their unit tests live
 // there now (pkg/snorg). These tests exercise the CLI wiring end-to-end.
 
 func TestRootDispatch(t *testing.T) {
@@ -123,6 +123,10 @@ func TestQueryLong(t *testing.T) {
 	if _, err := a.WritePage("F_TEST", pd); err != nil {
 		t.Fatal(err)
 	}
+	// A note-level tag: inherited by both pages, indistinguishable from P1's own.
+	if _, err := a.TagNote("F_TEST", "meeting", false); err != nil {
+		t.Fatal(err)
+	}
 
 	// Bare form is unchanged: PAGEIDs only, safe to pipe downstream.
 	if got := captureStdout(t, func() error {
@@ -134,8 +138,8 @@ func TestQueryLong(t *testing.T) {
 	// Annotated form: tab-separated columns; * marks the starred page (empty
 	// otherwise), analyzed headings join " / " (empty on the unanalyzed page),
 	// keywords render as #kw and snorg tags as @tag (both present without analysis).
-	want := "P1\tmeeting-notes\tp1\t*\tAgenda / Action items\t#work #q1\t@important\n" +
-		"P2\tmeeting-notes\tp2\t\t\t#notes\t\n"
+	want := "P1\tmeeting-notes\tp1\t*\tAgenda / Action items\t#work #q1\t@important @meeting\n" +
+		"P2\tmeeting-notes\tp2\t\t\t#notes\t@meeting\n"
 	if got := captureStdout(t, func() error {
 		return root().Run(ctx, []string{"snorg", "-a", arch, "query", "-l", "all"})
 	}); got != want {
@@ -173,7 +177,7 @@ func TestTagCommand(t *testing.T) {
 
 	// query tag finds P1 only.
 	if got := captureStdout(t, func() error {
-		return root().Run(ctx, []string{"snorg", "-a", arch, "query", "tag", "work"})
+		return root().Run(ctx, []string{"snorg", "-a", arch, "query", "tag=work"})
 	}); got != "P1\n" {
 		t.Errorf("query tag work = %q, want %q", got, "P1\n")
 	}

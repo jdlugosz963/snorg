@@ -8,12 +8,12 @@
 // config (XDG user config, overridden by -c files) is loaded once in the root Before
 // hook via snorg.Resolve and shared by every command:
 //
-//	snorg [-a <archive-path>] [-c config.yaml ...] [--no-user-config] <command> [command flags] [args]
+//	snorg [-a <archive-path>] [-c config.yaml ...] [--no-user-config] [-v] <command> [command flags] [args]
 //
 //	snorg [-a <archive-path>] ingest <file-or-dir>
 //	snorg [-a <archive-path>] list [-l] | list keywords|tags [-l]
-//	snorg [-a <archive-path>] query <filter> [arg]
-//	snorg [-a <archive-path>] tag [-r] <tag> [PAGEID ...]
+//	snorg [-a <archive-path>] query <expr>
+//	snorg [-a <archive-path>] tag [-r] <tag> [PAGEID ...] | tag -n [-r] <tag> [FILE_ID ...]
 //	snorg [-a <archive-path>] retrieve [PAGEID ...]
 //	snorg [-a <archive-path>] analyze [--force] [PAGEID ...]
 //	snorg [-a <archive-path>] analyze-edit <PAGEID>
@@ -322,9 +322,10 @@ func pageIDArgs(cmd *cli.Command) ([]string, error) {
 
 func queryCmd(a *app) *cli.Command {
 	return &cli.Command{
-		Name:      "query",
-		Usage:     "print PAGEIDs of matching pages, one per line (pipe into retrieve/analyze/export); -l/--long annotates them (browse-only, not pipe-safe)",
-		ArgsUsage: "<filter> [arg]   (filters: " + snorg.QueryFilters + ")",
+		Name:        "query",
+		Usage:       "print PAGEIDs of matching pages, one per line (pipe into retrieve/analyze/export); -l/--long annotates them (browse-only, not pipe-safe)",
+		ArgsUsage:   "<expr>   e.g. 'starred AND (tag:work OR date:today)'",
+		Description: "The filter is a boolean expression, " + snorg.QuerySyntax,
 		Flags: []cli.Flag{
 			&cli.BoolFlag{
 				Name:    "long",
@@ -333,11 +334,14 @@ func queryCmd(a *app) *cli.Command {
 			},
 		},
 		Action: func(_ context.Context, cmd *cli.Command) error {
-			args := cmd.Args().Slice()
-			if len(args) == 0 {
-				return fmt.Errorf("usage: snorg [-a <archive-path>] query <filter> [arg]\n  filters: %s", snorg.QueryFilters)
+			// The whole expression is one argument, but the shell splits an
+			// unquoted one into words — joining them back means both
+			// `query starred AND tag:work` and `query 'a AND (b OR c)'` work.
+			expr := strings.Join(cmd.Args().Slice(), " ")
+			if strings.TrimSpace(expr) == "" {
+				return fmt.Errorf("usage: snorg [-a <archive-path>] query <expr>\n%s", snorg.QuerySyntax)
 			}
-			pred, err := a.client.ParseFilter(args[0], args[1:])
+			pred, err := snorg.ParseQuery(expr)
 			if err != nil {
 				return err
 			}
@@ -348,7 +352,7 @@ func queryCmd(a *app) *cli.Command {
 				if err != nil {
 					return err
 				}
-				pred = snorg.And(snorg.InSet(ids), pred)
+				pred = snorg.MatchAnd(snorg.MatchIDs(ids), pred)
 			}
 			matches, err := a.client.Query(pred)
 			if err != nil {
@@ -632,7 +636,7 @@ func servePageIDs(a *app, cmd *cli.Command) ([]string, error) {
 	if stdinPiped() {
 		return readLines(os.Stdin)
 	}
-	matches, err := a.client.Query(snorg.All)
+	matches, err := a.client.Query(snorg.MatchAll)
 	if err != nil {
 		return nil, err
 	}

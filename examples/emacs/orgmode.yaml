@@ -15,7 +15,7 @@ export:
     :STARRED: t
     {% endif %}
     :END:
-    [[snorg:{{ page.svg }}][page {{ page.number }}]]
+    [[snorg:{{ page.page_id }}][page {{ page.number }}]]
 
     {% if page.analysis.content %}
     {{ page.analysis.content|org|nestorgheadings:2 }}
@@ -24,7 +24,15 @@ export:
     {% if page.links %}
     *** Links
     {% for link in page.links %}
-    - [[snorg-note:{{ link.target_file_id }}::{{ link.target_page_id }}][{{ link.analysis.name|default:link.name|cut:".note" }}]]
+    {% if link.target_page_id %}
+    - [[snorg-note:{{ link.target_page_id }}][{{ link.analysis.name|default:link.name|cut:".note" }}]]
+    {% elif link.target_file_id %}
+    - [[snorg-note:{{ link.target_file_id }}][{{ link.analysis.name|default:link.name|cut:".note" }}]]
+    {% elif link.kind == "web" %}
+    - [[{{ link.target }}][{{ link.analysis.name|default:link.name }}]]
+    {% else %}
+    - {{ link.analysis.name|default:link.name }} ({{ link.kind }}: {{ link.target }})
+    {% endif %}
     {% endfor %}
 
     {% endif %}

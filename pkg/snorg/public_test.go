@@ -1,6 +1,7 @@
 package snorg_test
 
 import (
+	"regexp"
 	"testing"
 
 	snorg "github.com/jdlugosz963/snorg/pkg/snorg"
@@ -24,12 +25,12 @@ func TestPublicSurface(t *testing.T) {
 		t.Errorf("empty archive List = %v, want none", ids)
 	}
 
-	// Compose predicates and parse a filter through the public API.
-	pred, err := c.ParseFilter("not", []string{"starred"})
+	// Compose predicates and parse an expression through the public API.
+	pred, err := snorg.ParseQuery("NOT starred AND (tag:work OR templated)")
 	if err != nil {
-		t.Fatalf("ParseFilter: %v", err)
+		t.Fatalf("ParseQuery: %v", err)
 	}
-	matches, err := c.Query(snorg.And(pred, snorg.All))
+	matches, err := c.Query(snorg.MatchAnd(pred, snorg.MatchAll))
 	if err != nil {
 		t.Fatalf("Query: %v", err)
 	}
@@ -40,9 +41,19 @@ func TestPublicSurface(t *testing.T) {
 		t.Errorf("ParseDateSpec = (%q, %q, %v)", from, to, err)
 	}
 
-	// The tag filter and the tag/inventory methods are reachable through the facade.
-	if _, err := c.ParseFilter("tag", []string{"work"}); err != nil {
-		t.Errorf("ParseFilter tag: %v", err)
+	// The matcher constructors and the Match* family they feed are nameable from
+	// outside, hand-written matchers included.
+	var _ snorg.TextMatcher = snorg.Substring("work")
+	var _ snorg.TextMatcher = snorg.Exact("work")
+	var _ snorg.TextMatcher = snorg.Regexp(regexp.MustCompile("^work$"))
+	var _ snorg.Predicate = snorg.MatchOr(
+		snorg.MatchTag(func(s string) bool { return s == "work" }),
+		snorg.MatchRegion("grade", snorg.Substring("A")),
+		snorg.MatchTemplated,
+	)
+	// A bad regexp in an expression is reported rather than panicking.
+	if _, err := snorg.ParseQuery("region[grade]~("); err == nil {
+		t.Error("ParseQuery with an invalid regexp should error")
 	}
 	tags, err := c.Tags()
 	if err != nil {
@@ -55,6 +66,13 @@ func TestPublicSurface(t *testing.T) {
 	var _ []snorg.ValueCount = tags
 	if _, err := c.Tag("work", []string{"Pmissing"}, false); err == nil {
 		t.Error("Tag on an unknown PAGEID should error")
+	}
+	// Same for the note-level tag, plus the inheritance rule it feeds.
+	if _, err := c.TagNote("work", []string{"Fmissing"}, false); err == nil {
+		t.Error("TagNote on an unknown FILE_ID should error")
+	}
+	if got := snorg.EffectiveTags(snorg.NoteDoc{Tags: []string{"note"}}, snorg.PageDoc{Tags: []string{"own"}}); len(got) != 2 {
+		t.Errorf("EffectiveTags = %v, want the 2-element union", got)
 	}
 
 	// Config is nameable and its sections reachable via fields.

@@ -58,21 +58,28 @@ type (
 	RegionDoc     = archive.RegionDoc
 )
 
-// The device-agnostic domain model, produced by ingest (see IngestResult.Note). A
-// page's keywords are reachable as Page.Keywords (the element type is not aliased,
-// so the name Keyword can denote the query constructor — see query.go).
+// The device-agnostic domain model, produced by ingest (see IngestResult.Note).
+// NotePage is the device-parsed page; the archived page a query predicate examines
+// is the separate Page in query.go.
 type (
-	Note  = snote.Note
-	Page  = snote.Page
-	Title = snote.Title
-	Link  = snote.Link
-	Rect  = snote.Rect
+	Note     = snote.Note
+	NotePage = snote.Page
+	Title    = snote.Title
+	Keyword  = snote.Keyword
+	Link     = snote.Link
+	Rect     = snote.Rect
 )
 
-// Query primitives: a Predicate filters pages, Client.Query returns the Matches.
+// Match is one page a query predicate accepted, as returned by Client.Query. The
+// Page a predicate examines and the Predicate type itself live in query.go.
+type Match = query.Match
+
+// The template regions a page can be drawn on: the resolved set (Client.Templates),
+// one template and one of its boxes. Built from the config's templates: section.
 type (
-	Match     = query.Match
-	Predicate = query.Predicate
+	Templates = archive.Templates
+	Template  = archive.Template
+	Box       = archive.Box
 )
 
 // ValueCount is one distinct label with its page count, as returned by the archive
@@ -84,7 +91,9 @@ type ValueCount = query.ValueCount
 type IngestResult = ingest.Result
 
 // The ingest change report, reachable as IngestResult.Report: which pages were newly
-// written or changed, which files changed on each, and which pages were pruned.
+// written or changed, which files changed on each, which pages were pruned (and which
+// of those had their state parked for reclaim), which pages were adopted from another
+// note the device moved them out of, and which notes that repair rewrote.
 type (
 	WriteReport     = archive.WriteReport
 	PageWriteReport = archive.PageWriteReport
@@ -97,6 +106,8 @@ type (
 	MigrateOutcome = archive.MigrateOutcome
 )
 
+// The MigrateOutcome values, reported per file in a MigrateResult: a file already
+// at CurrentSchemaVersion, or one walked forward to it.
 const (
 	MigrateCurrent  = archive.MigrateCurrent
 	MigrateUpgraded = archive.MigrateUpgraded

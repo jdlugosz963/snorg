@@ -70,12 +70,12 @@ mkdir -p "$DEST"
 "$SNORG" -a "$ARCHIVE" -c "$SCRIPT_DIR/index.yaml" export \
 	< "$PAGEIDS" > "$DEST/index.html"
 
-# One HTML page per selected note, plus its selected pages' SVGs. `query note`
-# reads the piped PAGEIDs and restricts the note filter to that set, so `sub` is
+# One HTML page per selected note, plus its selected pages' SVGs. `query note=`
+# reads the piped PAGEIDs and restricts the expression to that set, so `sub` is
 # exactly this note's selected pages (empty when none were selected).
 "$SNORG" -a "$ARCHIVE" list | while IFS= read -r fid; do
 	[ -n "$fid" ] || continue
-	sub=$("$SNORG" -a "$ARCHIVE" query note "$fid" < "$PAGEIDS")
+	sub=$("$SNORG" -a "$ARCHIVE" query "note=$fid" < "$PAGEIDS")
 	[ -n "$sub" ] || continue
 	printf '%s\n' "$sub" | "$SNORG" -a "$ARCHIVE" \
 		-c "$SCRIPT_DIR/note.yaml" export > "$DEST/$fid.html"

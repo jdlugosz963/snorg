@@ -46,7 +46,7 @@ organizing mechanism independent of device keywords.
 
 `retrieve` prints the selected pages assembled into a JSON array of `NoteView`s,
 grouped per owning note (full note metadata, only the requested pages); a whole
-note is `query note <FILE_ID> | retrieve`. `export` groups the same way and
+note is `query note=<FILE_ID> | retrieve`. `export` groups the same way and
 renders the config's template once over the whole array (context key `notes`),
 so one template invocation sees every selected note.
 
@@ -291,19 +291,41 @@ stdin / bare = whole archive), but a page selection also migrates its owning
   (`TemplateSpec`/`Template`/`Box`, `MatchBackground` by image hash — the specs come from the
   merged config's `templates:` section, bridged in by `pkg/snorg.Open`) and `regions.go`
   (de)serializes the id-keyed region sections held in `.md` (see `docs/templates.md`);
+  `tags.go` owns the snorg-managed labels and the single inheritance rule every read
+  surface applies (`EffectiveTags` = the sorted union of a note's tags and a page's own);
+  `change.go` is the **shared change vocabulary** both write paths speak
+  (`TextKind`/`TextChange` + the total `TextChangeOf`, `NameChange`, `RegionChange` —
+  orthogonal facts, sparse, a zero meaning "did not happen");
   `migrate.go` is the un-gated schema upgrader (`MigrateAll`/`MigratePages` + the version-indexed
-  `schemaMigrations` chain).
+  `schemaMigrations` chain, plus `migrateEditDiff` for the unversioned `.md.diff` sidecar).
 - `internal/retrieve` — platform-agnostic read contract: assembles `note.json` + each
   `<PAGEID>.json` + `<PAGEID>.md` into denormalized `NoteView`s (the stable JSON consumers
-  depend on). `Get` takes PAGEIDs and groups them per owning note (archive List order, pages in
-  placement order); an unknown PAGEID is an error. A templated page's `.md` is the region-section
+  depend on). `Get` takes PAGEIDs and returns a `*Result` — `Archive`, the **absolute**
+  archive root (`filepath.Abs`) the pages' relative svg paths resolve against, so the
+  payload is self-contained, plus `Notes`, the views grouped per owning note (archive
+  List order, pages in placement order); an unknown PAGEID is an error. A templated page's `.md` is the region-section
   document: its transcription surfaces as `analysis.regions[]` (`RegionView{id,label,rect,
   content}`, label/rect resolved from the template config) with an empty `analysis.content`.
-- `internal/query` — read-only metadata filter: walks every note/page via the `archive`
-  accessors and returns the pages matching a `Predicate` (`All`, `Starred`, `Unanalyzed`,
-  `InNote(fileID)`, `Keyword(regexp)`, `Tag(regexp)`, `Content(archive, regexp)` — the last reads each
-  page's `<PAGEID>.md`). The same walk backs the inventory aggregators `Keywords(a)`/`Tags(a)`
-  (distinct labels + per-value page counts, behind `list keywords`/`list tags`).
+- `internal/query` — the read-only walk: `Pages(a, match)` visits every note/page via the
+  `archive` accessors and returns the ones a `func(NoteDoc, PageDoc) bool` accepts. It is only
+  the walk — the filter vocabulary itself (the `Match*` predicates and the compiler for the
+  expression language) lives in `pkg/snorg`, where the `Client` a predicate needs is in scope;
+  the language's *syntax* is one layer further down, in `internal/querylang`; `Client.Query` is the one
+  adapter, wrapping each candidate as a `snorg.Page{Client, Note, Doc}`. The match function gets
+  the whole `NoteDoc` alongside the `PageDoc`, so note-level state is in scope without a second
+  read (`MatchTag` uses it for tags inherited from the note). The same walk backs the inventory
+  aggregators `Keywords(a)`/`Tags(a)` (distinct labels + per-value page counts, behind
+  `list keywords`/`list tags`; tag counts are per page over the effective set).
+- `internal/querylang` — the query language's **syntax**: `Parse(string)` turns an expression
+  into an AST (`Expr`/`AndExpr`/`Unary`/`Term{Field, Scope, Op, Value, Pos}`) and nothing more.
+  It is the only package that knows `participle`, and it knows no field names — an unknown term,
+  a value on a term that takes none, a bad regexp or a bad date spec all parse here and are
+  rejected by `pkg/snorg`'s compiler, which has the `Term.Pos` to point at. The lexer is
+  **stateful**: a value is lexed by different rules than an expression (so
+  `date:2026-04-04..2026-09-12` is one token), and the value state has no whitespace rule, which
+  is what makes `content: x` an error rather than a quietly different query. Quote handling
+  (`"…"` with `\"`/`\\` escapes, `'…'` verbatim) is done at capture, so a `Term.Value` is
+  already the literal string the user meant. External dep: `participle/v2`.
 - `internal/config` — loads + deep-merges YAML config (provider creds, analysis prompts,
   `ingest.svg` toggles, `export.template`, `templates:` regions); `Load` expands each file's
   `include:` list (other configs merged *over* the includer — "above includer" — recursively,

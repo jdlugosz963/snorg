@@ -140,7 +140,7 @@ p.svg }}`).
 
 ## Caveats
 
-- `query content <regexp>` matches the `<PAGEID>.md`, which for a templated page is
+- `query 'content~<regexp>'` matches the `<PAGEID>.md`, which for a templated page is
   the region-section document, so a templated page **is** content-searchable (the
   match text includes the `<!-- region … -->` marker lines).
 - On a pre-existing archive, `background_hash` is populated by a re-ingest (cheap,

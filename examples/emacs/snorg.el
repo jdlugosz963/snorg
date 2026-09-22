@@ -10,7 +10,7 @@
 ;; CLI (`list', `query', `retrieve', `export') and brings archived Supernote
 ;; notes into Emacs as org notes.  `retrieve' and `export' are
 ;; page-oriented (they take PAGEIDs), so the per-note helpers here first ask
-;; `query note' for the note's pages.
+;; `query note=FILE_ID' for the note's pages.
 ;;
 ;; Where imported notes live is a pluggable *backend*: this file holds the
 ;; generic interface (`snorg-backend-find'/`snorg-backend-create', dispatched
@@ -26,10 +26,13 @@
 ;;   it into a backend note (created fresh, or its generated subtree refreshed
 ;;   in place on re-import).  `snorg-import-all' imports every archived note.
 ;;
-;; - Org link types with `C-c C-l' completion (both defined here): `snorg:'
-;;   opens a page SVG from the archive; `snorg-note:FILE_ID::PAGEID' resolves
-;;   the raw snorg FILE_ID through the active backend, jumps to that note and
-;;   moves point to the heading whose :SNORG_PAGEID: matches PAGEID.
+;; - Org link types with `C-c C-l' completion (both defined here), each
+;;   carrying one bare snorg id -- a PAGEID is unique across the archive, so the
+;;   owning note is resolved on the fly: `snorg:PAGEID' opens that page's SVG
+;;   from the archive; `snorg-note:PAGEID' resolves its FILE_ID through the
+;;   active backend, jumps to that note and moves point to the heading whose
+;;   :SNORG_PAGEID: matches.  `snorg-note:' also takes a bare FILE_ID, for a
+;;   link that targets a note rather than one of its pages.
 ;;
 ;; - `snorg-view' -- a dual-window review mode: the note buffer on the left,
 ;;   the current page SVG on the right; the left buffer folds to just the page
@@ -59,11 +62,11 @@
 ;; - `snorg-command-map' -- an (unbound) prefix keymap gathering the interactive
 ;;   commands; bind it to a prefix key of your choice.
 ;;
-;; Set `snorg-config-files' before use; the config must define `export.template'
-;; (see examples/emacs/orgmode.yaml in the snorg repo).  `snorg-archive' is
-;; optional: leave it nil to let snorg resolve the archive from `archive:' in its
-;; own XDG config (~/.config/snorg/config.yaml) — the client then discovers the
-;; root from `retrieve' output.
+;; Set `snorg-archive' before use: every CLI call passes it as `-a', adds the
+;; archive's own config.yaml as `-c' and suppresses the XDG user config, so the
+;; client targets exactly that archive.  `snorg-config-files' layers extra
+;; configs on top; one of the layers must define `export.template' for
+;; `snorg-import' (see examples/emacs/orgmode.yaml in the snorg repo).
 
 ;;; Code:
 
@@ -71,10 +74,15 @@
 (require 'json)
 (require 'subr-x)
 (require 'cl-lib)
+(require 'tabulated-list)
 
 ;; `server' is loaded lazily by `snorg--emacsclient-editor' (only that command
 ;; needs it), so declare its function to keep the byte-compiler quiet.
 (declare-function server-running-p "server")
+
+;; `project' is consulted opportunistically by `snorg--search-root' (it falls
+;; back to a `.git' walk), so declare its function rather than requiring it.
+(declare-function project-root "project" (project))
 
 ;;;; Configuration
 
@@ -83,18 +91,25 @@
   :group 'org
   :prefix "snorg-")
 
-(defvar snorg-executable "snorg"
-  "Name or path of the snorg CLI binary.")
+(defvar snorg-executable nil
+  "Name or path of the snorg CLI binary, or nil to resolve it per call.
+A string is used verbatim -- the explicit override.  When nil,
+`snorg--executable' prefers the newest locally built binary found from
+`default-directory' up to the project root, falling back to \"snorg\" on
+`exec-path'.  That keeps the client talking to the binary you just built
+while developing the CLI itself.")
 
 (defvar snorg-archive nil
-  "Path to the snorg archive, passed to the CLI as `-a'.
-Optional: when nil, `-a' is omitted and snorg resolves the archive from
-its own config (`archive:' in ~/.config/snorg/config.yaml); the client
-then learns the root from `retrieve' output to open page SVGs.")
+  "Path to the snorg archive.  Required.
+Every CLI call passes it as `-a', together with the archive's own
+`config.yaml' as `-c' and `--no-user-config' -- so the client targets
+exactly this archive and never silently inherits the XDG user config.")
 
 (defvar snorg-config-files nil
-  "List of snorg config files, each passed to the CLI as `-c'.
-At least one must define `export.template' for `snorg-import' to work.")
+  "Extra snorg config files, each passed to the CLI as `-c'.
+They come *after* the archive's own `config.yaml', so they win the
+CLI's later-wins merge.  One of the layers must define `export.template'
+for `snorg-import' to work; the archive config usually does.")
 
 (defvar snorg-import-directory nil
   "Destination for imported notes.
@@ -112,19 +127,83 @@ Prepended to the note's own page keywords on `snorg-import'.")
 
 ;;;; CLI / process layer
 
+(defvar snorg--executable-cache (make-hash-table :test 'equal)
+  "Cache of search root -> resolved snorg binary path.
+Cleared by `snorg-reset-cache', which is how a rebuild is picked up.")
+
+(defun snorg--search-root ()
+  "Return the directory to search for a locally built snorg binary.
+The project root of `default-directory' when one is detectable (a
+`project.el' root, else the nearest ancestor holding a `.git'), otherwise
+`default-directory' itself."
+  (let ((dir (expand-file-name default-directory)))
+    (or (and (fboundp 'project-current)
+             (let ((proj (project-current nil dir)))
+               (and proj (expand-file-name (project-root proj)))))
+        (locate-dominating-file dir ".git")
+        dir)))
+
+(defun snorg--newest-executable (root)
+  "Return the newest executable file named snorg at or under ROOT, or nil.
+ROOT and each of its ancestors up to the filesystem root are *not*
+searched -- only ROOT and the directories between `default-directory' and
+ROOT, which is where a `go build -o' lands.  The repository directory is
+itself named snorg, so `file-regular-p' is what keeps it out."
+  (let ((dir (expand-file-name default-directory))
+        (candidates nil))
+    ;; Walk up from default-directory through ROOT, collecting candidates.
+    (catch 'done
+      (while t
+        (let ((f (expand-file-name "snorg" dir)))
+          (when (and (file-regular-p f) (file-executable-p f))
+            (push f candidates)))
+        (when (file-equal-p dir root) (throw 'done nil))
+        (let ((up (file-name-directory (directory-file-name dir))))
+          (when (or (null up) (string= up dir)) (throw 'done nil))
+          (setq dir up))))
+    (car (sort candidates
+               (lambda (a b)
+                 (time-less-p (file-attribute-modification-time
+                               (file-attributes b))
+                              (file-attribute-modification-time
+                               (file-attributes a))))))))
+
+(defun snorg--executable ()
+  "Return the snorg CLI command to run.
+`snorg-executable' wins when set.  Otherwise the newest locally built
+binary between `default-directory' and the project root, memoized per
+root in `snorg--executable-cache'; failing that, plain \"snorg\" so
+`exec-path' resolves it."
+  (or snorg-executable
+      (let ((root (snorg--search-root)))
+        (or (gethash root snorg--executable-cache)
+            (puthash root (or (snorg--newest-executable root) "snorg")
+                     snorg--executable-cache)))))
+
 (defun snorg--global-args ()
-  "Return the global CLI args (archive and config flags).
-`-a' is passed only when `snorg-archive' is set; otherwise snorg resolves
-the archive from its own config (`archive:' in the XDG user config)."
-  (append (when snorg-archive (list "-a" (expand-file-name snorg-archive)))
-          (mapcan (lambda (f) (list "-c" (expand-file-name f)))
-                  snorg-config-files)))
+  "Return the global CLI args: archive, its config, and `--no-user-config'.
+`snorg-archive' is required; the archive's own `config.yaml' is passed
+explicitly (the CLI never auto-loads it) and the XDG user config is
+suppressed, so a call targets exactly this archive.  `snorg-config-files'
+follow, overriding via the CLI's later-wins merge."
+  (unless snorg-archive
+    (user-error "snorg: set `snorg-archive' to the archive path"))
+  (let ((archive (expand-file-name snorg-archive)))
+    (append (list "-a" archive
+                  "-c" (expand-file-name "config.yaml" archive)
+                  "--no-user-config")
+            (mapcan (lambda (f) (list "-c" (expand-file-name f)))
+                    snorg-config-files))))
 
 (defun snorg--call (&rest args)
   "Run the snorg CLI with global flags followed by ARGS.
-Return stdout as a string, or signal an error with the CLI output."
+Return stdout as a string, or signal an error with the CLI output.
+Note the nil INFILE: the CLI reads PAGEIDs from stdin whenever stdin is
+not a character device, and `query' answers an *empty* read with zero
+matches rather than an error -- nil means /dev/null, which is a character
+device, so the commands see no stdin at all."
   (with-temp-buffer
-    (let ((status (apply #'call-process snorg-executable nil t nil
+    (let ((status (apply #'call-process (snorg--executable) nil t nil
                          (append (snorg--global-args) args))))
       (unless (eq status 0)
         (error "snorg %s failed (%s): %s"
@@ -137,8 +216,8 @@ Return stdout as a string, or signal an error with the CLI output."
   (split-string (snorg--call "list") "\n" t))
 
 (defun snorg--note-pageids (file-id)
-  "Return the PAGEIDs of FILE-ID (placement order) via `query note'."
-  (split-string (snorg--call "query" "note" file-id) "\n" t))
+  "Return the PAGEIDs of FILE-ID (placement order) via `query note=FILE_ID'."
+  (split-string (snorg--call "query" (concat "note=" file-id)) "\n" t))
 
 (defvar snorg--archive-root nil
   "Absolute archive root, cached from `retrieve' output for the session.
@@ -171,15 +250,28 @@ pages yields a single-element `notes' array, whose sole NoteView is returned."
 (defvar snorg--retrieve-cache (make-hash-table :test 'equal)
   "Cache of FILE_ID -> retrieve alist for the current session.")
 
+(defvar snorg--page-cache (make-hash-table :test 'equal)
+  "Cache of PAGEID -> (NOTE-VIEW . PAGE-VIEW) for the current session.
+Filled by `snorg--page-view'; kept here so `snorg-reset-cache' can clear
+every cache in one place.")
+
+(defvar snorg--note-page-count-cache (make-hash-table :test 'equal)
+  "Cache of FILE_ID -> number of pages, for the page overview's \"N of M\".")
+
 (defun snorg--retrieve-cached (file-id)
   "Return the retrieve alist for FILE-ID, caching the result."
   (or (gethash file-id snorg--retrieve-cache)
       (puthash file-id (snorg-retrieve file-id) snorg--retrieve-cache)))
 
 (defun snorg-reset-cache ()
-  "Clear the retrieve cache and the cached archive root."
+  "Clear every session cache: retrieves, pages, page counts, binary, root.
+Also how a freshly rebuilt CLI binary is picked up, since
+`snorg--executable' memoizes its search per project root."
   (interactive)
   (clrhash snorg--retrieve-cache)
+  (clrhash snorg--page-cache)
+  (clrhash snorg--note-page-count-cache)
+  (clrhash snorg--executable-cache)
   (setq snorg--archive-root nil))
 
 (defun snorg--source (view)
@@ -199,6 +291,310 @@ pages yields a single-element `notes' array, whose sole NoteView is returned."
          (key (completing-read "Note: " choices nil t)))
     (or (cdr (assoc key choices))
         (user-error "Unknown note: %s" key))))
+
+;;;; Page lookup
+
+(defun snorg--page-view (pageid &optional refresh)
+  "Return (NOTE-VIEW . PAGE-VIEW) for PAGEID, caching the result.
+With REFRESH non-nil, re-fetch even when cached.  `retrieve' groups the
+pages it is given per owning note, so a single PAGEID comes back as one
+note holding one page."
+  (or (and (not refresh) (gethash pageid snorg--page-cache))
+      (let* ((note (car (snorg--parse-retrieve
+                         (snorg--call "retrieve" pageid))))
+             (page (car (alist-get 'pages note))))
+        (unless page
+          (error "snorg: no page %s in the archive" pageid))
+        (puthash pageid (cons note page) snorg--page-cache))))
+
+(defun snorg--note-page-count (file-id)
+  "Return how many pages FILE-ID has, caching the result."
+  (or (gethash file-id snorg--note-page-count-cache)
+      (puthash file-id (length (snorg--note-pageids file-id))
+               snorg--note-page-count-cache)))
+
+(defun snorg--page-svg (pageid)
+  "Return the absolute SVG path of PAGEID.
+The retrieve `svg' key is archive-relative (FILE_ID/PAGEID.svg), so it is
+resolved against the archive root."
+  (let ((rel (alist-get 'svg (cdr (snorg--page-view pageid)))))
+    (unless rel
+      (user-error "snorg: page %s has no SVG" pageid))
+    (expand-file-name rel (snorg--archive-root-for rel))))
+
+;;;; Page overview
+
+(defvar-local snorg-page--pageid nil
+  "PAGEID the `*snorg-page*' buffer is showing.")
+
+(defun snorg--pageid-at-point ()
+  "Return the PAGEID the current snorg buffer points at.
+Signal a `user-error' when the buffer has none, so every page command can
+be written against this one accessor regardless of which UI invoked it."
+  (or (and (derived-mode-p 'snorg-query-mode) (tabulated-list-get-id))
+      (and (derived-mode-p 'snorg-page-mode) snorg-page--pageid)
+      (user-error "snorg: point is not on a page")))
+
+(defun snorg-find-page-svg ()
+  "Visit the SVG of the page at point in Emacs."
+  (interactive)
+  (let ((svg (snorg--page-svg (snorg--pageid-at-point))))
+    (unless (file-exists-p svg)
+      (user-error "snorg: missing SVG %s" svg))
+    (find-file svg)))
+
+(defun snorg-open-page-svg ()
+  "Open the SVG of the page at point in the system viewer."
+  (interactive)
+  (snorg--open-external (snorg--page-svg (snorg--pageid-at-point))))
+
+(defun snorg-page--name (view)
+  "Return the analyzed name of title/link alist VIEW, or nil."
+  (alist-get 'name (alist-get 'analysis view)))
+
+(defun snorg-page--rule (label)
+  "Insert a section rule titled LABEL."
+  (insert "\n"
+          (propertize (concat "── " label " "
+                              (make-string (max 2 (- 62 (length label))) ?─))
+                      'face 'shadow)
+          "\n"))
+
+(defun snorg-page--field (label value)
+  "Insert a LABEL/VALUE line, skipping it when VALUE is empty."
+  (when (and value (not (string-empty-p value)))
+    (insert " "
+            (propertize (format "%-10s" label) 'face 'font-lock-keyword-face)
+            value "\n")))
+
+(defun snorg-page--indent (text)
+  "Return TEXT with every non-empty line indented by one space.
+Empty lines are left alone rather than padded into trailing whitespace."
+  (replace-regexp-in-string "^\\(.\\)" " \\1"
+                            (string-trim-right (or text "")) t))
+
+(defun snorg-page--link-target (link)
+  "Return a short description of LINK's target.
+A note link names the target page number, which costs one extra
+`retrieve' (cached); a link out of the archive resolves to nothing, so
+the raw target is shown instead."
+  (let ((pid (alist-get 'target_page_id link))
+        (target (alist-get 'target link)))
+    (cond
+     (pid (let ((page (ignore-errors (cdr (snorg--page-view pid)))))
+            (if page (format "p%s" (alist-get 'number page)) pid)))
+     (target target)
+     (t ""))))
+
+(defun snorg-page--render (pageid &optional refresh)
+  "Draw everything known about PAGEID into the current buffer.
+With REFRESH non-nil, bypass the page cache."
+  (let* ((pair (snorg--page-view pageid refresh))
+         (note (car pair))
+         (page (cdr pair))
+         (analysis (alist-get 'analysis page))
+         (titles (alist-get 'titles page))
+         (links (alist-get 'links page))
+         (regions (alist-get 'regions analysis))
+         (content (alist-get 'content analysis))
+         (fields (alist-get 'fields analysis))
+         (inhibit-read-only t))
+    (erase-buffer)
+    (setq snorg-page--pageid pageid)
+    (insert (propertize (or (cl-some #'snorg-page--name titles)
+                            (format "Page %s" (alist-get 'number page)))
+                        'face 'bold)
+            (if (eq (alist-get 'starred page) t) "  ★" "")
+            "\n\n")
+    (snorg-page--field "note" (format "%s [%s]"
+                                      (alist-get 'source note)
+                                      (alist-get 'file_id note)))
+    (snorg-page--field "page" (format "%s of %s"
+                                      (alist-get 'number page)
+                                      (snorg--note-page-count
+                                       (alist-get 'file_id note))))
+    (snorg-page--field "pageid" pageid)
+    (snorg-page--field "svg" (or (alist-get 'svg page) ""))
+    ;; `page.tags' is already the effective set; the note's own tags are shown
+    ;; separately so inherited and page-local tags stay distinguishable.
+    (snorg-page--field "tags" (mapconcat (lambda (tag) (concat "@" tag))
+                                         (alist-get 'tags page) " "))
+    (snorg-page--field "note tags" (mapconcat (lambda (tag) (concat "@" tag))
+                                              (alist-get 'tags note) " "))
+    (snorg-page--field "keywords" (mapconcat
+                                   (lambda (kw)
+                                     (concat "#" (alist-get 'text kw)))
+                                   (alist-get 'keywords page) " "))
+    (when titles
+      (snorg-page--rule "Titles")
+      (dolist (title titles)
+        (insert (format "  h%s  %s\n"
+                        (alist-get 'level title)
+                        (or (snorg-page--name title) "(unanalyzed)")))))
+    (when links
+      (snorg-page--rule "Links")
+      (dolist (link links)
+        (let ((name (or (snorg-page--name link) (alist-get 'name link) ""))
+              (target (snorg-page--link-target link)))
+          ;; A web link's name *is* its URL; printing "URL → URL" is noise.
+          (insert (format "  %-6s %s\n" (alist-get 'kind link)
+                          (if (or (string-empty-p target) (equal name target))
+                              name
+                            (format "%s → %s" name target)))))))
+    ;; A templated page carries its text per region and leaves `content' empty.
+    (cond
+     (regions
+      (snorg-page--rule "Regions")
+      (dolist (region regions)
+        (insert (propertize (format "  %s" (alist-get 'label region))
+                            'face 'bold)
+                "\n"
+                (snorg-page--indent (alist-get 'content region))
+                "\n\n")))
+     ((and content (not (string-empty-p content)))
+      (snorg-page--rule "Transcription")
+      (insert (snorg-page--indent content) "\n")))
+    (when fields
+      (snorg-page--rule "Fields")
+      (dolist (field fields)
+        (insert (format "  %-16s %s\n" (car field) (cdr field)))))
+    (goto-char (point-min))))
+
+(defvar snorg-page-mode-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map (kbd "e") #'snorg-find-page-svg)
+    (define-key map (kbd "E") #'snorg-open-page-svg)
+    (define-key map (kbd "g") #'snorg-page-revert)
+    map)
+  "Keymap for `snorg-page-mode'.
+`q' (bury the buffer) comes from `special-mode'.")
+
+(define-derived-mode snorg-page-mode special-mode "SnPage"
+  "Major mode for the snorg page overview buffer.
+Read-only; the keys are summarized in the header line."
+  (setq header-line-format
+        "snorg-page:  e open svg   E system viewer   g refresh   q quit"))
+
+(defun snorg-page-revert ()
+  "Re-fetch the shown page from the archive and redraw it."
+  (interactive)
+  (unless snorg-page--pageid
+    (user-error "snorg: nothing to refresh"))
+  (snorg-page--render snorg-page--pageid t)
+  (message "snorg: refreshed %s" snorg-page--pageid))
+
+;;;###autoload
+(defun snorg-show-page (&optional pageid)
+  "Show everything snorg knows about PAGEID in `*snorg-page*'.
+Interactively, PAGEID is the page at point in a `snorg-query' list (or
+the page already shown).  The overview gathers the note, the page's
+position and star, its tags and device keywords, its titles and links,
+and its transcription -- per region on a templated page."
+  (interactive)
+  (let ((pageid (or pageid (snorg--pageid-at-point)))
+        (buffer (get-buffer-create "*snorg-page*")))
+    (with-current-buffer buffer
+      (snorg-page-mode)
+      (snorg-page--render pageid))
+    (pop-to-buffer buffer)))
+
+;;;; Query list
+
+(defvar snorg--query-history nil
+  "Minibuffer history of `snorg-query' expressions.")
+
+(defvar-local snorg-query--expr nil
+  "Query expression the `*snorg-query*' buffer is showing.")
+
+(defun snorg--query-entries (expr)
+  "Return `tabulated-list-entries' for the query EXPR.
+Parses the CLI's browse-only long form (`query -l'): seven tab-separated
+columns, PAGEID first.  The columns are never escaped, so the split is
+strictly positional -- a value is never re-split on whitespace."
+  (mapcar
+   (lambda (line)
+     (let ((column (split-string line "\t")))
+       (list (nth 0 column)
+             (vector (or (nth 1 column) "")
+                     (or (nth 2 column) "")
+                     (if (equal (nth 3 column) "*") "★" "")
+                     (or (nth 4 column) "")
+                     (or (nth 5 column) "")
+                     (or (nth 6 column) "")))))
+   (split-string (snorg--call "query" "-l" expr) "\n" t)))
+
+(defun snorg-query--page< (a b)
+  "Sort tabulated-list rows A and B by page number, numerically.
+The column reads `pN', which sorts wrong as a string (p10 before p2)."
+  (< (string-to-number (string-remove-prefix "p" (aref (cadr a) 1)))
+     (string-to-number (string-remove-prefix "p" (aref (cadr b) 1)))))
+
+(defun snorg-query--refresh ()
+  "Re-run the buffer's query, refilling `tabulated-list-entries'."
+  (setq tabulated-list-entries (snorg--query-entries snorg-query--expr)))
+
+(defvar snorg-query-mode-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map (kbd "RET") #'snorg-show-page)
+    (define-key map (kbd "e")   #'snorg-find-page-svg)
+    (define-key map (kbd "E")   #'snorg-open-page-svg)
+    (define-key map (kbd "n")   #'next-line)
+    (define-key map (kbd "p")   #'previous-line)
+    (define-key map (kbd "h")   #'snorg-query-help)
+    (define-key map (kbd "?")   #'snorg-query-help)
+    map)
+  "Keymap for `snorg-query-mode'.
+`g' (re-run the query) and `q' (bury the list) come from
+`tabulated-list-mode'.")
+
+(define-derived-mode snorg-query-mode tabulated-list-mode "SnQuery"
+  "Major mode listing the archive pages matched by a snorg query.
+One row per page.  The PAGEID is the row *id* rather than a column --
+it is long and opaque, and every command reads it back with
+`tabulated-list-get-id'.  `h' lists the keys."
+  (setq tabulated-list-format
+        (vector '("Note" 24 t)
+                (list "Page" 5 #'snorg-query--page<)
+                '("★" 2 t)
+                '("Headings" 40 t)
+                '("Keywords" 16 t)
+                '("Tags" 16 t)))
+  (setq tabulated-list-padding 1)
+  (add-hook 'tabulated-list-revert-hook #'snorg-query--refresh nil t)
+  (tabulated-list-init-header))
+
+(defun snorg-query-help ()
+  "Show the `snorg-query-mode' keys in the echo area."
+  (interactive)
+  (message "%s"
+           (concat
+            "snorg-query keys:\n"
+            "  RET        page overview -- everything snorg knows about it\n"
+            "  e          visit the page SVG in Emacs\n"
+            "  E          open the page SVG in the system viewer\n"
+            "  n / p      next / previous page\n"
+            "  g          re-run the query\n"
+            "  q          bury the list\n"
+            "  h / ?      this help")))
+
+;;;###autoload
+(defun snorg-query (expr)
+  "List the archive pages matching the query EXPR in `*snorg-query*'.
+EXPR is a snorg query expression -- terms joined by AND/OR/NOT and
+grouped with parentheses, e.g. \"all\", \"starred AND tag:work\",
+\"date:today\", \"content~regexp\"; see the snorg README for the full
+vocabulary.  Defaults to \"all\"."
+  (interactive
+   (list (read-string "snorg query: " nil 'snorg--query-history "all")))
+  (let ((buffer (get-buffer-create "*snorg-query*")))
+    (with-current-buffer buffer
+      (snorg-query-mode)
+      (setq snorg-query--expr expr)
+      (snorg-query--refresh)
+      (tabulated-list-print)
+      (when (null tabulated-list-entries)
+        (message "snorg: no pages match %s" expr)))
+    (pop-to-buffer buffer)))
 
 ;;;; Backend interface
 
@@ -416,7 +812,7 @@ becomes a hand transcription."
                   :name "snorg-analyze-edit"
                   :buffer (generate-new-buffer " *snorg-analyze-edit*")
                   :noquery t
-                  :command (append (list snorg-executable)
+                  :command (append (list (snorg--executable))
                                    (snorg--global-args)
                                    (list "analyze-edit" pageid)))))
       (set-process-sentinel
@@ -430,11 +826,13 @@ becomes a hand transcription."
                  (message "snorg analyze-edit failed: %s"
                           (if (string-empty-p out) "(no output)" out))
                (message "snorg: %s" out)
-               ;; Refresh when anything actually changed: content (edited/
-               ;; reverted) or one or more title/link names ("N name(s)
-               ;; updated"), but not a plain "unchanged".
+               ;; Refresh when anything actually changed.  The CLI reports the
+               ;; save in the change vocabulary -- "PAGEID: updated +2/-0, 1
+               ;; name" -- so any text verdict other than a bare "unchanged", or
+               ;; a name or region clause alongside it, means there is something
+               ;; to re-read.
                (when (and snorg-analyze-edit-refresh
-                          (string-match "\\(edited\\|reverted\\|name(s) updated\\)" out))
+                          (string-match "\\(new\\|updated\\|cleared\\|reverted\\|name\\|region\\)" out))
                  (snorg--analyze-edit-refresh pageid origin view-p)))))))
       (message "snorg: editing %s -- finish with C-x #" pageid))))
 
@@ -461,7 +859,7 @@ note's org subtree is refreshed in place (see `snorg-analyze-edit-refresh')."
                   :name "snorg-analyze"
                   :buffer (generate-new-buffer " *snorg-analyze*")
                   :noquery t
-                  :command (append (list snorg-executable)
+                  :command (append (list (snorg--executable))
                                    (snorg--global-args)
                                    (list "analyze")
                                    (and force (list "--force"))
@@ -484,7 +882,8 @@ note's org subtree is refreshed in place (see `snorg-analyze-edit-refresh')."
 ;;;; Org link types
 
 (defun snorg--archive-root-for (rel)
-  "Return the absolute archive root REL (an archive-relative path) resolves against.
+  "Return the absolute archive root REL resolves against.
+REL is an archive-relative path.
 `snorg-archive' wins when set; otherwise the root cached from `retrieve'
 output; otherwise it is fetched by retrieving REL's owning note — every
 archive-relative path is prefixed by its FILE_ID, so REL's first path
@@ -495,63 +894,80 @@ component names the note to retrieve."
              snorg--archive-root)
       (user-error "Cannot resolve the archive root for %s" rel)))
 
-(defun snorg--follow-svg (path _)
-  "Open the archive-relative SVG PATH from the archive."
-  (find-file (expand-file-name path (snorg--archive-root-for path))))
+(defun snorg--follow-svg (pageid _)
+  "Open the SVG of PAGEID from the archive.
+The link carries the bare PAGEID -- it is unique across the archive, so
+`retrieve' (cached) resolves both the owning note and the SVG path."
+  (let ((svg (snorg--page-svg pageid)))
+    (unless (file-exists-p svg)
+      (user-error "snorg: missing SVG %s" svg))
+    (find-file svg)))
 
-(defun snorg--follow-note-page (backend path)
-  "Follow a BACKEND note-page link PATH of the form FILE_ID::PAGEID.
-FILE_ID is the raw snorg FILE_ID; BACKEND maps it to its own note.  Open
-that note and move point to the heading whose :SNORG_PAGEID: matches.
-Core registers the generic `snorg-note:' org link type on top of this."
-  (let* ((parts (split-string path "::"))
-         (file-id (car parts))
-         (pageid (cadr parts))
+(defun snorg--note-page-id (id)
+  "Split link payload ID into (FILE_ID . PAGEID), PAGEID nil for a note link.
+A PAGEID (`P...') is unique across the archive, so `retrieve' (cached)
+resolves the note that owns it; a FILE_ID (`F...') already names the note
+and targets no page.  The prefixes are the device's own id format (see
+docs/supernote-format.md), which is what lets one bare id serve both."
+  (if (string-prefix-p "P" id)
+      (cons (alist-get 'file_id (car (snorg--page-view id))) id)
+    (cons id nil)))
+
+(defun snorg--follow-note-page (backend id)
+  "Follow a BACKEND note-page link for ID, a snorg PAGEID or FILE_ID.
+BACKEND maps the owning FILE_ID to its own note; open it and, for a
+PAGEID, move point to the heading whose :SNORG_PAGEID: matches.  Core
+registers the generic `snorg-note:' org link type on top of this."
+  (let* ((target (snorg--note-page-id id))
+         (file-id (car target))
+         (pageid (cdr target))
          (file (snorg-backend-find backend file-id)))
     (unless file
       (user-error "No %s note for snorg %s" backend file-id))
     (find-file file)
     (widen)
     (goto-char (point-min))
-    (if (and pageid (org-find-property "SNORG_PAGEID" pageid))
-        (progn
-          (goto-char (org-find-property "SNORG_PAGEID" pageid))
-          (org-fold-show-entry))
-      (when pageid
-        (message "snorg: page %s not found in %s" pageid file-id)))))
+    (when pageid
+      (let ((pos (org-find-property "SNORG_PAGEID" pageid)))
+        (if pos
+            (progn
+              (goto-char pos)
+              (org-fold-show-entry))
+          (message "snorg: page %s not found in %s" pageid file-id))))))
 
-(defun snorg--read-page (view prompt key)
-  "Prompt with PROMPT for a page of retrieve alist VIEW; return its KEY value."
+(defun snorg--read-page (view prompt)
+  "Prompt with PROMPT for a page of retrieve alist VIEW; return its PAGEID."
   (let* ((choices
           (mapcar (lambda (page)
                     (cons (format "page %s" (alist-get 'number page))
-                          (alist-get key page)))
+                          (alist-get 'page_id page)))
                   (alist-get 'pages view)))
          (sel (completing-read prompt choices nil t)))
     (or (cdr (assoc sel choices))
         (user-error "Unknown page: %s" sel))))
 
+(defun snorg--complete-pageid ()
+  "Prompt for an archived note, then one of its pages; return the PAGEID.
+Both link types carry the bare PAGEID, so both build on this."
+  (snorg--read-page (snorg--retrieve-cached (snorg-read-file-id)) "Page: "))
+
 (defun snorg--complete-svg ()
-  "Completion for `snorg:' links: pick a note, then a page SVG."
-  (let ((view (snorg--retrieve-cached (snorg-read-file-id))))
-    (concat "snorg:" (snorg--read-page view "Page: " 'svg))))
+  "Completion for `snorg:' links: pick a note, then a page."
+  (concat "snorg:" (snorg--complete-pageid)))
 
 (defun snorg--complete-note-page ()
-  "Completion for `snorg-note:' links: pick a note, then a page.
-The link carries the raw snorg FILE_ID and PAGEID; the active backend
-translates the FILE_ID to its own note when the link is followed."
-  (let* ((file-id (snorg-read-file-id))
-         (view (snorg--retrieve-cached file-id)))
-    (concat "snorg-note:" file-id
-            "::" (snorg--read-page view "Page: " 'page_id))))
+  "Completion for `snorg-note:' links: pick a note, then a page."
+  (concat "snorg-note:" (snorg--complete-pageid)))
 
 (org-link-set-parameters "snorg"
                          :follow #'snorg--follow-svg
                          :complete #'snorg--complete-svg)
 
-;; One backend-agnostic note-page link type.  The link stores the raw snorg
-;; FILE_ID (not any backend's id), so it resolves through whichever backend is
-;; active -- backends no longer register their own link type.
+;; One backend-agnostic note-page link type.  The link stores one bare snorg id
+;; (not any backend's id): a PAGEID, which the archive resolves to its owning
+;; FILE_ID, or a FILE_ID when the link targets a note rather than a page.  Either
+;; way whichever backend is active maps that FILE_ID to its own note -- backends
+;; no longer register their own link type.
 (org-link-set-parameters
  "snorg-note"
  :follow (lambda (path _) (snorg--follow-note-page (snorg--backend) path))
@@ -772,15 +1188,23 @@ restoring the folding, the window layout and point from before entry."
 
 ;;;; Open externally
 
-(defun snorg-view-open-external ()
-  "Open the SVG under review in the system viewer via `xdg-open'.
-Runs asynchronously so Emacs is not blocked."
-  (interactive)
-  (unless (and snorg-view--svg (file-exists-p snorg-view--svg))
-    (user-error "snorg: no SVG to open"))
+(defun snorg--open-external (file)
+  "Hand FILE to the system viewer via `xdg-open'.
+Runs asynchronously so Emacs is not blocked.  This is the `dired-do-open'
+equivalent for the Emacs 28 baseline this package targets, where that
+command does not exist yet."
+  (unless (and file (file-exists-p file))
+    (user-error "snorg: no such file to open: %s" (or file "")))
   (if (fboundp 'browse-url-xdg-open)
-      (browse-url-xdg-open snorg-view--svg)
-    (start-process "snorg-xdg-open" nil "xdg-open" snorg-view--svg)))
+      (browse-url-xdg-open file)
+    (start-process "snorg-xdg-open" nil "xdg-open" file)))
+
+(defun snorg-view-open-external ()
+  "Open the SVG under review in the system viewer."
+  (interactive)
+  (unless snorg-view--svg
+    (user-error "snorg: no SVG to open"))
+  (snorg--open-external snorg-view--svg))
 
 ;;;; Version diff overlay
 
@@ -981,6 +1405,7 @@ once (clamped to the current version)."
     (define-key map "v" #'snorg-view)
     (define-key map "e" #'snorg-analyze-edit)
     (define-key map "a" #'snorg-analyze)
+    (define-key map "q" #'snorg-query)
     (define-key map "r" #'snorg-reset-cache)
     map)
   "Prefix keymap gathering the interactive snorg commands.
