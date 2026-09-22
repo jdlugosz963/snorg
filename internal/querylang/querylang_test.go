@@ -27,6 +27,12 @@ func TestParse(t *testing.T) {
 		{`content~"^(a|b)$"`, `content~"^(a|b)$"`},
 		{`content~"^\d+$"`, `content~^\d+$`}, // only \" and \\ are escapes
 		{`content~"a\"b"`, `content~"a\"b"`}, // …so a quote can still be embedded
+		// A bare value may hold brackets, so an ordinary character class needs no
+		// quoting. String() re-quotes it anyway — one quote() serves both the value
+		// and the [scope], where a bracket really would be ambiguous.
+		{"content~[Tt]odo", `content~"[Tt]odo"`},
+		{"content~foo[0-9]+", `content~"foo[0-9]+"`},
+		{"region[hdr]~[0-9]+", `region[hdr]~"[0-9]+"`},
 		{"region[title]:invoice", "region[title]:invoice"},
 		// A box id is whatever the config called it, digits included.
 		{"region[1]:invoice", "region[1]:invoice"},
@@ -55,6 +61,7 @@ func TestStringRoundTrips(t *testing.T) {
 		`starred AND (date:2026-04-04..2026-09-12 OR content:"some thing")`,
 		`NOT templated OR region[title]~^Inv`,
 		`content~"^(a|b)$"`,
+		`content~[Tt]odo`,
 		`note="F 1"`,
 	} {
 		e, err := Parse(in)
@@ -81,6 +88,7 @@ func TestParseErrors(t *testing.T) {
 		"content: foo",     // the value must follow the operator
 		"content:",
 		"content~^# Invoice", // an unquoted value stops at the space
+		"content~a(b|c)",     // …and at a paren, which closes a group
 		`content:"foo`,       // unterminated quote
 		"(a",
 		"a)",

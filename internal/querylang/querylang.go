@@ -29,10 +29,12 @@ import (
 
 // The lexer is stateful because a value is lexed by different rules than an
 // expression: "2026-04-04..2026-09-12" is one token, not five, and a bare value
-// may hold anything but the expression's own punctuation. An operator pushes the
-// Value state and the value pops it. The Value state deliberately has no
-// whitespace rule, so a value must follow its operator immediately — "content: x"
-// is an error instead of quietly taking "x" as the value of an empty-looking term.
+// may hold anything but whitespace and parens — a paren is the one character that
+// can legitimately follow a value, closing a group, so "content~[Tt]odo" needs no
+// quoting while "content~a(b|c)" does. An operator pushes the Value state and the
+// value pops it. The Value state deliberately has no whitespace rule, so a value
+// must follow its operator immediately — "content: x" is an error instead of
+// quietly taking "x" as the value of an empty-looking term.
 var queryLexer = lexer.MustStateful(lexer.Rules{
 	"Root": {
 		{Name: "whitespace", Pattern: `\s+`},
@@ -55,7 +57,7 @@ var queryLexer = lexer.MustStateful(lexer.Rules{
 	},
 	"Value": {
 		{Name: "Quoted", Pattern: `"(?:\\.|[^"\\])*"|'[^']*'`, Action: lexer.Pop()},
-		{Name: "Bare", Pattern: `[^\s()\[\]]+`, Action: lexer.Pop()},
+		{Name: "Bare", Pattern: `[^\s()]+`, Action: lexer.Pop()},
 	},
 })
 

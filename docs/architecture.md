@@ -46,7 +46,7 @@ organizing mechanism independent of device keywords.
 
 `retrieve` prints the selected pages assembled into a JSON array of `NoteView`s,
 grouped per owning note (full note metadata, only the requested pages); a whole
-note is `query note <FILE_ID> | retrieve`. `export` groups the same way and
+note is `query note=<FILE_ID> | retrieve`. `export` groups the same way and
 renders the config's template once over the whole array (context key `notes`),
 so one template invocation sees every selected note.
 
