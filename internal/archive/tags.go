@@ -42,7 +42,7 @@ func (a *Archive) TagNote(fileID, tag string, remove bool) (bool, error) {
 		return false, nil
 	}
 	nd.Tags = next
-	if err := a.WriteNote(nd); err != nil {
+	if _, err := a.WriteNote(nd); err != nil {
 		return false, err
 	}
 	return true, nil

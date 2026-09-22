@@ -31,12 +31,12 @@ A `Client` bundles an archive root with merged configuration.
 | `Tag(tag, pageIDs, remove)` | add/remove a snorg-managed tag on pages (independent of device keywords); returns the count changed |
 | `Retrieve(pageIDs)` | assemble pages into a `*Result` (`{Archive, Notes}`) |
 | `ReadNote/ReadPage/ReadSVG/FindPage` | raw on-disk document access |
-| `Ingest(paths, jobs)` | register `.note` files (`NoteFiles(dir)` enumerates them); each `IngestResult.Report` (`*WriteReport`) says what the incremental reconcile changed |
+| `Ingest(paths, opts)` | register `.note` files (`NoteFiles(dir)` enumerates them); `IngestOptions.OnResult` streams each note as it lands; each `IngestResult.Report` (`*WriteReport`) says what the incremental reconcile changed |
 | `Export(pageIDs)` | render through the config's template (`RenderTemplate` for an arbitrary one) |
 | `ServeHandler(pageIDs, flat)` | the built-in viewer as an `http.Handler` (empty = whole archive) |
 | `Analyze(ctx, pageIDs, opts)` | vision-LLM transcription (config-driven provider + prompts); each `AnalyzeResult` carries the page `Outcome` and, for a templated page, per-box `Regions []RegionOutcome` |
 | `AnalyzePage(ctx, prov, spec, id, force)` | one page with a caller-supplied `Provider` (returns a `PageResult{Outcome, Regions}`) |
-| `Migrate(pageIDs)` / `MigrateAll()` | schema upgrade |
+| `Migrate(pageIDs, opts)` / `MigrateAll(opts)` | schema upgrade (`MigrateOptions.OnResult` streams results) |
 | `PageBuffer(id)` / `ApplyPage(id, buf)` | programmatic transcription edit — no `$EDITOR` |
 
 The predicate constructors (`All`, `Starred`, `Unanalyzed`, `Not`, `And`, `InSet`,

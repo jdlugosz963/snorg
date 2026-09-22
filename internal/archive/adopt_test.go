@@ -168,16 +168,16 @@ func TestWriteAdoptionCarriesRegionAnalyses(t *testing.T) {
 	}
 }
 
-// TestWriteAdoptionHealsDuplicate: an archive left duplicated by an older snorg
-// collapses on the next ingest, and the copy holding the transcription is the one
-// whose state is kept.
-func TestWriteAdoptionHealsDuplicate(t *testing.T) {
+// TestWriteAdoptionPurgesOtherCopies: a page sitting in more than one note collapses
+// onto the note ingesting it, and the copy holding the transcription is the one whose
+// state is kept.
+func TestWriteAdoptionPurgesOtherCopies(t *testing.T) {
 	a := New(t.TempDir())
 	if _, err := a.Write(noteIn("F_A", "Pc"), svgs("Pc")); err != nil {
 		t.Fatal(err)
 	}
 	seedPage(t, a, "F_A", "Pc", "the real transcription")
-	// F_B holds a bare second copy, as a pre-invariant ingest would have left it.
+	// F_B holds a bare second copy, as a stray hand-copied file would.
 	if _, err := a.Write(noteIn("F_B", "Pc"), svgs("Pc")); err != nil {
 		t.Fatal(err)
 	}
@@ -193,7 +193,7 @@ func TestWriteAdoptionHealsDuplicate(t *testing.T) {
 		t.Fatal(err)
 	}
 	nd.Pages = []NotePageRef{{ID: "Pc", Number: 1}}
-	if err := a.WriteNote(nd); err != nil {
+	if _, err := a.WriteNote(nd); err != nil {
 		t.Fatal(err)
 	}
 
@@ -214,7 +214,7 @@ func TestWriteAdoptionHealsDuplicate(t *testing.T) {
 	}
 	owner, err := a.FindPage("Pc")
 	if err != nil || owner != "F_C" {
-		t.Errorf("FindPage(Pc) = %q, %v want F_C — the duplicate did not collapse", owner, err)
+		t.Errorf("FindPage(Pc) = %q, %v want F_C — the copies did not collapse", owner, err)
 	}
 }
 
@@ -282,5 +282,41 @@ func TestWriteAdoptsSeveralPagesFromOneNote(t *testing.T) {
 		if md, err := a.ReadAnalysisMD("F_B", id); err != nil || md == "" {
 			t.Errorf("%s transcription not carried: %q %v", id, md, err)
 		}
+	}
+}
+
+// TestWriteAdoptionSkipsUnrepairedDonor: Repaired names the notes this write
+// rewrote, so a donor with nothing left to drop must not appear. That is the state a
+// crash between the donor's note.json repair and the removal of its page files
+// leaves behind — donors are found by filename, so the stale files still make the
+// note a donor on the next write, but its note.json is already correct.
+func TestWriteAdoptionSkipsUnrepairedDonor(t *testing.T) {
+	a := New(t.TempDir())
+	if _, err := a.Write(noteIn("F_A", "Pc"), svgs("Pc")); err != nil {
+		t.Fatal(err)
+	}
+	seedPage(t, a, "F_A", "Pc", "the transcription")
+	// F_B needs a note.json of its own or List skips it and it is never a donor.
+	if _, err := a.Write(noteIn("F_B", "Pz"), svgs("Pz")); err != nil {
+		t.Fatal(err)
+	}
+	// The residue: F_B holds a stray copy of Pc's files while its note.json — the
+	// record query and retrieve read — never mentions Pc.
+	if err := os.WriteFile(filepath.Join(a.Root, "F_B", "Pc.json"), mustJSON(t, PageDoc{SchemaVersion: CurrentSchemaVersion, PageID: "Pc"}), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	rep, err := a.Write(noteIn("F_C", "Pc"), svgs("Pc"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"F_A"}; !reflect.DeepEqual(rep.Repaired, want) {
+		t.Errorf("Repaired = %v want %v (F_B's note.json never listed Pc, so nothing was rewritten)", rep.Repaired, want)
+	}
+	// Reported or not, the stray copy is gone: the invariant is what matters.
+	mustNotExist(t, filepath.Join(a.Root, "F_B", "Pc.json"))
+	owner, err := a.FindPage("Pc")
+	if err != nil || owner != "F_C" {
+		t.Errorf("FindPage(Pc) = %q, %v want F_C", owner, err)
 	}
 }

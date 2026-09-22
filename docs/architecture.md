@@ -24,8 +24,8 @@ hook loads the merged config once (see [config.md](config.md)) and hands it to t
 command, which picks and validates only the sections it uses. The CLI is built on
 `urfave/cli/v3`. `ingest` takes
 a single `.note` or a directory (walked recursively for `*.note`) and ingests
-notes through a worker pool: `-j N` caps concurrent notes, default
-`runtime.NumCPU()` (work is CPU-bound native SVG rendering); `-c` config
+notes one at a time — Write reaches across the whole archive (see Archive
+layout), so ingest is single-writer by design; `-c` config
 controls the SVG pipeline (see below). A failed note never aborts the batch — all
 are attempted and failures summarized (non-zero exit). Re-ingest reconciles the
 note's directory in place (see Archive layout); it is the update path.
@@ -189,9 +189,9 @@ donor's own next ingest will write, so the repair converges instead of producing
 second diff later. The donor's `note.json` is rewritten *before* the page's files are
 deleted there: the reverse order leaves a crash window in which a note lists a page
 whose file is gone, and that is precisely the state `query` and `retrieve` hard-error
-on. More than one donor means the archive was already duplicated by an older snorg;
-all of them are purged (the copy holding a transcription supplies the state), so any
-ingest of any note involved heals it.
+on. More than one donor means something outside snorg put a copy there; all of them are
+purged (the copy holding a transcription supplies the state) — the note being ingested
+is the source of truth for the pages it claims.
 
 The other half is ordering. Whichever note is ingested first, the transcription must
 survive, so a page that **leaves** a note is not simply deleted: if it carries

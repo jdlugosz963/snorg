@@ -10,7 +10,7 @@
 //
 //	snorg [-a <archive-path>] [-c config.yaml ...] [--no-user-config] <command> [command flags] [args]
 //
-//	snorg [-a <archive-path>] ingest [-j N] <file-or-dir>
+//	snorg [-a <archive-path>] ingest <file-or-dir>
 //	snorg [-a <archive-path>] list [-l] | list keywords|tags [-l]
 //	snorg [-a <archive-path>] query <filter> [arg]
 //	snorg [-a <archive-path>] tag [-r] <tag> [PAGEID ...]
@@ -145,10 +145,9 @@ func ingestCmd(a *app) *cli.Command {
 		Name:      "ingest",
 		Usage:     "register a .note file (or all *.note under a dir) into the archive",
 		ArgsUsage: "<file-or-dir>",
-		Flags:     []cli.Flag{},
 		Action: func(_ context.Context, cmd *cli.Command) error {
 			if cmd.Args().Len() != 1 {
-				return fmt.Errorf("usage: snorg [-a <archive-path>] ingest [-j N] <file-or-dir>")
+				return fmt.Errorf("usage: snorg [-a <archive-path>] ingest <file-or-dir>")
 			}
 
 			inputPath := cmd.Args().Get(0)

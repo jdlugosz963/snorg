@@ -159,9 +159,9 @@ func (a *Archive) Write(n *snote.Note, svgs map[string][]byte) (*WriteReport, er
 	}
 
 	// Move in every page that moved here on the device, before the prune below reads
-	// the directory. A page this note already owns keeps its own state; the stale copy
-	// elsewhere is purged either way, which is how an archive duplicated by an older
-	// snorg heals itself.
+	// the directory. A page this note already owns keeps its own state; the copy
+	// elsewhere is purged either way — this note is the source of truth for the pages
+	// it claims.
 	adopted := make(map[string][]string, len(foreign.Origins))
 	for _, id := range sortedKeys(foreign.Origins) {
 		o := foreign.Origins[id]

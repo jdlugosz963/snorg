@@ -97,8 +97,8 @@ func (a *Archive) ReadSVG(fileID, pageID string) ([]byte, error) {
 // FindPage returns the FILE_ID of the note that owns pageID, scanning every note
 // directory. A PAGEID names exactly one page in exactly one note — the invariant
 // Write enforces by adopting a page that moved between notes on the device (adopt.go)
-// — so more than one hit means an archive left duplicated by an older snorg, which
-// re-ingesting either note repairs. It errors when no note, or more than one, holds
+// — so more than one hit means a copy snorg did not put there, which re-ingesting
+// the note that owns the page purges. It errors when no note, or more than one, holds
 // the page.
 func (a *Archive) FindPage(pageID string) (string, error) {
 	ids, err := a.List()
@@ -134,11 +134,11 @@ func (a *Archive) WritePage(fileID string, pd PageDoc) (bool, error) {
 // WriteNote writes nd to <nd.FileID>/note.json in the canonical format, leaving
 // every sibling artifact (pages, svgs, backgrounds) untouched. Like WritePage it
 // stamps the current schema version so a persisted doc always reports the grammar
-// it was written in.
-func (a *Archive) WriteNote(nd NoteDoc) error {
+// it was written in, and reports whether the bytes actually changed, so a caller
+// can tell a real metadata write from a no-op.
+func (a *Archive) WriteNote(nd NoteDoc) (bool, error) {
 	nd.SchemaVersion = CurrentSchemaVersion
-	_, err := writeJSONIfChanged(filepath.Join(a.Root, nd.FileID, "note.json"), nd)
-	return err
+	return writeJSONIfChanged(filepath.Join(a.Root, nd.FileID, "note.json"), nd)
 }
 
 // mdName is the transcription sidecar filename for a page. A page has exactly one

@@ -11,6 +11,12 @@ package archive
 // Every read here happens in Write's preflight phase, before the first mutation, so a
 // donor with a stale schema aborts the write with the archive untouched — adoption
 // can never half-migrate a page.
+//
+// This is also what makes Write single-writer: it no longer confines itself to its
+// own <FILE_ID>/ directory but scans every note and mutates the donors it finds, so
+// two concurrent Writes could interleave one's preflight with the other's mutation
+// and leave a note.json listing a page whose files are gone — the state query and
+// retrieve hard-error on. Ingest therefore walks notes sequentially.
 
 import (
 	"errors"
@@ -29,8 +35,10 @@ type pageOrigin struct {
 	// From is the directory whose state is carried over: the first donor holding a
 	// transcription, else the first donor. The orphan store appears as orphanDir.
 	From string
-	// Donors is every directory that held the page, sorted. All of them are purged —
-	// more than one means the archive was already duplicated and this write heals it.
+	// Donors is every directory that held the page, sorted. All of them are purged:
+	// the note being ingested is the source of truth for the pages it claims, so a
+	// copy anywhere else is stale. More than one means something outside snorg put
+	// it there (a hand-copied file, a crash mid-move).
 	Donors []string
 	// Doc is From's page doc, zero when it had none (a donor holding only a stray
 	// sidecar is still worth rescuing).
@@ -116,8 +124,9 @@ func (a *Archive) locateForeign(selfID string, pages []snote.Page, have map[stri
 }
 
 // preferredDonor picks the directory whose state is worth carrying: the first holding
-// a transcription, else the first. Only an already-duplicated archive has a choice to
-// make, and there the copy with the text is the one that matters.
+// a transcription, else the first. There is a choice to make only when a page sits in
+// more than one place, and then the copy with the text is the one that matters —
+// every other copy is about to be purged.
 func (a *Archive) preferredDonor(dirs []string, pageID string) string {
 	for _, dir := range dirs {
 		if _, err := os.Stat(a.mdPath(dir, pageID)); err == nil {
@@ -129,10 +138,9 @@ func (a *Archive) preferredDonor(dirs []string, pageID string) string {
 
 // adopt moves a page into dstDir (the note now claiming it) and empties every donor.
 // When keepOwn is set the destination already holds the page and its own state wins,
-// so the donors are purged without carrying anything over — that is the heal path for
-// an archive duplicated before the invariant existed, and the one place a
-// transcription is dropped rather than parked. It returns the FILE_IDs whose note.json
-// it repaired.
+// so the donors are purged without carrying anything over — the destination is the
+// note claiming the page, and this is the one place a transcription is dropped rather
+// than parked. It returns the FILE_IDs whose note.json it repaired.
 //
 // The order per donor matters: the sidecars land at the destination before anything is
 // deleted, and the donor's note.json stops referencing the page before the page's own
@@ -153,15 +161,19 @@ func (a *Archive) adopt(dstDir, pageID string, o pageOrigin, notes map[string]No
 			// Fold the drop back into the map: when several pages move out of the
 			// same note in one write, each repair must build on the last, or the
 			// second would write back the page the first removed.
-			// Fold the drop back into the map: when several pages move out of the
-			// same note in one write, each repair must build on the last, or the
-			// second would write back the page the first removed.
 			nd = dropPageRef(nd, pageID)
 			notes[donor] = nd
-			if err := a.WriteNote(nd); err != nil {
+			changed, err := a.WriteNote(nd)
+			if err != nil {
 				return nil, err
 			}
-			repaired = append(repaired, donor)
+			// Nothing to drop means nothing was rewritten, and a donor is found by
+			// filename: a crash between this repair and the removal below leaves
+			// files behind under a note.json that is already correct. Reporting it
+			// as repaired would claim a write that did not happen.
+			if changed {
+				repaired = append(repaired, donor)
+			}
 		}
 		if err := removePageFiles(donorDir, pageID); err != nil {
 			return nil, err
