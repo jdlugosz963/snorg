@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"image"
+	"sort"
 	"strings"
 
 	"github.com/jdlugosz963/snorg/internal/archive"
@@ -57,32 +58,32 @@ type Spec struct {
 	Fields  []Field
 }
 
-// Outcome says what Page did: skipped an unchanged page, analyzed a fresh one,
-// updated an existing analysis against the previous transcription, or left
-// conflict markers where the new analysis and the user's edits overlap.
-type Outcome string
-
-const (
-	Skipped    Outcome = "skipped"
-	Analyzed   Outcome = "analyzed"
-	Updated    Outcome = "updated"
-	Conflicted Outcome = "conflict" // resolve via analyze-edit
-)
-
-// RegionOutcome is one template box's outcome on a templated page: Skipped means
-// its fingerprint matched and the previous transcription was reused (no LLM call),
-// Analyzed/Updated means it was re-cropped and re-transcribed. Only analyze:true
-// boxes appear.
-type RegionOutcome struct {
-	ID      string
-	Outcome Outcome
+// RegionResult is one analyze:true template box's outcome: the shared change
+// (id, label, text) plus how it was produced. Skipped means its fingerprint
+// matched, so the previous transcription was reused with no LLM call; Blank means
+// its rect held no ink — an unfilled field on a form template — so it transcribed
+// to empty, also with no call. Both are about cost, not about text: a skipped box
+// and a re-transcribed box can each report unchanged text.
+type RegionResult struct {
+	archive.RegionChange
+	Skipped, Blank bool
 }
 
-// PageResult is what Page did: the page-level Outcome and, for a templated page,
-// the per-box RegionOutcomes (nil for a non-templated page).
+// PageResult is what Page did to one page: orthogonal facts, sparse — a zero
+// field means that thing did not happen. A skipped page carries nothing else.
+// Content is the whole-page transcription's change and is nil on a templated page,
+// whose text lives in Regions instead; Regions is nil on every other page. Calls
+// is what the page cost in LLM round-trips, so a blank page or box (which
+// transcribe to empty without a call) is visible as work that was free.
 type PageResult struct {
-	Outcome Outcome
-	Regions []RegionOutcome
+	PageID      string
+	Skipped     bool
+	Content     *archive.TextChange
+	Regions     []RegionResult
+	Names       []archive.NameChange
+	Fields      []string // custom fields regenerated, sorted
+	Calls       int
+	JSONChanged bool
 }
 
 // Page locates the page owning pageID and analyzes it through t and g per spec:
@@ -92,8 +93,10 @@ type PageResult struct {
 // set; a changed page with a previous transcription is re-analyzed through the
 // update prompt so the new content diffs minimally against the old. User edits
 // (analyze-edit) are 3-way merged back onto the new transcription; overlaps
-// leave conflict markers in the md and report the Conflicted outcome.
+// leave conflict markers in the md, which the returned PageResult reports as
+// Content.Conflicts.
 func Page(ctx context.Context, a *archive.Archive, t Transcriber, g Generator, spec Spec, pageID string, force bool) (PageResult, error) {
+	res := PageResult{PageID: pageID}
 	fileID, err := a.FindPage(pageID)
 	if err != nil {
 		return PageResult{}, err
@@ -133,19 +136,18 @@ func Page(ctx context.Context, a *archive.Archive, t Transcriber, g Generator, s
 		// skips only when every analyze box's fingerprint also matches, so a
 		// moved/added box rect (config change, same handwriting) still re-triggers.
 		if tmpl == nil || regionsCurrent(m, tmpl, pd) {
-			return PageResult{Outcome: Skipped}, nil
+			res.Skipped = true
+			return res, nil
 		}
 	}
 
 	// A templated page transcribes per region; every other page transcribes its
 	// whole content. Either runs before the title/link regions so the page/content
-	// image is the first LLM call.
-	var outcome Outcome
-	var regions []RegionOutcome
+	// image is the first LLM call. Both fill res in place.
 	if tmpl != nil {
-		outcome, regions, err = analyzeRegions(ctx, a, t, spec, img, m, fileID, pageID, &pd, tmpl, hash, force)
+		err = analyzeRegions(ctx, a, t, spec, img, m, fileID, pageID, &pd, tmpl, hash, force, &res)
 	} else {
-		outcome, err = analyzeContent(ctx, a, t, g, spec, img, fileID, pageID, &pd, hash)
+		err = analyzeContent(ctx, a, t, g, spec, img, m, fileID, pageID, &pd, hash, &res)
 	}
 	if err != nil {
 		return PageResult{}, err
@@ -163,6 +165,16 @@ func Page(ctx context.Context, a *archive.Archive, t Transcriber, g Generator, s
 		if err != nil {
 			return PageResult{}, fmt.Errorf("title %d: %w", i, err)
 		}
+		res.Calls++
+		was := ""
+		if title.Analysis != nil {
+			was = title.Analysis.Name
+		}
+		if name != was {
+			// Override stays false: analyze produces AI names, which a later
+			// analyze may overwrite. Only analyze-edit sets Edited.
+			res.Names = append(res.Names, archive.NameChange{Kind: "title", Index: i + 1, Was: was, Now: name})
+		}
 		pd.Titles[i].Analysis = &archive.TitleAnalysis{Name: name}
 	}
 	for i, link := range pd.Links {
@@ -173,67 +185,96 @@ func Page(ctx context.Context, a *archive.Archive, t Transcriber, g Generator, s
 		if err != nil {
 			return PageResult{}, fmt.Errorf("link %d: %w", i, err)
 		}
+		res.Calls++
+		was := ""
+		if link.Analysis != nil {
+			was = link.Analysis.Name
+		}
+		if name != was {
+			res.Names = append(res.Names, archive.NameChange{Kind: "link", Index: i + 1, Was: was, Now: name})
+		}
 		pd.Links[i].Analysis = &archive.LinkAnalysis{Name: name}
 	}
 
-	if _, err := a.WritePage(fileID, pd); err != nil {
+	res.JSONChanged, err = a.WritePage(fileID, pd)
+	if err != nil {
 		return PageResult{}, err
 	}
-	return PageResult{Outcome: outcome, Regions: regions}, nil
+	return res, nil
 }
 
 // analyzeContent transcribes the whole page into the <PAGEID>.md content sidecar
 // (the non-template path), 3-way-merging with user edits and generating custom
-// fields from the effective content. It sets pd.Analysis (source hash + fields).
-func analyzeContent(ctx context.Context, a *archive.Archive, t Transcriber, g Generator, spec Spec, img *image.RGBA, fileID, pageID string, pd *archive.PageDoc, hash string) (Outcome, error) {
-	page, err := toPNG(img)
-	if err != nil {
-		return "", err
-	}
+// fields from the effective content. It sets pd.Analysis (source hash + fields)
+// and fills res.Content/Fields/Calls. A page with no ink transcribes to nothing
+// without any LLM call.
+func analyzeContent(ctx context.Context, a *archive.Archive, t Transcriber, g Generator, spec Spec, img *image.RGBA, m *mask, fileID, pageID string, pd *archive.PageDoc, hash string, res *PageResult) error {
 	// "Previous" is the AI base: the md with any user edit diff reverse-applied
 	// (see archive.ReadAnalysisBase). The LLM never sees the user's edits; they
 	// are re-applied by the 3-way merge below. A page with only user-written
 	// content has an empty base and gets a fresh transcription.
-	outcome := Analyzed
 	base, err := a.ReadAnalysisBase(fileID, pageID)
 	if err != nil {
-		return "", err
+		return err
 	}
+	// A previous transcription switches the prompt so the model minimizes the
+	// diff against it. It says nothing about what the result will be — whether
+	// the text actually moved is the merge's verdict, not this one's.
 	prompt := spec.Content
 	if base != "" {
-		outcome = Updated
 		prompt = spec.Update + "\n\n" + base
 	}
-	content, err := t.Transcribe(ctx, prompt, page)
-	if err != nil {
-		return "", fmt.Errorf("transcribe page: %w", err)
-	}
-	content = strings.TrimSpace(content)
 
-	// The merge writes the md: theirs (the fresh transcription) reconciled with
-	// any user edits. Fields derive from the effective content — what the user
-	// actually sees — not the raw LLM output.
-	effective, conflicts, err := a.MergeAnalysis(fileID, pageID, content)
-	if err != nil {
-		return "", err
-	}
-	if conflicts {
-		outcome = Conflicted
-	}
-
-	analysis := &archive.PageAnalysis{SourceHash: hash}
-	for _, f := range spec.Fields {
-		out, err := g.Generate(ctx, f.Prompt, effective)
+	// Nothing was drawn on the page: there is no image worth a vision call, so
+	// the transcription is empty. It still flows through the merge below, so an
+	// erased page clears its content, while content the user wrote by hand on a
+	// blank page survives untouched (theirs == base, no change to merge in).
+	var content string
+	if !m.blank() {
+		page, err := toPNG(img)
 		if err != nil {
-			return "", fmt.Errorf("field %s: %w", f.Name, err)
+			return err
 		}
-		if analysis.Fields == nil {
-			analysis.Fields = map[string]string{}
+		out, err := t.Transcribe(ctx, prompt, page)
+		if err != nil {
+			return fmt.Errorf("transcribe page: %w", err)
 		}
-		analysis.Fields[f.Name] = strings.TrimSpace(out)
+		res.Calls++
+		content = strings.TrimSpace(out)
+	}
+
+	// The merge writes the md and reports the transition: theirs (the fresh
+	// transcription) reconciled with any user edits.
+	c, err := a.MergeAnalysis(fileID, pageID, content)
+	if err != nil {
+		return err
+	}
+	res.Content = &c
+
+	// Fields derive from the effective content — what the user actually sees, not
+	// the raw LLM output — so an empty page generates none: no call to invent a
+	// field from nothing, and a field left over from text that has since been
+	// erased goes away with it.
+	analysis := &archive.PageAnalysis{SourceHash: hash}
+	if strings.TrimSpace(c.Now) != "" {
+		for _, f := range spec.Fields {
+			out, err := g.Generate(ctx, f.Prompt, c.Now)
+			if err != nil {
+				return fmt.Errorf("field %s: %w", f.Name, err)
+			}
+			res.Calls++
+			if analysis.Fields == nil {
+				analysis.Fields = map[string]string{}
+			}
+			analysis.Fields[f.Name] = strings.TrimSpace(out)
+			res.Fields = append(res.Fields, f.Name)
+		}
+		// Spec.Fields comes from a config map, whose range order is random;
+		// sorting keeps a reported run reproducible.
+		sort.Strings(res.Fields)
 	}
 	pd.Analysis = analysis // a non-template page carries no region state (analysis.Regions stays nil)
-	return outcome, nil
+	return nil
 }
 
 // analyzeRegions transcribes each analyze:true box of the matched template into
@@ -242,11 +283,12 @@ func analyzeContent(ctx context.Context, a *archive.Archive, t Transcriber, g Ge
 // unchanged (and not force) reuses its previous AI text without an LLM call;
 // changed boxes are cropped and re-transcribed. The assembled document (config box
 // order, then tombstoned sections for ids no longer in the config) is 3-way-merged
-// with any user edits, and pd.Analysis.Regions records each analyze box's new fingerprint.
-func analyzeRegions(ctx context.Context, a *archive.Archive, t Transcriber, spec Spec, img *image.RGBA, m *mask, fileID, pageID string, pd *archive.PageDoc, tmpl *archive.Template, hash string, force bool) (Outcome, []RegionOutcome, error) {
+// with any user edits, pd.Analysis.Regions records each analyze box's new
+// fingerprint, and res.Regions reports one RegionResult per analyze box.
+func analyzeRegions(ctx context.Context, a *archive.Archive, t Transcriber, spec Spec, img *image.RGBA, m *mask, fileID, pageID string, pd *archive.PageDoc, tmpl *archive.Template, hash string, force bool, res *PageResult) error {
 	base, err := a.ReadAnalysisBase(fileID, pageID)
 	if err != nil {
-		return "", nil, err
+		return err
 	}
 	baseSections := archive.ParseRegions(base)
 
@@ -259,13 +301,14 @@ func analyzeRegions(ctx context.Context, a *archive.Archive, t Transcriber, spec
 
 	var sections []archive.RegionSection
 	var regions []archive.RegionDoc
-	var outcomes []RegionOutcome
+	var results []RegionResult
 	known := map[string]bool{}
 	for _, box := range tmpl.Boxes {
 		known[box.ID] = true
 		if !box.Analyze {
 			// A non-analyze box never gets a fresh transcription, but preserve any
-			// existing text (e.g. a box toggled off) rather than dropping it.
+			// existing text (e.g. a box toggled off) rather than dropping it. It
+			// reports nothing: analyze did not touch it.
 			if txt := archive.RegionText(baseSections, box.ID); txt != "" {
 				sections = append(sections, archive.RegionSection{ID: box.ID, Label: box.Label, Text: txt})
 			}
@@ -273,14 +316,21 @@ func analyzeRegions(ctx context.Context, a *archive.Archive, t Transcriber, spec
 		}
 		rh := m.regionHash(box.Rect)
 		var text string
-		var boxOutcome Outcome
-		if !force && prev[box.ID] == rh {
+		var skipped, blank bool
+		switch {
+		case !force && prev[box.ID] == rh:
 			text = archive.RegionText(baseSections, box.ID) // unchanged: reuse AI base
-			boxOutcome = Skipped
-		} else {
+			skipped = true
+		case m.blankRegion(box.Rect):
+			// Nothing drawn inside the box — an unfilled field on a form template.
+			// It transcribes to nothing without an LLM call (the common case on a
+			// freshly written template page), and an erased box clears via the merge.
+			text = ""
+			blank = true
+		default:
 			png, err := crop(img, box.Rect)
 			if err != nil {
-				return "", nil, fmt.Errorf("region %s: %w", box.ID, err)
+				return fmt.Errorf("region %s: %w", box.ID, err)
 			}
 			prompt := box.Prompt
 			if prompt == "" {
@@ -288,19 +338,18 @@ func analyzeRegions(ctx context.Context, a *archive.Archive, t Transcriber, spec
 			}
 			out, err := t.Transcribe(ctx, prompt, png)
 			if err != nil {
-				return "", nil, fmt.Errorf("region %s: %w", box.ID, err)
+				return fmt.Errorf("region %s: %w", box.ID, err)
 			}
+			res.Calls++
 			text = strings.TrimSpace(out)
-			// Updated when the box had a previous transcription to diff against,
-			// Analyzed when it is a fresh box.
-			boxOutcome = Analyzed
-			if archive.RegionText(baseSections, box.ID) != "" {
-				boxOutcome = Updated
-			}
 		}
 		sections = append(sections, archive.RegionSection{ID: box.ID, Label: box.Label, Text: text})
 		regions = append(regions, archive.RegionDoc{ID: box.ID, SourceHash: rh})
-		outcomes = append(outcomes, RegionOutcome{ID: box.ID, Outcome: boxOutcome})
+		results = append(results, RegionResult{
+			RegionChange: archive.RegionChange{ID: box.ID, Label: box.Label},
+			Skipped:      skipped,
+			Blank:        blank,
+		})
 	}
 	// Tombstone sections whose id is no longer any config box: keep them at the end
 	// (never delete transcribed text), ignored by export.
@@ -310,24 +359,27 @@ func analyzeRegions(ctx context.Context, a *archive.Archive, t Transcriber, spec
 		}
 	}
 
-	theirs := archive.AssembleRegions(sections)
-	_, conflicts, err := a.MergeAnalysis(fileID, pageID, theirs)
+	c, err := a.MergeAnalysis(fileID, pageID, archive.AssembleRegions(sections))
 	if err != nil {
-		return "", nil, err
+		return err
 	}
 
-	outcome := Analyzed
-	if strings.TrimSpace(base) != "" {
-		outcome = Updated
+	// The merge hands back both sides of the whole region document, so each box's
+	// own before/after is a slice of what is already in hand — no second read. A
+	// box's Conflicts comes from the marker sniff, which is what attributes a
+	// page-level conflict to the box that caused it.
+	before, after := archive.ParseRegions(c.Was), archive.ParseRegions(c.Now)
+	for i := range results {
+		id := results[i].ID
+		results[i].Text = archive.TextChangeOf(archive.RegionText(before, id), archive.RegionText(after, id))
 	}
-	if conflicts {
-		outcome = Conflicted
-	}
+	res.Regions = results
+
 	// Keep a page-level source hash so the whole-page skip and list/query metadata
 	// still work; the region sections are the md content, so no fields here. The
 	// per-box fingerprints ride along under Analysis (analyze-produced state).
 	pd.Analysis = &archive.PageAnalysis{SourceHash: hash, Regions: regions}
-	return outcome, outcomes, nil
+	return nil
 }
 
 // regionsCurrent reports whether pd.Analysis.Regions already matches the template's

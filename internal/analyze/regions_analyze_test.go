@@ -77,8 +77,12 @@ func TestTemplatedPageWritesRegionsNotContent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.Outcome != Analyzed {
-		t.Errorf("outcome = %q, want %q", res.Outcome, Analyzed)
+	// A templated page's story is its region list; it has no whole-page content.
+	if res.Content != nil {
+		t.Errorf("content = %+v, want nil on a templated page", res.Content)
+	}
+	if len(res.Regions) != 1 || res.Regions[0].Text.Kind != archive.TextNew {
+		t.Errorf("regions = %+v, want one %q box", res.Regions, archive.TextNew)
 	}
 	// The page md carries the region-section transcription...
 	md, err := a.ReadAnalysisMD("F_A", "Pa")
@@ -112,8 +116,8 @@ func TestTemplatedUnchangedPageSkips(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.Outcome != Skipped {
-		t.Errorf("outcome = %q, want %q", res.Outcome, Skipped)
+	if !res.Skipped {
+		t.Errorf("res = %+v, want a skipped page", res)
 	}
 	if tr.calls != 0 {
 		t.Errorf("skipped page made %d LLM calls", tr.calls)
@@ -137,7 +141,7 @@ func TestMovedBoxReTriggers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.Outcome == Skipped {
+	if res.Skipped {
 		t.Error("a moved box rect must re-trigger analysis, not skip")
 	}
 	if tr.calls == 0 {
@@ -211,22 +215,22 @@ func TestTwoBoxesGetDistinctFingerprints(t *testing.T) {
 	}
 }
 
-// regionOutcome returns the Outcome reported for box id, or fails.
-func regionOutcome(t *testing.T, res PageResult, id string) Outcome {
+// regionResult returns the RegionResult reported for box id, or fails.
+func regionResult(t *testing.T, res PageResult, id string) RegionResult {
 	t.Helper()
 	for _, r := range res.Regions {
 		if r.ID == id {
-			return r.Outcome
+			return r
 		}
 	}
-	t.Fatalf("no region outcome for %q in %+v", id, res.Regions)
-	return ""
+	t.Fatalf("no region result for %q in %+v", id, res.Regions)
+	return RegionResult{}
 }
 
-// TestPerRegionOutcomes: on a two-box templated page, a fresh analysis reports both
-// boxes Analyzed; after moving only one box's rect, re-analysis reports that box
-// re-transcribed (Updated) and the untouched box Skipped.
-func TestPerRegionOutcomes(t *testing.T) {
+// TestPerRegionResults: on a two-box templated page, a fresh analysis reports both
+// boxes as newly transcribed; after moving only one box's rect, re-analysis reports
+// that box re-transcribed and the untouched box skipped.
+func TestPerRegionResults(t *testing.T) {
 	a := archive.New(t.TempDir())
 	svgTwo := svgDoc(pathEl(filledRect(100, 200, 200, 200)+" "+filledRect(100, 1800, 200, 200), `fill="#000000"`))
 	if _, err := a.Write(sampleNote(), map[string][]byte{"Pa": svgTwo}); err != nil {
@@ -254,11 +258,11 @@ func TestPerRegionOutcomes(t *testing.T) {
 	if len(res.Regions) != 2 {
 		t.Fatalf("first analyze regions = %+v want 2", res.Regions)
 	}
-	if o := regionOutcome(t, res, "top"); o != Analyzed {
-		t.Errorf("fresh top outcome = %q want %q", o, Analyzed)
+	if r := regionResult(t, res, "top"); r.Text.Kind != archive.TextNew || r.Skipped || r.Blank {
+		t.Errorf("fresh top = %+v, want a transcribed %q box", r, archive.TextNew)
 	}
-	if o := regionOutcome(t, res, "bot"); o != Analyzed {
-		t.Errorf("fresh bot outcome = %q want %q", o, Analyzed)
+	if r := regionResult(t, res, "bot"); r.Text.Kind != archive.TextNew || r.Skipped || r.Blank {
+		t.Errorf("fresh bot = %+v, want a transcribed %q box", r, archive.TextNew)
 	}
 
 	// Move only the top box (its fingerprint changes); bot stays put.
@@ -270,11 +274,14 @@ func TestPerRegionOutcomes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if o := regionOutcome(t, res, "top"); o != Updated {
-		t.Errorf("moved top outcome = %q want %q", o, Updated)
+	// The moved box was re-cropped and re-transcribed; the fake returns the same
+	// text, so the honest verdict is "re-transcribed, text unchanged" — which the
+	// cost axis (Skipped) and the text axis (Text.Kind) now report separately.
+	if r := regionResult(t, res, "top"); r.Skipped {
+		t.Errorf("moved top = %+v, want it re-transcribed, not skipped", r)
 	}
-	if o := regionOutcome(t, res, "bot"); o != Skipped {
-		t.Errorf("untouched bot outcome = %q want %q", o, Skipped)
+	if r := regionResult(t, res, "bot"); !r.Skipped {
+		t.Errorf("untouched bot = %+v, want it skipped", r)
 	}
 }
 
@@ -292,7 +299,7 @@ func TestRegionEditSurvivesReanalyze(t *testing.T) {
 		t.Fatal(err)
 	}
 	edited := archive.AssembleRegions([]archive.RegionSection{{ID: "body", Label: "Body", Text: "my own words"}})
-	if err := a.WriteAnalysisEdit("F_A", "Pa", base, edited); err != nil {
+	if _, err := a.WriteAnalysisEdit("F_A", "Pa", base, edited); err != nil {
 		t.Fatal(err)
 	}
 	// Force a re-analysis: the fresh AI text is the same "the region body", the
@@ -306,5 +313,81 @@ func TestRegionEditSurvivesReanalyze(t *testing.T) {
 	}
 	if txt := archive.RegionText(archive.ParseRegions(got), "body"); txt != "my own words" {
 		t.Errorf("user edit lost after re-analyze: body = %q", txt)
+	}
+}
+
+// TestBlankBoxCostsNoCall is the saving that matters on a form template: only the
+// boxes actually filled in reach the model. The unfilled one still gets its
+// section and its fingerprint, so it reports Analyzed like any other box and
+// skips normally on the next run.
+func TestBlankBoxCostsNoCall(t *testing.T) {
+	a := archive.New(t.TempDir())
+	// Ink in the top band only; the bottom box is an unfilled field.
+	inked := svgDoc(pathEl(filledRect(100, 200, 200, 200), `fill="#000000"`))
+	if _, err := a.Write(sampleNote(), map[string][]byte{"Pa": inked}); err != nil {
+		t.Fatal(err)
+	}
+	img := []byte("form-template")
+	sum := sha256.Sum256(img)
+	if err := os.WriteFile(templateImgPath(a), img, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	setTemplate(t, a,
+		bodyBox("filled", snote.Rect{X: 0, Y: 0, W: 1920, H: 800}),
+		bodyBox("empty", snote.Rect{X: 0, Y: 1600, W: 1920, H: 960}),
+	)
+	pd, _ := a.ReadPage("F_A", "Pa")
+	pd.BackgroundHash = hex.EncodeToString(sum[:])
+	if _, err := a.WritePage("F_A", pd); err != nil {
+		t.Fatal(err)
+	}
+
+	tr := &fakeTranscriber{replies: regionReplies()}
+	res, err := Page(context.Background(), a, tr, tr, regionSpec(), "Pa", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var regionCalls int
+	for _, p := range tr.prompts {
+		if p == "Region transcription." {
+			regionCalls++
+		}
+	}
+	if regionCalls != 1 {
+		t.Errorf("region calls = %d, want 1 (the blank box must not be sent), prompts %q", regionCalls, tr.prompts)
+	}
+	// The blank box is now visible as such, instead of being indistinguishable
+	// from a box that cost a real transcription.
+	if r := regionResult(t, res, "filled"); r.Blank || r.Skipped {
+		t.Errorf("filled = %+v, want a transcribed box", r)
+	}
+	if r := regionResult(t, res, "empty"); !r.Blank {
+		t.Errorf("blank = %+v, want Blank", r)
+	}
+
+	md, err := a.ReadAnalysisMD("F_A", "Pa")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sections := archive.ParseRegions(md)
+	if got := archive.RegionText(sections, "filled"); got != "the region body" {
+		t.Errorf("filled region = %q", got)
+	}
+	if got := archive.RegionText(sections, "empty"); got != "" {
+		t.Errorf("blank region = %q, want empty", got)
+	}
+	pd, _ = a.ReadPage("F_A", "Pa")
+	if len(pd.Analysis.Regions) != 2 {
+		t.Fatalf("regions = %+v, want a fingerprint for both boxes", pd.Analysis.Regions)
+	}
+
+	// The blank box's stored fingerprint makes the next run a plain skip.
+	tr.calls, tr.prompts = 0, nil
+	res, err = Page(context.Background(), a, tr, tr, regionSpec(), "Pa", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.Skipped || res.Calls != 0 {
+		t.Errorf("re-run: res = %+v, want skipped with no calls", res)
 	}
 }

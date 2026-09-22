@@ -147,6 +147,55 @@ func TestQueryLong(t *testing.T) {
 	}
 }
 
+// The CLI's own job on an expression is to join the words the shell split, so an
+// unquoted `query starred AND NOT tag:x` and a quoted one are the same call.
+func TestQueryExpressionArgs(t *testing.T) {
+	ctx := context.Background()
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	arch := t.TempDir()
+
+	a := archive.New(arch)
+	n := &snote.Note{
+		FileID: "F_TEST",
+		Source: "meeting-notes.note",
+		Pages: []snote.Page{
+			{ID: "P1", Number: 1, Starred: true, Keywords: []snote.Keyword{{Text: "work"}}},
+			{ID: "P2", Number: 2, Keywords: []snote.Keyword{{Text: "notes"}}},
+		},
+	}
+	svg := `<svg xmlns="http://www.w3.org/2000/svg" width="1920" height="2560"><path d="M10 10 L100 100"/></svg>`
+	if _, err := a.Write(n, map[string][]byte{"P1": []byte(svg), "P2": []byte(svg)}); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, tc := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"starred", "OR", "keyword:notes"}, "P1\nP2\n"},     // shell-split words
+		{[]string{"starred AND NOT keyword:notes"}, "P1\n"},          // one quoted argument
+		{[]string{"NOT", "(starred", "OR", "keyword:work)"}, "P2\n"}, // parens, split
+		{[]string{"keyword:work OR (starred AND all)"}, "P1\n"},      // parens, quoted
+	} {
+		got := captureStdout(t, func() error {
+			return root().Run(ctx, append([]string{"snorg", "-a", arch, "query"}, tc.args...))
+		})
+		if got != tc.want {
+			t.Errorf("query %v = %q, want %q", tc.args, got, tc.want)
+		}
+	}
+
+	// A syntax error is reported, not silently treated as no matches.
+	err := root().Run(ctx, []string{"snorg", "-a", arch, "query", "starred", "keyword:work"})
+	if err == nil || !strings.Contains(err.Error(), "unexpected token") {
+		t.Errorf("query with a missing operator = %v, want a syntax error", err)
+	}
+	if err := root().Run(ctx, []string{"snorg", "-a", arch, "query"}); err == nil ||
+		!strings.Contains(err.Error(), "usage") {
+		t.Errorf("bare query = %v, want a usage error", err)
+	}
+}
+
 // TestTagCommand drives the tag command end-to-end and confirms the tag is
 // queryable (query tag) and enumerable (list tags) afterwards.
 func TestTagCommand(t *testing.T) {
@@ -228,4 +277,67 @@ func captureStdout(t *testing.T, fn func() error) string {
 		t.Fatalf("run: %v", runErr)
 	}
 	return string(out)
+}
+
+// TestTagNoteCommand drives `tag -n` end-to-end: the tag lands in note.json only,
+// every page of the note inherits it for query/list, and a page-level removal cannot
+// take an inherited tag away.
+func TestTagNoteCommand(t *testing.T) {
+	ctx := context.Background()
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	arch := t.TempDir()
+
+	a := archive.New(arch)
+	n := &snote.Note{
+		FileID: "F_TEST",
+		Source: "notes.note",
+		Pages:  []snote.Page{{ID: "P1", Number: 1}, {ID: "P2", Number: 2}},
+	}
+	svg := `<svg xmlns="http://www.w3.org/2000/svg"><path d="M0 0"/></svg>`
+	if _, err := a.Write(n, map[string][]byte{"P1": []byte(svg), "P2": []byte(svg)}); err != nil {
+		t.Fatal(err)
+	}
+
+	// The id is a FILE_ID and the unit is notes.
+	if got := captureStdout(t, func() error {
+		return root().Run(ctx, []string{"snorg", "-a", arch, "tag", "-n", "work", "F_TEST"})
+	}); !strings.Contains(got, "tagged 1 of 1 notes") {
+		t.Errorf("tag -n output = %q, want 'tagged 1 of 1 notes'", got)
+	}
+
+	// Both pages inherit it, and it counts once per page.
+	if got := captureStdout(t, func() error {
+		return root().Run(ctx, []string{"snorg", "-a", arch, "query", "tag=work"})
+	}); got != "P1\nP2\n" {
+		t.Errorf("query tag work = %q, want %q", got, "P1\nP2\n")
+	}
+	if got := captureStdout(t, func() error {
+		return root().Run(ctx, []string{"snorg", "-a", arch, "list", "tags", "-l"})
+	}); got != "work\t2\n" {
+		t.Errorf("list tags -l = %q, want %q", got, "work\t2\n")
+	}
+
+	// Removing an inherited tag from a page is a no-op: the note still carries it.
+	if got := captureStdout(t, func() error {
+		return root().Run(ctx, []string{"snorg", "-a", arch, "tag", "-r", "work", "P1"})
+	}); !strings.Contains(got, "untagged 0 of 1 pages") {
+		t.Errorf("tag -r on an inherited tag = %q, want 'untagged 0 of 1 pages'", got)
+	}
+	if got := captureStdout(t, func() error {
+		return root().Run(ctx, []string{"snorg", "-a", arch, "query", "tag=work"})
+	}); got != "P1\nP2\n" {
+		t.Errorf("query tag work after page removal = %q, want both pages", got)
+	}
+
+	// The note-level removal is the real one.
+	if got := captureStdout(t, func() error {
+		return root().Run(ctx, []string{"snorg", "-a", arch, "tag", "-n", "-r", "work", "F_TEST"})
+	}); !strings.Contains(got, "untagged 1 of 1 notes") {
+		t.Errorf("tag -n -r output = %q, want 'untagged 1 of 1 notes'", got)
+	}
+	if got := captureStdout(t, func() error {
+		return root().Run(ctx, []string{"snorg", "-a", arch, "list", "tags"})
+	}); got != "" {
+		t.Errorf("list tags after note removal = %q, want empty", got)
+	}
 }

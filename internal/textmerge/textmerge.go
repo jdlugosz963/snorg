@@ -38,6 +38,34 @@ func Diff(old, new string) (string, error) {
 	return string(b), nil
 }
 
+// Stat counts the lines added and removed going from old to new. It runs the
+// same line diff Diff renders, skipping the unified-diff round-trip: the counts
+// come straight off the patch's Insert/Delete changes. Equal inputs cost nothing.
+//
+// It is deliberately not folded into anything that writes: line counts are
+// derived from the two texts, so a caller that never displays a change never
+// pays for its diff.
+func Stat(old, new string) (added, removed int, err error) {
+	if old == new {
+		return 0, 0, nil
+	}
+	patch, err := diffpatch.DiffWithOptions(old, new, diffpatch.Options{Context: 1})
+	if err != nil {
+		return 0, 0, err
+	}
+	for _, h := range patch.Hunks {
+		for _, c := range h.Changes {
+			switch c.Operation {
+			case diffpatch.OperationInsert:
+				added++
+			case diffpatch.OperationDelete:
+				removed++
+			}
+		}
+	}
+	return added, removed, nil
+}
+
 // Unapply reverse-applies a Diff-produced unified diff to current, recovering
 // old. An empty diff returns current unchanged; a diff that no longer matches
 // current is an error.
@@ -149,6 +177,16 @@ func ConvertLegacyDiff(s string) (unified string, wasLegacy bool, err error) {
 	return string(b), true, nil
 }
 
+// ConflictMarker opens a conflict region in Merge's output. It is exported so a
+// caller holding a slice of an already-merged document can sniff for it.
+const ConflictMarker = "<<<<<<< edited"
+
+// HasConflicts reports whether s carries 3-way-merge conflict markers. Merge
+// returns the structural answer for a whole document; this is the cheap
+// after-the-fact check for one part of it (a single region section of a merged
+// region document), where no structural answer exists.
+func HasConflicts(s string) bool { return strings.Contains(s, ConflictMarker) }
+
 // Merge 3-way-merges mine and theirs against their common base, returning the
 // merged text and whether it contains conflict markers. The marker labels name
 // the sides as the user sees them: "edited" (mine) vs "reanalyzed" (theirs).
@@ -165,7 +203,7 @@ func Merge(base, mine, theirs string) (merged string, conflicts bool, err error)
 	for _, r := range res {
 		if r.Conflict != nil {
 			conflicts = true
-			out = append(out, "<<<<<<< edited")
+			out = append(out, ConflictMarker)
 			out = append(out, r.Conflict.A...)
 			out = append(out, "=======")
 			out = append(out, r.Conflict.B...)

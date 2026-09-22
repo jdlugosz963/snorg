@@ -144,12 +144,17 @@ func TestPageBufferApplyRoundTrip(t *testing.T) {
 	}
 
 	// Applying a hand transcription stores it as the effective content.
-	outcome, names, err := c.ApplyPage("P2", "# hand-written\n\nbody\n")
+	res, err := c.ApplyPage("P2", "# hand-written\n\nbody\n")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if outcome != EditEdited || names != 0 {
-		t.Errorf("ApplyPage = (%s, %d), want (edited, 0)", outcome, names)
+	// The page had no transcription at all, so this is new content, not an update
+	// — and no name moved.
+	if res.Content.Kind != TextNew || res.Content.Now != "# hand-written\n\nbody\n" {
+		t.Errorf("ApplyPage content = %+v, want %q text", res.Content, TextNew)
+	}
+	if len(res.Names) != 0 || len(res.Regions) != 0 {
+		t.Errorf("ApplyPage = %+v, want no name or region changes", res)
 	}
 	if got, _ := c.PageBuffer("P2"); got != "# hand-written\n\nbody\n" {
 		t.Errorf("PageBuffer after ApplyPage = %q, want the applied content", got)

@@ -3,6 +3,7 @@ package edit
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 
 	"github.com/jdlugosz963/snorg/internal/archive"
@@ -39,12 +40,12 @@ func TestPageEditCreatesDiffAndKeepsBase(t *testing.T) {
 	}
 
 	editor := fakeEditor(t, `printf '# ai output\n\nbody, edited by hand\n' > "$1"`)
-	outcome, _, err := Page(a, "Pa", editor)
+	res, err := Page(a, "Pa", editor)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if outcome != Edited {
-		t.Errorf("outcome = %q, want %q", outcome, Edited)
+	if res.Content.Kind != archive.TextUpdated {
+		t.Errorf("content = %+v, want %q", res.Content, archive.TextUpdated)
 	}
 	if md, err := a.ReadAnalysisMD("F_TEST", "Pa"); err != nil || md != "# ai output\n\nbody, edited by hand\n" {
 		t.Errorf("md = %q, %v", md, err)
@@ -60,12 +61,12 @@ func TestPageUnchangedWritesNothing(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	outcome, _, err := Page(a, "Pa", fakeEditor(t, "true"))
+	res, err := Page(a, "Pa", fakeEditor(t, "true"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if outcome != Unchanged {
-		t.Errorf("outcome = %q, want %q", outcome, Unchanged)
+	if res.Content.Kind != archive.TextUnchanged {
+		t.Errorf("content = %+v, want %q", res.Content, archive.TextUnchanged)
 	}
 }
 
@@ -75,16 +76,16 @@ func TestPageRevertRemovesDiff(t *testing.T) {
 	if err := a.WriteAnalysisMD("F_TEST", "Pa", base); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := Page(a, "Pa", fakeEditor(t, `printf 'edited\n' > "$1"`)); err != nil {
+	if _, err := Page(a, "Pa", fakeEditor(t, `printf 'edited\n' > "$1"`)); err != nil {
 		t.Fatal(err)
 	}
 
-	outcome, _, err := Page(a, "Pa", fakeEditor(t, `printf '# ai output\n' > "$1"`))
+	res, err := Page(a, "Pa", fakeEditor(t, `printf '# ai output\n' > "$1"`))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if outcome != Reverted {
-		t.Errorf("outcome = %q, want %q", outcome, Reverted)
+	if res.Content.Kind != archive.TextReverted {
+		t.Errorf("content = %+v, want %q", res.Content, archive.TextReverted)
 	}
 	if base2, err := a.ReadAnalysisBase("F_TEST", "Pa"); err != nil || base2 != base {
 		t.Errorf("base = %q, %v, want %q", base2, err, base)
@@ -97,7 +98,7 @@ func TestPageEditorFailureLeavesPageUntouched(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, _, err := Page(a, "Pa", fakeEditor(t, `printf 'half-finished\n' > "$1"; exit 1`)); err == nil {
+	if _, err := Page(a, "Pa", fakeEditor(t, `printf 'half-finished\n' > "$1"; exit 1`)); err == nil {
 		t.Fatal("expected error from a failing editor")
 	}
 	if md, err := a.ReadAnalysisMD("F_TEST", "Pa"); err != nil || md != "# ai output\n" {
@@ -111,12 +112,12 @@ func TestPageHumanTranscription(t *testing.T) {
 	// Never analyzed: the editor opens empty and the saved text becomes the
 	// page's transcription, with an empty AI base behind it.
 	editor := fakeEditor(t, `if [ -s "$1" ]; then exit 1; fi; printf 'written by hand\n' > "$1"`)
-	outcome, _, err := Page(a, "Pa", editor)
+	res, err := Page(a, "Pa", editor)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if outcome != Edited {
-		t.Errorf("outcome = %q, want %q", outcome, Edited)
+	if res.Content.Kind != archive.TextNew {
+		t.Errorf("content = %+v, want %q", res.Content, archive.TextNew)
 	}
 	if md, err := a.ReadAnalysisMD("F_TEST", "Pa"); err != nil || md != "written by hand\n" {
 		t.Errorf("md = %q, %v", md, err)
@@ -131,12 +132,12 @@ func TestPageEmptySaveOnEmptyPage(t *testing.T) {
 
 	// Editors like vim save an "empty" buffer as a single newline; that must
 	// still count as no content and create no files.
-	outcome, _, err := Page(a, "Pa", fakeEditor(t, `printf '\n' > "$1"`))
+	res, err := Page(a, "Pa", fakeEditor(t, `printf '\n' > "$1"`))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if outcome != Unchanged {
-		t.Errorf("outcome = %q, want %q", outcome, Unchanged)
+	if res.Content.Kind != archive.TextUnchanged {
+		t.Errorf("content = %+v, want %q", res.Content, archive.TextUnchanged)
 	}
 	if _, err := os.Stat(filepath.Join(a.Root, "F_TEST", "Pa.md")); !os.IsNotExist(err) {
 		t.Errorf("md created for an empty save: %v", err)
@@ -145,18 +146,20 @@ func TestPageEmptySaveOnEmptyPage(t *testing.T) {
 
 func TestPageClearingHumanTranscriptionRemovesFiles(t *testing.T) {
 	a := editArchive(t)
-	if _, _, err := Page(a, "Pa", fakeEditor(t, `printf 'written by hand\n' > "$1"`)); err != nil {
+	if _, err := Page(a, "Pa", fakeEditor(t, `printf 'written by hand\n' > "$1"`)); err != nil {
 		t.Fatal(err)
 	}
 
 	// Emptying a page that has no AI base removes the transcription entirely:
 	// no empty sidecars left behind.
-	outcome, _, err := Page(a, "Pa", fakeEditor(t, `printf '' > "$1"`))
+	res, err := Page(a, "Pa", fakeEditor(t, `printf '' > "$1"`))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if outcome != Reverted {
-		t.Errorf("outcome = %q, want %q", outcome, Reverted)
+	// The page had no AI base, so emptying it is a clear, not a revert — the more
+	// informative verdict for the same disk outcome.
+	if res.Content.Kind != archive.TextCleared {
+		t.Errorf("content = %+v, want %q", res.Content, archive.TextCleared)
 	}
 	for _, name := range []string{"Pa.md", "Pa.md.diff"} {
 		if _, err := os.Stat(filepath.Join(a.Root, "F_TEST", name)); !os.IsNotExist(err) {
@@ -167,7 +170,7 @@ func TestPageClearingHumanTranscriptionRemovesFiles(t *testing.T) {
 
 func TestPageUnknownPageID(t *testing.T) {
 	a := editArchive(t)
-	if _, _, err := Page(a, "Pmissing", fakeEditor(t, "true")); err == nil {
+	if _, err := Page(a, "Pmissing", fakeEditor(t, "true")); err == nil {
 		t.Fatal("expected error for unknown PAGEID")
 	}
 }
@@ -194,15 +197,24 @@ func TestPageEditsNames(t *testing.T) {
 
 	// The content section carries a blank line, which must survive verbatim.
 	editor := fakeEditor(t, `printf '<!-- title 1 -->\nFixed Title\n<!-- link 1 -->\nFixed Link\n\n<!-- content -->\n# heading\n\nbody text\n' > "$1"`)
-	outcome, namesChanged, err := Page(a, "Pa", editor)
+	res, err := Page(a, "Pa", editor)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if outcome != Edited {
-		t.Errorf("outcome = %q, want %q", outcome, Edited)
+	if res.Content.Kind != archive.TextNew {
+		t.Errorf("content = %+v, want %q", res.Content, archive.TextNew)
 	}
-	if namesChanged != 2 {
-		t.Errorf("namesChanged = %d, want 2", namesChanged)
+	// The names are reported individually — kind, 1-based index (the buffer's own
+	// marker key), what they were and what they became — not just counted.
+	wantNames := []archive.NameChange{
+		{Kind: "title", Index: 1, Was: "", Now: "Fixed Title", Override: true},
+		{Kind: "link", Index: 1, Was: "", Now: "Fixed Link", Override: true},
+	}
+	if !reflect.DeepEqual(res.Names, wantNames) {
+		t.Errorf("names = %+v, want %+v", res.Names, wantNames)
+	}
+	if !res.JSONChanged {
+		t.Error("JSONChanged = false, want the name overrides to have changed the page json")
 	}
 
 	pd, err := a.ReadPage("F_TEST", "Pa")
@@ -228,15 +240,17 @@ func TestPageNameOnlyEditKeepsContent(t *testing.T) {
 
 	// Change only the title name; leave the content section as serialized.
 	editor := fakeEditor(t, `printf '<!-- title 1 -->\nRenamed\n<!-- link 1 -->\n\n<!-- content -->\nthe body\n' > "$1"`)
-	outcome, namesChanged, err := Page(a, "Pa", editor)
+	res, err := Page(a, "Pa", editor)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if outcome != Unchanged {
-		t.Errorf("content outcome = %q, want %q", outcome, Unchanged)
+	// The content axis and the name axis are independent: nothing moved in the
+	// text while a name did.
+	if res.Content.Kind != archive.TextUnchanged {
+		t.Errorf("content = %+v, want %q", res.Content, archive.TextUnchanged)
 	}
-	if namesChanged != 1 {
-		t.Errorf("namesChanged = %d, want 1", namesChanged)
+	if len(res.Names) != 1 || res.Names[0].Kind != "title" || res.Names[0].Index != 1 {
+		t.Errorf("names = %+v, want one title 1 change", res.Names)
 	}
 	if md, err := a.ReadAnalysisMD("F_TEST", "Pa"); err != nil || md != "the body\n" {
 		t.Errorf("content changed: md = %q, %v", md, err)
@@ -248,7 +262,7 @@ func TestPageBadHeaderSavesNothing(t *testing.T) {
 
 	// Drop the required title marker: parse must fail and nothing is written.
 	editor := fakeEditor(t, `printf '<!-- link 1 -->\nX\n<!-- content -->\nbody\n' > "$1"`)
-	if _, _, err := Page(a, "Pa", editor); err == nil {
+	if _, err := Page(a, "Pa", editor); err == nil {
 		t.Fatal("expected a parse error for a malformed header")
 	}
 	if _, err := os.Stat(filepath.Join(a.Root, "F_TEST", "Pa.md")); !os.IsNotExist(err) {
@@ -276,5 +290,56 @@ func TestEditorFromEnv(t *testing.T) {
 	t.Setenv("EDITOR", "")
 	if _, err := EditorFromEnv(); err == nil {
 		t.Error("expected error with neither VISUAL nor EDITOR")
+	}
+}
+
+// Apply now calls WriteAnalysisEdit unconditionally rather than guarding the
+// unchanged case, so pin that the writers really are byte-level no-ops: an
+// untouched buffer must leave both sidecars exactly as they were.
+func TestApplyUnchangedTouchesNothing(t *testing.T) {
+	a := editArchive(t)
+	base := "# ai output\n"
+	if err := a.WriteAnalysisMD("F_TEST", "Pa", base); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Apply(a, "Pa", "# ai output\nedited by hand\n"); err != nil {
+		t.Fatal(err)
+	}
+
+	mdPath := filepath.Join(a.Root, "F_TEST", "Pa.md")
+	diffPath := mdPath + ".diff"
+	mdBefore, err := os.Stat(mdPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	diffBefore, err := os.Stat(diffPath)
+	if err != nil {
+		t.Fatalf("precondition: the edit must have written a diff sidecar: %v", err)
+	}
+
+	buf, err := Serialize(a, "Pa")
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := Apply(a, "Pa", buf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Content.Kind != archive.TextUnchanged {
+		t.Errorf("content = %+v, want %q", res.Content, archive.TextUnchanged)
+	}
+	mdAfter, err := os.Stat(mdPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	diffAfter, err := os.Stat(diffPath)
+	if err != nil {
+		t.Fatalf("diff sidecar removed by a no-op save: %v", err)
+	}
+	if !mdAfter.ModTime().Equal(mdBefore.ModTime()) {
+		t.Error("md rewritten by a no-op save")
+	}
+	if !diffAfter.ModTime().Equal(diffBefore.ModTime()) {
+		t.Error("diff sidecar rewritten by a no-op save")
 	}
 }

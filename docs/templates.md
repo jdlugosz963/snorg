@@ -13,10 +13,12 @@ the ordinary free-form content.
 ## Where templates live
 
 The template list is a `templates:` section of the **merged config** (see
-`docs/config.md`) — it layers, deep-merges and can be pulled in via `include:` like
-any other section, and needs no provider credentials to read. The natural home is
-a per-archive config you pass with `-c <archive>/config.yaml`, but the shared user
-config works too.
+`docs/config.md`) — it layers, merges and can be pulled in via `include:` like any
+other section, and needs no provider credentials to read. Being a sequence, the
+lists **add up** across layers (lower layer first), so a config can declare its own
+templates *and* `include:` files that bring more; registering the same image twice
+is the one error to avoid. The natural home is a per-archive config you pass with
+`-c <archive>/config.yaml`, but the shared user config works too.
 
 The background **images** are ordinary files on disk; each `image:` path is
 resolved relative to the config file that declared it (`~` expanded). A common
@@ -80,6 +82,23 @@ a page's `<PAGEID>.json` (so you can copy a device rect straight in).
 - A box with `analyze: false` is a structural region with no transcription (its
   `rect` is still exposed, e.g. to crop a figure at export time).
 
+**Finding templated pages:** `query templated` matches the pages whose
+`background_hash` resolves to an entry in this file — resolved from the config, so it
+works before `analyze` ever runs. `query region[<box-id>]<op><value>` goes one level
+in, matching the *text* transcribed into one box (unscoped: any box of the page's
+template):
+
+```sh
+snorg -c config.yaml query templated                        # every templated page
+snorg -c config.yaml query NOT templated                    # every page that is not templated
+snorg -c config.yaml query 'region[notes]:invoice'          # "invoice" written in the notes box
+snorg -c config.yaml query 'region~.'                       # anything written in any box
+snorg -c config.yaml query 'region[grade]=""'               # a page whose grade box is empty
+```
+
+Box ids come from this config, so a section left in a `.md` for a box that is no
+longer declared (a tombstone) never matches.
+
 ## Region analysis
 
 For each `analyze: true` box, `analyze` fingerprints the box by cropping its rect
@@ -90,7 +109,12 @@ the crop is in pixel space, a stroke crossing the box edge contributes only its
 in-box pixels, so editing ink in one box never perturbs a neighbour. A box whose
 fingerprint is unchanged is skipped without an LLM call; a changed box is cropped
 from that same rasterization and re-transcribed with the box's prompt. So editing
-one box re-analyzes only that box. The result is written to `<PAGEID>.md` as
+one box re-analyzes only that box.
+
+A box holding **no ink at all** — an unfilled field — is transcribed as empty
+without an LLM call either, so a partly-filled form costs one call per box that
+was actually written in, not one per box. It still records its fingerprint and
+its (empty) section, so filling it in later re-triggers it normally. The result is written to `<PAGEID>.md` as
 id-keyed sections:
 
 ```
@@ -140,9 +164,10 @@ p.svg }}`).
 
 ## Caveats
 
-- `query 'content~<regexp>'` matches the `<PAGEID>.md`, which for a templated page is
-  the region-section document, so a templated page **is** content-searchable (the
-  match text includes the `<!-- region … -->` marker lines).
+- `query content<op><value>` matches the whole `<PAGEID>.md`, which for a templated
+  page is the region-section document — so a templated page is content-searchable
+  either way, but `content` sees the `<!-- region … -->` marker lines and every box
+  at once, while `region[<id>]` sees one box's text alone.
 - On a pre-existing archive, `background_hash` is populated by a re-ingest (cheap,
   idempotent); `migrate` does not backfill it.
 - A page analyzed as whole-page content *before* a matching template is added

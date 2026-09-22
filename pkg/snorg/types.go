@@ -117,30 +117,44 @@ const (
 // migrate upgrades older files to it.
 const CurrentSchemaVersion = archive.CurrentSchemaVersion
 
+// The shared change vocabulary: what one analyze or edit did, in orthogonal parts.
+// TextChange is a text document's before/after — it carries the text itself, so a
+// front-end renders or re-diffs the change (see TextDiff/TextStat) without going
+// back to the archive; NameChange is a title/link rename; RegionChange is one
+// template box. A part never carries a fact only one write path can produce, so no
+// field on a value you hold is permanently zero.
+type (
+	TextKind     = archive.TextKind
+	TextChange   = archive.TextChange
+	NameChange   = archive.NameChange
+	RegionChange = archive.RegionChange
+)
+
+// The TextKind values a TextChange.Kind takes. TextReverted is reachable only
+// through an edit that lands exactly on the stored AI base — analysis cannot
+// produce it, and emptying a page that never had a base reads TextCleared.
+const (
+	TextUnchanged = archive.TextUnchanged
+	TextNew       = archive.TextNew
+	TextUpdated   = archive.TextUpdated
+	TextCleared   = archive.TextCleared
+	TextReverted  = archive.TextReverted
+)
+
+// The per-operation results assembled from those parts: PageResult is one analyzed
+// page (with the cost facts only analysis can produce — a fingerprint skip, a blank
+// crop, the LLM call count), PageEdit one editor round-trip.
+type (
+	PageResult   = analyze.PageResult
+	RegionResult = analyze.RegionResult
+	PageEdit     = edit.PageEdit
+)
+
 // Analyze primitives. Transcriber (image→text) and Generator (text→text) are the
 // two provider seams; a Provider (see NewOpenAIProvider) satisfies both.
 type (
-	Spec          = analyze.Spec
-	Field         = analyze.Field
-	Outcome       = analyze.Outcome
-	PageResult    = analyze.PageResult
-	RegionOutcome = analyze.RegionOutcome
-	Transcriber   = analyze.Transcriber
-	Generator     = analyze.Generator
-)
-
-const (
-	Skipped    = analyze.Skipped
-	Analyzed   = analyze.Analyzed
-	Updated    = analyze.Updated
-	Conflicted = analyze.Conflicted
-)
-
-// EditOutcome is what ApplyPage did with an edited page buffer.
-type EditOutcome = edit.Outcome
-
-const (
-	EditUnchanged = edit.Unchanged
-	EditEdited    = edit.Edited
-	EditReverted  = edit.Reverted
+	Spec        = analyze.Spec
+	Field       = analyze.Field
+	Transcriber = analyze.Transcriber
+	Generator   = analyze.Generator
 )

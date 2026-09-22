@@ -40,7 +40,7 @@ func TestWriteAnalysisEditRoundTrip(t *testing.T) {
 	}
 
 	base := "# ai output\n\nbody\n"
-	if err := a.WriteAnalysisEdit("F_TEST", "Pa", base, "# ai output\n\nbody, fixed by hand"); err != nil {
+	if _, err := a.WriteAnalysisEdit("F_TEST", "Pa", base, "# ai output\n\nbody, fixed by hand"); err != nil {
 		t.Fatal(err)
 	}
 	if md, err := a.ReadAnalysisMD("F_TEST", "Pa"); err != nil || md != "# ai output\n\nbody, fixed by hand\n" {
@@ -60,10 +60,10 @@ func TestWriteAnalysisEditRevertRemovesDiff(t *testing.T) {
 	if err := a.WriteAnalysisMD("F_TEST", "Pa", base); err != nil {
 		t.Fatal(err)
 	}
-	if err := a.WriteAnalysisEdit("F_TEST", "Pa", base, "edited\n"); err != nil {
+	if _, err := a.WriteAnalysisEdit("F_TEST", "Pa", base, "edited\n"); err != nil {
 		t.Fatal(err)
 	}
-	if err := a.WriteAnalysisEdit("F_TEST", "Pa", base, base); err != nil {
+	if _, err := a.WriteAnalysisEdit("F_TEST", "Pa", base, base); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(a.diffPath("F_TEST", "Pa")); !os.IsNotExist(err) {
@@ -79,15 +79,22 @@ func TestMergeAnalysisWithoutEdits(t *testing.T) {
 	if err := a.WriteAnalysisMD("F_TEST", "Pa", "old ai\n"); err != nil {
 		t.Fatal(err)
 	}
-	got, conflicts, err := a.MergeAnalysis("F_TEST", "Pa", "new ai")
+	c, err := a.MergeAnalysis("F_TEST", "Pa", "new ai")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if conflicts {
-		t.Error("unexpected conflicts")
+	if c.Conflicts {
+		t.Error("unexpected c.Conflicts")
 	}
-	if got != "new ai" {
-		t.Errorf("effective = %q, want %q", got, "new ai")
+	// Now is the stored form (NormMD), so it matches the md on disk byte for byte.
+	if c.Now != "new ai\n" {
+		t.Errorf("effective = %q, want %q", c.Now, "new ai\n")
+	}
+	if c.Kind != TextUpdated {
+		t.Errorf("Kind = %q, want %q", c.Kind, TextUpdated)
+	}
+	if c.Was != "old ai\n" {
+		t.Errorf("Was = %q, want %q", c.Was, "old ai\n")
 	}
 	if md, err := a.ReadAnalysisMD("F_TEST", "Pa"); err != nil || md != "new ai\n" {
 		t.Errorf("md = %q, %v", md, err)
@@ -100,21 +107,21 @@ func TestMergeAnalysisRebasesEdits(t *testing.T) {
 	if err := a.WriteAnalysisMD("F_TEST", "Pa", base); err != nil {
 		t.Fatal(err)
 	}
-	if err := a.WriteAnalysisEdit("F_TEST", "Pa", base, "intro\nline one, edited\nline two\noutro\n"); err != nil {
+	if _, err := a.WriteAnalysisEdit("F_TEST", "Pa", base, "intro\nline one, edited\nline two\noutro\n"); err != nil {
 		t.Fatal(err)
 	}
 
 	theirs := "intro\nline one\nline two\noutro, reanalyzed\n"
-	got, conflicts, err := a.MergeAnalysis("F_TEST", "Pa", theirs)
+	c, err := a.MergeAnalysis("F_TEST", "Pa", theirs)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if conflicts {
-		t.Fatalf("unexpected conflicts:\n%s", got)
+	if c.Conflicts {
+		t.Fatalf("unexpected c.Conflicts:\n%s", c.Now)
 	}
 	want := "intro\nline one, edited\nline two\noutro, reanalyzed\n"
-	if got != want {
-		t.Errorf("effective = %q, want %q", got, want)
+	if c.Now != want {
+		t.Errorf("effective = %q, want %q", c.Now, want)
 	}
 	// theirs became the new base: the user's edit was rebased onto it.
 	if newBase, err := a.ReadAnalysisBase("F_TEST", "Pa"); err != nil || newBase != theirs {
@@ -128,18 +135,18 @@ func TestMergeAnalysisDropsDiffWhenAbsorbed(t *testing.T) {
 	if err := a.WriteAnalysisMD("F_TEST", "Pa", base); err != nil {
 		t.Fatal(err)
 	}
-	if err := a.WriteAnalysisEdit("F_TEST", "Pa", base, "line, edited\n"); err != nil {
+	if _, err := a.WriteAnalysisEdit("F_TEST", "Pa", base, "line, edited\n"); err != nil {
 		t.Fatal(err)
 	}
 
 	// The new analysis independently matches the user's version (e.g. the user
 	// corrected the page itself): the diff must disappear.
-	got, conflicts, err := a.MergeAnalysis("F_TEST", "Pa", "line, edited\n")
+	c, err := a.MergeAnalysis("F_TEST", "Pa", "line, edited\n")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if conflicts {
-		t.Fatalf("unexpected conflicts:\n%s", got)
+	if c.Conflicts {
+		t.Fatalf("unexpected c.Conflicts:\n%s", c.Now)
 	}
 	if _, err := os.Stat(a.diffPath("F_TEST", "Pa")); !os.IsNotExist(err) {
 		t.Errorf("edit diff not removed when merge equals theirs: %v", err)
@@ -152,16 +159,16 @@ func TestMergeAnalysisConflict(t *testing.T) {
 	if err := a.WriteAnalysisMD("F_TEST", "Pa", base); err != nil {
 		t.Fatal(err)
 	}
-	if err := a.WriteAnalysisEdit("F_TEST", "Pa", base, "line, edited\n"); err != nil {
+	if _, err := a.WriteAnalysisEdit("F_TEST", "Pa", base, "line, edited\n"); err != nil {
 		t.Fatal(err)
 	}
 
-	got, conflicts, err := a.MergeAnalysis("F_TEST", "Pa", "line, reanalyzed\n")
+	c, err := a.MergeAnalysis("F_TEST", "Pa", "line, reanalyzed\n")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !conflicts {
-		t.Fatalf("expected conflicts, got %q", got)
+	if !c.Conflicts {
+		t.Fatalf("expected c.Conflicts, c.Now %q", c.Now)
 	}
 	md, err := a.ReadAnalysisMD("F_TEST", "Pa")
 	if err != nil {
@@ -183,7 +190,7 @@ func TestReadAnalysisBaseRejectsForeignMDEdit(t *testing.T) {
 	if err := a.WriteAnalysisMD("F_TEST", "Pa", base); err != nil {
 		t.Fatal(err)
 	}
-	if err := a.WriteAnalysisEdit("F_TEST", "Pa", base, "line one, edited\nline two\n"); err != nil {
+	if _, err := a.WriteAnalysisEdit("F_TEST", "Pa", base, "line one, edited\nline two\n"); err != nil {
 		t.Fatal(err)
 	}
 	// The md changes behind the tool's back: the stored diff no longer applies.
@@ -205,7 +212,7 @@ func TestWritePrunesEditDiff(t *testing.T) {
 	if err := a.WriteAnalysisMD("F_TEST", "Pa", base); err != nil {
 		t.Fatal(err)
 	}
-	if err := a.WriteAnalysisEdit("F_TEST", "Pa", base, "line, edited\n"); err != nil {
+	if _, err := a.WriteAnalysisEdit("F_TEST", "Pa", base, "line, edited\n"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -221,5 +228,80 @@ func TestWritePrunesEditDiff(t *testing.T) {
 	}
 	if _, err := os.Stat(a.diffPath("F_TEST", "Pa")); !os.IsNotExist(err) {
 		t.Errorf("edit diff not pruned with its page: %v", err)
+	}
+}
+
+// The writers report what they did, so a caller never re-derives it. Reverting is
+// WriteAnalysisEdit's verdict alone: it is the one writer holding the AI base.
+func TestWriteAnalysisEditReportsTheChange(t *testing.T) {
+	a := editArchive(t)
+	base := "ai output\n"
+
+	c, err := a.WriteAnalysisEdit("F_TEST", "Pa", "", base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Kind != TextNew || c.Was != "" || c.Now != base {
+		t.Errorf("first write = %+v, want new with Was empty and Now %q", c, base)
+	}
+
+	c, err = a.WriteAnalysisEdit("F_TEST", "Pa", base, "edited\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Kind != TextUpdated || c.Was != base {
+		t.Errorf("edit = %+v, want updated from %q", c, base)
+	}
+
+	c, err = a.WriteAnalysisEdit("F_TEST", "Pa", base, base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Kind != TextReverted {
+		t.Errorf("revert = %+v, want %q", c, TextReverted)
+	}
+
+	// Rewriting the same content is not a revert — it never moved.
+	c, err = a.WriteAnalysisEdit("F_TEST", "Pa", base, base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Kind != TextUnchanged {
+		t.Errorf("no-op write = %+v, want %q", c, TextUnchanged)
+	}
+}
+
+// A fresh analyze writes base == content, which must not read as a revert.
+func TestMergeAnalysisNeverReverts(t *testing.T) {
+	a := editArchive(t)
+	c, err := a.MergeAnalysis("F_TEST", "Pa", "first transcription\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Kind != TextNew {
+		t.Errorf("fresh merge = %q, want %q", c.Kind, TextNew)
+	}
+}
+
+// A conflicted merge reports Conflicts on top of an ordinary kind — the two are
+// separate axes, so the caller learns both what moved and that it needs resolving.
+func TestMergeAnalysisReportsConflictsWithKind(t *testing.T) {
+	a := editArchive(t)
+	base := "line\n"
+	if err := a.WriteAnalysisMD("F_TEST", "Pa", base); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.WriteAnalysisEdit("F_TEST", "Pa", base, "line, edited\n"); err != nil {
+		t.Fatal(err)
+	}
+	c, err := a.MergeAnalysis("F_TEST", "Pa", "line, reanalyzed\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !c.Conflicts {
+		t.Error("Conflicts = false, want true")
+	}
+	if c.Kind != TextUpdated {
+		t.Errorf("Kind = %q, want %q", c.Kind, TextUpdated)
 	}
 }

@@ -155,3 +155,45 @@ func TestMergeEmptyBaseConflicts(t *testing.T) {
 		t.Errorf("merged output lost a side:\n%s", merged)
 	}
 }
+
+func TestStat(t *testing.T) {
+	cases := []struct {
+		name           string
+		old, new       string
+		added, removed int
+	}{
+		{"equal", "a\nb\n", "a\nb\n", 0, 0},
+		{"insert", "a\nb\n", "a\nx\nb\n", 1, 0},
+		{"delete", "a\nx\nb\n", "a\nb\n", 0, 1},
+		{"replace", "a\nb\n", "a\nB\n", 1, 1},
+		{"from empty", "", "a\nb\n", 2, 0},
+		{"to empty", "a\nb\n", "", 0, 2},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			added, removed, err := Stat(c.old, c.new)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if added != c.added || removed != c.removed {
+				t.Errorf("Stat = +%d/-%d, want +%d/-%d", added, removed, c.added, c.removed)
+			}
+		})
+	}
+}
+
+func TestHasConflicts(t *testing.T) {
+	merged, conflicts, err := Merge("base\n", "mine\n", "theirs\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !conflicts {
+		t.Fatal("want a conflicting merge to build the fixture")
+	}
+	if !HasConflicts(merged) {
+		t.Errorf("HasConflicts(%q) = false, want true", merged)
+	}
+	if HasConflicts("plain text\n") {
+		t.Error("HasConflicts on clean text = true, want false")
+	}
+}
