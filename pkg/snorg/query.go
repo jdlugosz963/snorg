@@ -25,11 +25,7 @@ type Page struct {
 // predicate is just a func of the same shape.
 type Predicate func(Page) bool
 
-// TextMatcher decides whether one string matches — the seam every text filter is
-// built on, so the same predicate serves a substring search, a regexp and an exact
-// comparison (the query language's ':', '~' and '=' operators) without three
-// variants of each Match* function. A hand-written matcher is just a func of the
-// same shape.
+// TextMatcher decides whether one string matches; every text filter takes one.
 type TextMatcher func(string) bool
 
 // Regexp matches text the regexp matches anywhere (the '~' operator).
@@ -171,12 +167,9 @@ func MatchContent(m TextMatcher) Predicate {
 }
 
 // MatchRegion matches templated pages whose transcription of one template box
-// matches. boxID names the box ("" = any of them), and only boxes the page's
-// template actually declares are considered — the ids come from the config, so a
-// section left in the sidecar for a box that no longer exists (a tombstone) is
-// never matched. A declared box with no section yet reads as empty text, and a
-// non-templated page never matches. A broken templates: section cannot be seen
-// here — Open resolves the set once and fails there.
+// matches. boxID names the box ("" = any of them); only boxes the page's template
+// declares are considered, a declared box with no section yet reads as empty text,
+// and a non-templated page never matches.
 func MatchRegion(boxID string, m TextMatcher) Predicate {
 	return func(p Page) bool {
 		tmpl := pageTemplate(p)

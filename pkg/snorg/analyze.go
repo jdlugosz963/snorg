@@ -21,14 +21,9 @@ func NewOpenAIProvider(endpoint, apiKey, model string) (Provider, error) {
 	return analyze.NewOpenAI(endpoint, apiKey, model)
 }
 
-// NewProvider builds the Provider the client's configuration describes: it resolves
-// the API key (literal api_key > api_key_command stdout > $OPENAI_API_KEY),
-// validates the provider section, and constructs the OpenAI-compatible backend.
-// Call it once at startup and reuse the Provider across Analyze calls — that way
-// credentials fail fast rather than on the first page, and api_key_command runs once.
-//
-// Resolution stores the key on the client's Config (Config().Provider.APIKey), so a
-// second call is idempotent and does not re-run api_key_command.
+// NewProvider builds the Provider the client's configuration describes, resolving
+// the API key (api_key > api_key_command stdout > $OPENAI_API_KEY). Call it once
+// and reuse the Provider across Analyze calls.
 func (c *Client) NewProvider() (Provider, error) {
 	if err := c.cfg.ResolveAPIKey(); err != nil {
 		return nil, err
@@ -41,7 +36,7 @@ func (c *Client) NewProvider() (Provider, error) {
 
 // AnalyzeOptions tunes a batch analysis.
 type AnalyzeOptions struct {
-	Force bool  // re-analyze even pages whose path geometry is unchanged
+	Force bool  // re-analyze even pages whose fingerprint is unchanged (blank pages/boxes still cost no call)
 	Spec  *Spec // prompts to analyze with; nil = the client's config (AnalyzeSpec)
 
 	// OnResult, when set, is called with each page's result as it lands — before
@@ -51,10 +46,8 @@ type AnalyzeOptions struct {
 	OnResult func(AnalyzeResult)
 }
 
-// AnalyzeResult is one page's analysis: the PageResult, embedded so every fact is
-// promoted (r.PageID, r.Skipped, r.Content, r.Regions, r.Names, r.Fields, r.Calls,
-// r.JSONChanged) and a new PageResult field needs no re-plumbing here. Err is set
-// when that page failed; the batch continues past failures.
+// AnalyzeResult is one page's PageResult plus its error; the batch continues past
+// failures.
 type AnalyzeResult struct {
 	PageResult
 	Err error

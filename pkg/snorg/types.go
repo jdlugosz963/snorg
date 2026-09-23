@@ -117,12 +117,8 @@ const (
 // migrate upgrades older files to it.
 const CurrentSchemaVersion = archive.CurrentSchemaVersion
 
-// The shared change vocabulary: what one analyze or edit did, in orthogonal parts.
-// TextChange is a text document's before/after — it carries the text itself, so a
-// front-end renders or re-diffs the change (see TextDiff/TextStat) without going
-// back to the archive; NameChange is a title/link rename; RegionChange is one
-// template box. A part never carries a fact only one write path can produce, so no
-// field on a value you hold is permanently zero.
+// The shared change vocabulary: a text document's before/after, a title/link
+// rename, and one template box's change.
 type (
 	TextKind     = archive.TextKind
 	TextChange   = archive.TextChange
@@ -130,9 +126,7 @@ type (
 	RegionChange = archive.RegionChange
 )
 
-// The TextKind values a TextChange.Kind takes. TextReverted is reachable only
-// through an edit that lands exactly on the stored AI base — analysis cannot
-// produce it, and emptying a page that never had a base reads TextCleared.
+// The TextKind values a TextChange.Kind takes; only an edit produces TextReverted.
 const (
 	TextUnchanged = archive.TextUnchanged
 	TextNew       = archive.TextNew
@@ -141,9 +135,8 @@ const (
 	TextReverted  = archive.TextReverted
 )
 
-// The per-operation results assembled from those parts: PageResult is one analyzed
-// page (with the cost facts only analysis can produce — a fingerprint skip, a blank
-// crop, the LLM call count), PageEdit one editor round-trip.
+// The per-operation results built from those parts: one analyzed page, one of its
+// template boxes, one editor round-trip.
 type (
 	PageResult   = analyze.PageResult
 	RegionResult = analyze.RegionResult
