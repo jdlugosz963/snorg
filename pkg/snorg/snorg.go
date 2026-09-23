@@ -52,9 +52,25 @@ func Open(archivePath string, cfg *Config) (*Client, error) {
 		}
 	}
 	arch := archive.New(archivePath)
-	// Apply the ingest.svg toggles defensively: a config from LoadConfig has them
-	// populated, but a hand-built Config leaves the bool pointers nil — keep the
-	// default pipeline stage for any unset field.
+	arch.SVG = svgPipeline(cfg)
+	// Bridge the config's template specs (image paths already resolved to absolute
+	// by config.Load) into the archive, which hashes each image to match a page's
+	// background. A hand-built Config with no templates leaves the feature inert.
+	arch.SetTemplateSpecs(templateSpecs(cfg))
+	// Resolve them right away: a templates: section that names a missing image or
+	// invalid boxes is a broken config, and it should fail here rather than half a
+	// command later — which is also why no read path (a query predicate included)
+	// has to carry a template-resolution error.
+	if _, err := arch.Templates(); err != nil {
+		return nil, err
+	}
+	return &Client{arch: arch, cfg: cfg}, nil
+}
+
+// svgPipeline builds the archive's SVG pipeline from the config's ingest.svg
+// toggles. A hand-built Config leaves the bool pointers nil, so any unset field
+// keeps the default stage.
+func svgPipeline(cfg *config.Config) archive.SVGPipeline {
 	svg := archive.DefaultSVGPipeline()
 	s := cfg.Ingest.SVG
 	if s.Links != nil {
@@ -72,19 +88,7 @@ func Open(archivePath string, cfg *Config) (*Client, error) {
 	if s.Colors != nil {
 		svg.Colors = s.Colors
 	}
-	arch.SVG = svg
-	// Bridge the config's template specs (image paths already resolved to absolute
-	// by config.Load) into the archive, which hashes each image to match a page's
-	// background. A hand-built Config with no templates leaves the feature inert.
-	arch.SetTemplateSpecs(templateSpecs(cfg))
-	// Resolve them right away: a templates: section that names a missing image or
-	// invalid boxes is a broken config, and it should fail here rather than half a
-	// command later — which is also why no read path (a query predicate included)
-	// has to carry a template-resolution error.
-	if _, err := arch.Templates(); err != nil {
-		return nil, err
-	}
-	return &Client{arch: arch, cfg: cfg}, nil
+	return svg
 }
 
 // templateSpecs converts the config's template section into the archive's raw spec
