@@ -39,6 +39,9 @@ type NoteView struct {
 	Pages     []PageView `json:"pages"`
 }
 
+// Name is the note's display name (archive.NoteName).
+func (v *NoteView) Name() string { return archive.NoteName(v.FileID, v.Source) }
+
 // PageView is one page in placement order, with its SVG path relative to the
 // archive root (join it with Result.Archive to resolve the file).
 type PageView struct {

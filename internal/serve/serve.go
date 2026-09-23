@@ -112,7 +112,7 @@ func Handler(a *archive.Archive, views []*retrieve.NoteView, flat bool) http.Han
 			http.NotFound(w, r)
 			return
 		}
-		render(w, noteTmpl, gridData{Name: noteName(v), Pages: notePages(v)})
+		render(w, noteTmpl, gridData{Name: v.Name(), Pages: notePages(v)})
 	})
 
 	// The .svg/.png suffix stays in the URL for clarity but is not a routable
@@ -200,16 +200,6 @@ func writeAsset(w http.ResponseWriter, r *http.Request, b []byte, contentType st
 	w.Write(b)
 }
 
-// noteName is the human label for a note: the original .note filename without
-// the extension, falling back to the FILE_ID when the source is unknown.
-func noteName(v *retrieve.NoteView) string {
-	name := strings.TrimSuffix(v.Source, ".note")
-	if name == "" {
-		return v.FileID
-	}
-	return name
-}
-
 func render(w http.ResponseWriter, t *template.Template, data any) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := t.Execute(w, data); err != nil {
@@ -237,7 +227,7 @@ func newGroupedLayout(views []*retrieve.NoteView) groupedLayout {
 		if len(v.Pages) == 0 {
 			continue
 		}
-		cards = append(cards, noteCard{FileID: v.FileID, Name: noteName(v), FirstPageID: v.Pages[0].PageID})
+		cards = append(cards, noteCard{FileID: v.FileID, Name: v.Name(), FirstPageID: v.Pages[0].PageID})
 	}
 	return groupedLayout{cards: cards}
 }
@@ -253,7 +243,7 @@ type flatLayout struct{ pages []pageItem }
 func newFlatLayout(views []*retrieve.NoteView) flatLayout {
 	pages := make([]pageItem, 0)
 	for _, v := range views {
-		name := noteName(v)
+		name := v.Name()
 		for _, p := range v.Pages {
 			pages = append(pages, pageItem{
 				FileID:  v.FileID,

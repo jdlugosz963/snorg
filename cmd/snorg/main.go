@@ -288,11 +288,7 @@ func listCmd(a *app) *cli.Command {
 				if err != nil {
 					return fmt.Errorf("note %s: %w", id, err)
 				}
-				name := strings.TrimSuffix(nd.Source, ".note")
-				if name == "" {
-					name = id
-				}
-				fmt.Printf("%s\t%s\n", id, name)
+				fmt.Printf("%s\t%s\n", id, nd.Name())
 			}
 			return nil
 		},
@@ -424,10 +420,7 @@ func printQueryLong(c *snorg.Client, matches []snorg.Match) error {
 			nd = &read
 			notes[m.FileID] = nd
 		}
-		name := strings.TrimSuffix(nd.Source, ".note")
-		if name == "" {
-			name = m.FileID
-		}
+		name := nd.Name()
 		number := 0
 		for _, ref := range nd.Pages {
 			if ref.ID == m.PageID {

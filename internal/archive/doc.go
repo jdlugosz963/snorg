@@ -1,6 +1,10 @@
 package archive
 
-import "github.com/jdlugosz963/snorg/internal/snote"
+import (
+	"strings"
+
+	"github.com/jdlugosz963/snorg/internal/snote"
+)
 
 // The Doc types are the serialization boundary: they define the stable plaintext
 // JSON contract written to disk, decoupled from the in-memory domain model.
@@ -29,6 +33,18 @@ type NoteDoc struct {
 	Source        string        `json:"source"`
 	Tags          []string      `json:"tags,omitempty"`
 	Pages         []NotePageRef `json:"pages"`
+}
+
+// Name is the note's display name (see NoteName).
+func (nd NoteDoc) Name() string { return NoteName(nd.FileID, nd.Source) }
+
+// NoteName is a note's display name: its source .note filename without the
+// extension, or the FILE_ID when the source is unknown.
+func NoteName(fileID, source string) string {
+	if name := strings.TrimSuffix(source, ".note"); name != "" {
+		return name
+	}
+	return fileID
 }
 
 // NotePageRef is one entry in note.json's page placement.
