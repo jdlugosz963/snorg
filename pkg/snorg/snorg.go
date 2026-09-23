@@ -220,7 +220,7 @@ func (c *Client) Ingest(paths []string, opts IngestOptions) ([]IngestResult, err
 // already-retrieved Result through an arbitrary template.
 func (c *Client) Export(pageIDs []string) (string, error) {
 	if c.cfg.Export.Template == "" {
-		return "", fmt.Errorf("export.template is required")
+		return "", ErrNoExportTemplate
 	}
 	res, err := retrieve.Get(c.arch, pageIDs)
 	if err != nil {

@@ -189,7 +189,7 @@ func (a *Archive) MigratePages(pageIDs []string, opts MigrateOptions) ([]Migrate
 		fileID, ok := index[pid]
 		if !ok {
 			emit(&out, opts, MigrateResult{Kind: kindPage.String(), ID: pid,
-				Err: fmt.Errorf("page %s not found in archive", pid)})
+				Err: fmt.Errorf("page %s: %w", pid, ErrNotFound)})
 			continue
 		}
 		if _, seen := notes[fileID]; !seen {

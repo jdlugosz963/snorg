@@ -180,7 +180,7 @@ func Get(a *archive.Archive, pageIDs []string) (*Result, error) {
 			missing = append(missing, id)
 		}
 		sort.Strings(missing)
-		return nil, fmt.Errorf("page(s) not found in archive: %s", strings.Join(missing, ", "))
+		return nil, fmt.Errorf("page(s) %s: %w", strings.Join(missing, ", "), archive.ErrNotFound)
 	}
 	root, err := filepath.Abs(a.Root)
 	if err != nil {

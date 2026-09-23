@@ -16,6 +16,11 @@ import (
 // stale file; the future `migrate` command is the only reader that bypasses it.
 var ErrSchemaVersion = errors.New("incompatible schema version")
 
+// ErrNotFound is wrapped by every lookup of a PAGEID or FILE_ID the archive does
+// not hold (FindPage, ReadNote, retrieve.Get). A missing note.json still also
+// wraps os.ErrNotExist, which the ingest preflight relies on.
+var ErrNotFound = errors.New("not found in archive")
+
 // verifySchema gates a parsed doc: a version other than CurrentSchemaVersion is a
 // stale (or future) grammar this binary must not touch, so it errors with a
 // recovery hint rather than misinterpreting the bytes.
@@ -59,6 +64,9 @@ func (a *Archive) List() ([]string, error) {
 func (a *Archive) ReadNote(fileID string) (NoteDoc, error) {
 	var nd NoteDoc
 	if err := readJSON(filepath.Join(a.Root, fileID, "note.json"), &nd); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return NoteDoc{}, fmt.Errorf("note %s: %w (%w)", fileID, ErrNotFound, err)
+		}
 		return NoteDoc{}, err
 	}
 	if err := verifySchema("note", fileID, nd.SchemaVersion); err != nil {
@@ -113,7 +121,7 @@ func (a *Archive) FindPage(pageID string) (string, error) {
 	}
 	switch len(found) {
 	case 0:
-		return "", fmt.Errorf("page %s not found in archive", pageID)
+		return "", fmt.Errorf("page %s: %w", pageID, ErrNotFound)
 	case 1:
 		return found[0], nil
 	default:
