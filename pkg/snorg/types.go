@@ -17,15 +17,19 @@ import (
 // module). Aliases are the same type — field access and methods work unchanged.
 
 // Config and its nested sections, as loaded from YAML by LoadConfig. The provider
-// credentials are reachable as Config.Provider (the type is not aliased, so the name
-// Provider can denote the analysis-backend interface — see analyze.go).
+// credentials section is ProviderConfig, since Provider is the analysis-backend
+// interface (analyze.go); a templates: entry is TemplateConfig and its boxes
+// BoxConfig, distinct from the resolved Template/Box below.
 type (
-	Config     = config.Config
-	Analysis   = config.Analysis
-	Export     = config.Export
-	Ingest     = config.Ingest
-	Task       = config.Task
-	SVGToggles = config.SVGToggles
+	Config         = config.Config
+	Analysis       = config.Analysis
+	Export         = config.Export
+	Ingest         = config.Ingest
+	Task           = config.Task
+	SVGToggles     = config.SVGToggles
+	ProviderConfig = config.Provider
+	TemplateConfig = config.TemplateSpec
+	BoxConfig      = config.Box
 )
 
 // Result is the read contract returned by Client.Retrieve: an absolute archive
