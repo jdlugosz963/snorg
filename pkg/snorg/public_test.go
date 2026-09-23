@@ -279,7 +279,8 @@ func TestAliasSurface(t *testing.T) {
 	var _ string = snorg.Keyword{}.Text
 	var lk snorg.Link
 	var _ snorg.Rect = lk.Rect
-	_ = lk.Kind
+	var _ snorg.LinkKind = lk.Kind
+	var _ = []snorg.LinkKind{snorg.LinkUnknown, snorg.LinkNote, snorg.LinkFile, snorg.LinkWeb}
 	var _, _, _, _ string = lk.TargetPageID, lk.TargetFileID, lk.Target, lk.Name
 	var _ int = lk.TargetDocPage
 	var r snorg.Rect

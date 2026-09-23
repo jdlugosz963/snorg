@@ -71,7 +71,16 @@ type (
 	Title    = snote.Title
 	Keyword  = snote.Keyword
 	Link     = snote.Link
+	LinkKind = snote.LinkKind
 	Rect     = snote.Rect
+)
+
+// The LinkKind values a Link.Kind takes.
+const (
+	LinkUnknown = snote.LinkUnknown
+	LinkNote    = snote.LinkNote
+	LinkFile    = snote.LinkFile
+	LinkWeb     = snote.LinkWeb
 )
 
 // Match is one page a query predicate accepted, as returned by Client.Query. The
