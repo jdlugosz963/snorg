@@ -25,6 +25,10 @@ A `Client` bundles an archive root with merged configuration.
 
 `Client.ArchivePath()` / `Client.Config()` expose the resolved root and config.
 
+Errors worth branching on are sentinels for `errors.Is`: `ErrNotFound` (an unknown
+PAGEID/FILE_ID), `ErrSchemaVersion` (a stale file — run `Migrate`) and
+`ErrNoExportTemplate`.
+
 ## Capabilities
 
 | Method | Does |
@@ -234,3 +238,6 @@ for _, n := range res.Notes {
 All types a method returns are re-exported from this package as aliases
 (`snorg.Result`, `snorg.NoteView`, `snorg.Match`, `snorg.Spec`, `snorg.Config`, …),
 so importing `pkg/snorg` alone is sufficient — no `internal/*` import is ever needed.
+Because they are aliases, a field rename in an internal struct is a public API
+change; `TestAliasSurface` names every alias and its fields so such a rename fails
+the build.
