@@ -128,7 +128,11 @@ func Resolve(opts ResolveOptions) (*Client, error) {
 		archivePath = cfg.Archive
 	}
 	if archivePath == "" {
-		return nil, fmt.Errorf("no archive path: set ArchivePath or the archive: key in %s", userPath)
+		where := userPath
+		if where == "" {
+			where = "the user config"
+		}
+		return nil, fmt.Errorf("no archive path: set ArchivePath or the archive: key in %s", where)
 	}
 	archivePath = config.ExpandHome(archivePath)
 	return Open(archivePath, cfg)
