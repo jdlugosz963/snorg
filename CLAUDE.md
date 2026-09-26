@@ -103,7 +103,9 @@ Flow: `cmd/snorg` → `pkg/snorg` (public API) → `internal/ingest` orchestrate
   `AnalyzeOptions.OnResult`, `IngestOptions.OnResult` and `MigrateOptions.OnResult`, all
   sequential, on the calling goroutine, in the returned slice's order. The analysis backend is **caller-owned**: `NewProvider()` resolves the key +
   validates + builds it **once**, and `Analyze(ctx, prov, ids, opts)` takes it as an
-  argument (so a batch costs no credential setup and `api_key_command` runs once);
+  argument (so a batch costs no credential setup and `api_key_command` runs once — the resolved
+  key is cached on the `Client`, resolved on a `Config.Clone()` and never written back into the
+  config, which `Client.Config()` hands out as a snapshot);
   `opts.Spec` overrides the config prompts. The only doc for this package is `docs/library.md`,
   the hand-written guide (why the pieces are shaped as they are); no per-identifier reference is
   checked in — run `gomarkdoc ./pkg/snorg` (or read pkg.go.dev) for that. **When adding or changing

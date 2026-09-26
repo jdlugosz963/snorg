@@ -24,6 +24,9 @@ A `Client` bundles an archive root with merged configuration.
   XDG user → `-c` files (later wins).
 
 `Client.ArchivePath()` / `Client.Config()` expose the resolved root and config.
+`Config()` is a **snapshot**: mutating it changes nothing (configure through
+`LoadConfig`/`Open`), which is also what keeps the credential `NewProvider` resolves
+off a struct callers can marshal.
 
 Errors worth branching on are sentinels for `errors.Is`: `ErrNotFound` (an unknown
 PAGEID/FILE_ID), `ErrSchemaVersion` (a stale file — run `Migrate`) and
@@ -118,7 +121,8 @@ build it once with `NewProvider()` — which resolves the key (`api_key` >
 `api_key_command` stdout > `$OPENAI_API_KEY`), validates the `provider:` section and
 constructs the backend — and pass it to every `Analyze`. Bad credentials then fail at
 startup instead of on the first page, and `api_key_command` runs once rather than per
-batch. `NewOpenAIProvider(endpoint, key, model)` builds one from explicit credentials
+batch — the resolved key is cached on the `Client`, deliberately not written back into
+the configuration. `NewOpenAIProvider(endpoint, key, model)` builds one from explicit credentials
 instead of the config; any type satisfying `Provider` works, so a test double or an
 alternate backend drops straight in.
 

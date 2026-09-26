@@ -78,6 +78,47 @@ type Config struct {
 	Templates []TemplateSpec `yaml:"templates"`
 }
 
+// Clone returns a deep copy: every map, slice and pointer field is duplicated, so
+// mutating the copy can never reach the original. Any reference-typed field added to
+// Config must be duplicated here (TestCloneIsDeep fails otherwise).
+func (c *Config) Clone() *Config {
+	cp := *c
+	if c.Analysis.Fields != nil {
+		cp.Analysis.Fields = make(map[string]Task, len(c.Analysis.Fields))
+		for k, v := range c.Analysis.Fields {
+			cp.Analysis.Fields[k] = v
+		}
+	}
+	if c.Ingest.SVG.Colors != nil {
+		cp.Ingest.SVG.Colors = make(map[string]string, len(c.Ingest.SVG.Colors))
+		for k, v := range c.Ingest.SVG.Colors {
+			cp.Ingest.SVG.Colors[k] = v
+		}
+	}
+	cp.Ingest.SVG.Links = cloneBool(c.Ingest.SVG.Links)
+	cp.Ingest.SVG.Navigation = cloneBool(c.Ingest.SVG.Navigation)
+	cp.Ingest.SVG.Format = cloneBool(c.Ingest.SVG.Format)
+	if c.Templates != nil {
+		cp.Templates = make([]TemplateSpec, len(c.Templates))
+		for i, t := range c.Templates {
+			cp.Templates[i] = t
+			if t.Boxes != nil {
+				cp.Templates[i].Boxes = append([]Box(nil), t.Boxes...)
+			}
+		}
+	}
+	return &cp
+}
+
+// cloneBool duplicates an SVGToggles pointer, preserving nil (= unset).
+func cloneBool(p *bool) *bool {
+	if p == nil {
+		return nil
+	}
+	v := *p
+	return &v
+}
+
 // TemplateSpec is one template: a background Image (an absolute path after Load
 // resolves it against the declaring file's directory) and its boxes in author
 // order. The image hashing, validation and background matching live in

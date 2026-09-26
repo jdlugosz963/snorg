@@ -24,11 +24,16 @@ import (
 	"github.com/jdlugosz963/snorg/internal/snote/sntool"
 )
 
-// Client is a handle on one archive plus its merged configuration. It is safe to
-// reuse; its methods hold no cross-call state.
+// Client is a handle on one archive plus its merged configuration. It is meant to be
+// reused; the one piece of cross-call state is the API key NewProvider resolves, cached
+// so a shell api_key_command runs once per client (which also makes a Client unsafe to
+// share across goroutines).
 type Client struct {
 	arch *archive.Archive
 	cfg  *config.Config
+	// apiKey is the resolved provider credential, deliberately kept off cfg: Config
+	// hands that out, and a secret does not belong in a struct callers can marshal.
+	apiKey string
 }
 
 // LoadConfig loads and deep-merges the YAML config files (later paths override
@@ -145,8 +150,9 @@ func Resolve(opts ResolveOptions) (*Client, error) {
 // ArchivePath returns the client's archive root.
 func (c *Client) ArchivePath() string { return c.arch.Root }
 
-// Config returns the client's merged configuration.
-func (c *Client) Config() *Config { return c.cfg }
+// Config returns a snapshot of the client's merged configuration. Mutating it has no
+// effect on the client — configure through LoadConfig/Open.
+func (c *Client) Config() *Config { return c.cfg.Clone() }
 
 // List returns the archived FILE_IDs, sorted.
 func (c *Client) List() ([]string, error) { return retrieve.List(c.arch) }

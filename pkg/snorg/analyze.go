@@ -25,13 +25,22 @@ func NewOpenAIProvider(endpoint, apiKey, model string) (Provider, error) {
 // the API key (api_key > api_key_command stdout > $OPENAI_API_KEY). Call it once
 // and reuse the Provider across Analyze calls.
 func (c *Client) NewProvider() (Provider, error) {
-	if err := c.cfg.ResolveAPIKey(); err != nil {
+	// ResolveAPIKey writes the secret into its receiver, so resolve on a copy: the
+	// client's own config stays free of it and Config cannot hand it out. Seeding the
+	// copy with the key an earlier call resolved is what keeps a shell
+	// api_key_command to one run — ResolveAPIKey's own early-out does the memoizing.
+	cfg := c.cfg.Clone()
+	if cfg.Provider.APIKey == "" {
+		cfg.Provider.APIKey = c.apiKey
+	}
+	if err := cfg.ResolveAPIKey(); err != nil {
 		return nil, err
 	}
-	if err := c.cfg.ValidateProvider(); err != nil {
+	if err := cfg.ValidateProvider(); err != nil {
 		return nil, err
 	}
-	return NewOpenAIProvider(c.cfg.Provider.Endpoint, c.cfg.Provider.APIKey, c.cfg.Provider.Model)
+	c.apiKey = cfg.Provider.APIKey
+	return NewOpenAIProvider(cfg.Provider.Endpoint, c.apiKey, cfg.Provider.Model)
 }
 
 // AnalyzeOptions tunes a batch analysis.

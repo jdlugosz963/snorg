@@ -264,3 +264,28 @@ func TestOpenBridgesTemplateSpecs(t *testing.T) {
 		t.Errorf("boxes = %+v", tmpl.Boxes)
 	}
 }
+
+// TestConfigIsSnapshot: Config hands out a copy, so a caller cannot reach into the
+// client's own configuration — the reason NewProvider can resolve a secret without it
+// showing up there.
+func TestConfigIsSnapshot(t *testing.T) {
+	c := seedArchive(t)
+	c.cfg.Analysis.Fields = map[string]Task{"summary": {Prompt: "summarize"}}
+
+	got := c.Config()
+	if got == c.cfg {
+		t.Fatal("Config returned the client's own config pointer")
+	}
+	got.Export.Template = "{{ archive }}"
+	got.Analysis.Fields["summary"] = Task{Prompt: "hijacked"}
+
+	if c.cfg.Export.Template != "" {
+		t.Errorf("export template = %q, want the client's config untouched", c.cfg.Export.Template)
+	}
+	if p := c.cfg.Analysis.Fields["summary"].Prompt; p != "summarize" {
+		t.Errorf("field prompt = %q, want %q", p, "summarize")
+	}
+	if again := c.Config(); again.Export.Template != "" {
+		t.Errorf("second Config().Export.Template = %q, want empty", again.Export.Template)
+	}
+}
