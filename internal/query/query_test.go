@@ -54,7 +54,7 @@ func seedArchive(t *testing.T) *archive.Archive {
 // The walk visits every page in List order, then note.json page order.
 func TestPagesWalksTheWholeArchive(t *testing.T) {
 	a := seedArchive(t)
-	ms, err := query.Pages(a, func(archive.NoteDoc, archive.PageDoc) bool { return true })
+	ms, err := query.Pages(a, func(archive.NoteDoc, archive.PageDoc) (bool, error) { return true, nil })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -70,8 +70,8 @@ func TestPagesWalksTheWholeArchive(t *testing.T) {
 // predicate reason about note-level state (inherited tags) without a second read.
 func TestPagesPassesBothDocuments(t *testing.T) {
 	a := seedArchive(t)
-	ms, err := query.Pages(a, func(nd archive.NoteDoc, pd archive.PageDoc) bool {
-		return nd.FileID == "F_A" && pd.Starred
+	ms, err := query.Pages(a, func(nd archive.NoteDoc, pd archive.PageDoc) (bool, error) {
+		return nd.FileID == "F_A" && pd.Starred, nil
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -83,7 +83,7 @@ func TestPagesPassesBothDocuments(t *testing.T) {
 
 func TestPagesNoMatches(t *testing.T) {
 	a := seedArchive(t)
-	ms, err := query.Pages(a, func(archive.NoteDoc, archive.PageDoc) bool { return false })
+	ms, err := query.Pages(a, func(archive.NoteDoc, archive.PageDoc) (bool, error) { return false, nil })
 	if err != nil {
 		t.Fatal(err)
 	}

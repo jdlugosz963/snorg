@@ -21,8 +21,10 @@ type Match struct {
 // Pages walks every note/page in the archive (List order, then note.json page
 // order) and returns the pages for which match is true. The match function gets
 // the whole NoteDoc (not just its FileID) so note-level state — the
-// snorg-managed tags every page inherits — is in scope without a second read.
-func Pages(a *archive.Archive, match func(archive.NoteDoc, archive.PageDoc) bool) ([]Match, error) {
+// snorg-managed tags every page inherits — is in scope without a second read. An
+// error from match abandons the walk exactly like a failed read of the archive
+// itself: a filter that could not be evaluated must not yield a result set.
+func Pages(a *archive.Archive, match func(archive.NoteDoc, archive.PageDoc) (bool, error)) ([]Match, error) {
 	ids, err := a.List()
 	if err != nil {
 		return nil, err
@@ -38,7 +40,11 @@ func Pages(a *archive.Archive, match func(archive.NoteDoc, archive.PageDoc) bool
 			if err != nil {
 				return nil, fmt.Errorf("note %s page %s: %w", fileID, ref.ID, err)
 			}
-			if match(nd, pd) {
+			ok, err := match(nd, pd)
+			if err != nil {
+				return nil, err
+			}
+			if ok {
 				out = append(out, Match{FileID: fileID, PageID: pd.PageID})
 			}
 		}

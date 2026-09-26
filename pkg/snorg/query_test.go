@@ -3,10 +3,12 @@ package snorg
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"strings"
 	"testing"
 
 	"github.com/jdlugosz963/snorg/internal/archive"
@@ -146,15 +148,29 @@ func TestParseQueryComposition(t *testing.T) {
 	}
 }
 
-// A hand-written predicate reaches the same accessors the built-in ones use.
+// A hand-written predicate reaches the same accessors the built-in ones use, and
+// reports a read it could not complete the same way they do.
 func TestHandWrittenPredicate(t *testing.T) {
 	c := seedFiltered(t)
 
 	pred := func(p Page) bool {
 		md, err := p.Client.ReadAnalysis(p.Note.FileID, p.Doc.PageID)
-		return err == nil && md != "" && p.Doc.Starred && p.Note.Source == "alpha.note"
+		if err != nil {
+			p.Fail(err)
+			return false
+		}
+		return md != "" && p.Doc.Starred && p.Note.Source == "alpha.note"
 	}
 	want(t, "custom", matched(t, c, pred), []string{"Pa"})
+
+	failing := func(p Page) bool {
+		p.Fail(errors.New("cannot decide"))
+		return false
+	}
+	_, err := c.Query(failing)
+	if err == nil || !strings.Contains(err.Error(), "cannot decide") {
+		t.Errorf("Query(failing predicate) error = %v, want it to carry the predicate's error", err)
+	}
 }
 
 func TestMatchUnanalyzed(t *testing.T) {
@@ -363,4 +379,42 @@ func TestOpenRejectsBrokenTemplates(t *testing.T) {
 	if _, err := Open(t.TempDir(), cfg); err == nil {
 		t.Error("Open with a missing template image: want error")
 	}
+}
+
+// TestQueryFailsOnUnreadableSidecar: a page whose transcription cannot be read must
+// not silently count as a non-match, because MatchNot would then report it as a match —
+// a query answering about text it never read. Lever: a directory where the .md goes, so
+// the read fails for a reason other than "not there".
+func TestQueryFailsOnUnreadableSidecar(t *testing.T) {
+	c := seedFiltered(t)
+	if err := os.Remove(filepath.Join(c.ArchivePath(), "F_A", "Pa.md")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(c.ArchivePath(), "F_A", "Pa.md"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := c.Query(MatchContent(Substring("meeting")))
+	if err == nil {
+		t.Fatal("Query(content:meeting) = nil error, want the unreadable sidecar reported")
+	}
+	if !strings.Contains(err.Error(), "Pa") {
+		t.Errorf("error %q does not name the page it failed on", err)
+	}
+	// The case that used to give a wrong answer: NOT inverts the false the read error
+	// produced, so Pa would have been listed as a match.
+	if ms, err := c.Query(MatchNot(MatchContent(Substring("meeting")))); err == nil {
+		t.Errorf("Query(NOT content:meeting) = %v, nil error; want the read error", pageIDsOf(ms))
+	}
+	// A filter that reads only the two documents is unaffected.
+	want(t, "MatchAll", matched(t, c, MatchAll), []string{"Pa", "Pb", "Pc", "Pd"})
+}
+
+// pageIDsOf is only for failure messages.
+func pageIDsOf(ms []Match) []string {
+	ids := make([]string, len(ms))
+	for i, m := range ms {
+		ids[i] = m.PageID
+	}
+	return ids
 }

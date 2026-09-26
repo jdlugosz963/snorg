@@ -160,10 +160,14 @@ func (c *Client) List() ([]string, error) { return retrieve.List(c.arch) }
 // Query returns the pages matching pred (see the Match* constructors and
 // ParseQuery). Order follows the archive walk: List order, then note.json page
 // order. The walk hands each candidate to pred as a Page, this client included, so
-// a predicate can read whatever the two documents do not hold.
+// a predicate can read whatever the two documents do not hold. A read it cannot
+// complete is reported with Page.Fail and aborts the walk, so the result set never
+// mixes matched pages with pages that were never read.
 func (c *Client) Query(pred Predicate) ([]Match, error) {
-	return query.Pages(c.arch, func(nd archive.NoteDoc, pd archive.PageDoc) bool {
-		return pred(Page{Client: c, Note: nd, Doc: pd})
+	var fail queryErr
+	return query.Pages(c.arch, func(nd archive.NoteDoc, pd archive.PageDoc) (bool, error) {
+		ok := pred(Page{Client: c, Note: nd, Doc: pd, fail: &fail})
+		return ok, fail.err
 	})
 }
 
@@ -245,7 +249,7 @@ func RenderTemplate(res *Result, template string) (string, error) {
 // serves the whole archive. Binding a listener is left to the caller.
 func (c *Client) ServeHandler(pageIDs []string, flat bool) (http.Handler, error) {
 	if len(pageIDs) == 0 {
-		matches, err := query.Pages(c.arch, func(archive.NoteDoc, archive.PageDoc) bool { return true })
+		matches, err := query.Pages(c.arch, func(archive.NoteDoc, archive.PageDoc) (bool, error) { return true, nil })
 		if err != nil {
 			return nil, err
 		}

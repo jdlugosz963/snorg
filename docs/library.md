@@ -68,9 +68,19 @@ and a hand-written predicate can do the same:
 ```go
 c.Query(func(p snorg.Page) bool {
 	md, err := p.Client.ReadAnalysis(p.Note.FileID, p.Doc.PageID)
-	return err == nil && p.Doc.Starred && strings.Contains(md, "TODO")
+	if err != nil {
+		p.Fail(err) // Query abandons the walk and returns this
+		return false
+	}
+	return p.Doc.Starred && strings.Contains(md, "TODO")
 })
 ```
+
+A predicate that reads outside the two documents must report a failed read with
+`p.Fail(err)` instead of answering `false`: `Query` then returns that error rather
+than a result set. Answering `false` would be worse than an error, because
+`MatchNot` inverts it — a page whose transcription could not be read would come back
+as a match for `NOT content:secret`.
 
 The family is `MatchAll`, `MatchStarred`, `MatchUnanalyzed`, `MatchTemplated`,
 `MatchNot`, `MatchAnd`, `MatchOr`, `MatchIDs`, `MatchNote`, `MatchKeyword`,
@@ -78,7 +88,8 @@ The family is `MatchAll`, `MatchStarred`, `MatchUnanalyzed`, `MatchTemplated`,
 in the reference and leave the plain nouns to the types. `MatchTag` matches inherited
 tags because the candidate carries the owning note; `MatchTemplated`/`MatchRegion`
 need no error return because `Open` resolves the `templates:` section once and fails
-there if it is broken.
+there if it is broken, and because an unreadable transcription goes out through
+`Page.Fail`.
 
 Every text filter takes a `TextMatcher` (`func(string) bool`) rather than a regexp,
 which is why one `MatchTag` covers all three of the language's operators:

@@ -1,6 +1,7 @@
 package snorg
 
 import (
+	"fmt"
 	"regexp"
 	"strings"
 
@@ -15,6 +16,23 @@ type Page struct {
 	Client *Client
 	Note   NoteDoc
 	Doc    PageDoc
+
+	// fail is where Fail records; Query owns it, since a Page is passed by value.
+	fail *queryErr
+}
+
+// queryErr holds the first error a predicate hit during one walk.
+type queryErr struct{ err error }
+
+// Fail records err as the reason this query cannot be answered: Query abandons the
+// walk and returns it instead of a result set. A predicate that reads outside the two
+// documents must call it rather than answering false — an unreadable page counted as a
+// non-match is a page MatchNot then reports as a match. The first error wins, and a
+// predicate invoked outside Query has nowhere to report, so Fail is then a no-op.
+func (p Page) Fail(err error) {
+	if p.fail != nil && p.fail.err == nil {
+		p.fail.err = fmt.Errorf("page %s: %w", p.Doc.PageID, err)
+	}
 }
 
 // Predicate decides whether a candidate page matches. Client.Query calls one per
@@ -150,13 +168,14 @@ func MatchDate(from, to string) Predicate {
 // MatchContent matches pages whose transcription (the <PAGEID>.md effective
 // content, AI or hand-written) matches. A never-analyzed page reads as empty, so
 // it matches only a matcher that accepts the empty string; an unreadable sidecar
-// is treated as non-matching. On a templated page the sidecar is the whole
-// region-section document, markers included — MatchRegion is the per-box view of
-// the same text.
+// fails the whole query (see Page.Fail) rather than passing for empty. On a
+// templated page the sidecar is the whole region-section document, markers included
+// — MatchRegion is the per-box view of the same text.
 func MatchContent(m TextMatcher) Predicate {
 	return func(p Page) bool {
 		md, err := p.Client.ReadAnalysis(p.Note.FileID, p.Doc.PageID)
 		if err != nil {
+			p.Fail(err)
 			return false
 		}
 		return m(md)
@@ -166,7 +185,8 @@ func MatchContent(m TextMatcher) Predicate {
 // MatchRegion matches templated pages whose transcription of one template box
 // matches. boxID names the box ("" = any of them); only boxes the page's template
 // declares are considered, a declared box with no section yet reads as empty text,
-// and a non-templated page never matches.
+// and a non-templated page never matches. An unreadable sidecar fails the query, as
+// in MatchContent.
 func MatchRegion(boxID string, m TextMatcher) Predicate {
 	return func(p Page) bool {
 		tmpl := pageTemplate(p)
@@ -175,6 +195,7 @@ func MatchRegion(boxID string, m TextMatcher) Predicate {
 		}
 		md, err := p.Client.ReadAnalysis(p.Note.FileID, p.Doc.PageID)
 		if err != nil {
+			p.Fail(err)
 			return false
 		}
 		text := make(map[string]string)
@@ -193,12 +214,13 @@ func MatchRegion(boxID string, m TextMatcher) Predicate {
 	}
 }
 
-// pageTemplate resolves the config template a page is drawn on, or nil (not
-// templated, none configured, or an unreadable set — Open already rejected a
-// broken one).
+// pageTemplate resolves the config template a page is drawn on, or nil (not templated
+// or none configured). Open already resolved the set, so the error cannot happen here;
+// it still fails the query rather than reading as "not templated".
 func pageTemplate(p Page) *Template {
 	ts, err := p.Client.Templates()
 	if err != nil {
+		p.Fail(err)
 		return nil
 	}
 	return ts.MatchBackground(p.Doc.BackgroundHash)
