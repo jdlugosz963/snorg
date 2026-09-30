@@ -105,7 +105,9 @@ Flow: `cmd/snorg` → `pkg/snorg` (public API) → `internal/ingest` orchestrate
   type. `AnalyzeResult` **embeds** `PageResult` rather than copying its fields, so a new
   fact needs no re-plumbing. All three batch calls stream per item as it lands —
   `AnalyzeOptions.OnResult`, `IngestOptions.OnResult` and `MigrateOptions.OnResult`, all
-  sequential, on the calling goroutine, in the returned slice's order. The analysis backend is **caller-owned**: `NewProvider()` resolves the key +
+  sequential, on the calling goroutine, in the returned slice's order — and all three take a
+  `ctx` whose cancellation stops the batch between items (results so far + `ctx.Err()`; the
+  CLI cancels it on Ctrl-C). The analysis backend is **caller-owned**: `NewProvider()` resolves the key +
   validates + builds it **once**, and `Analyze(ctx, prov, ids, opts)` takes it as an
   argument (so a batch costs no credential setup and `api_key_command` runs once — the resolved
   key is cached on the `Client`, resolved on a `Config.Clone()` and never written back into the
@@ -321,7 +323,7 @@ Flow: `cmd/snorg` → `pkg/snorg` (public API) → `internal/ingest` orchestrate
   prunes removed pages (all their `<PAGEID>.*`, `.md` included), writes only changed files,
   **preserves a page's `analysis`** across re-write (per-region transcriptions carried by exact
   rect match — moved regions drop theirs), and **preserves other `<PAGEID>.*` artifacts** — never
-  a full rebuild. `RunMany(src, store, paths, Options{OnResult})` ingests **one note at a
+  a full rebuild. `RunMany(ctx, src, store, paths, Options{OnResult})` ingests **one note at a
   time** (no worker pool — snorg is single-threaded outside `internal/serve`); `OnResult` fires as
   each note lands, in the returned slice's input order. Note: page reorder rewrites
   neighbor SVGs (baked nav zones follow the order).

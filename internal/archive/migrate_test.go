@@ -1,6 +1,7 @@
 package archive
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -64,7 +65,7 @@ func TestMigrateV0ToCurrent(t *testing.T) {
 		t.Fatal("ReadNote should reject a stale note.json")
 	}
 
-	results, err := a.MigrateAll(MigrateOptions{})
+	results, err := a.MigrateAll(context.Background(), MigrateOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -112,7 +113,7 @@ func TestMigrateIdempotent(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	results, err := a.MigrateAll(MigrateOptions{})
+	results, err := a.MigrateAll(context.Background(), MigrateOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -137,7 +138,7 @@ func TestMigrateNewerThanBinary(t *testing.T) {
 	}
 	bumpVersion(t, filepath.Join(dir, "Pa.json")) // sets schema_version = 999
 
-	results, err := a.MigrateAll(MigrateOptions{})
+	results, err := a.MigrateAll(context.Background(), MigrateOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -165,7 +166,7 @@ func TestMigratePagesSelection(t *testing.T) {
 		stripVersion(t, filepath.Join(dir, p))
 	}
 
-	results, err := a.MigratePages([]string{"Pa", "Pnope"}, MigrateOptions{})
+	results, err := a.MigratePages(context.Background(), []string{"Pa", "Pnope"}, MigrateOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -241,7 +242,7 @@ func TestMigrateV1LinkKinds(t *testing.T) {
 	}
 	downgradeLinksToV1(t, filepath.Join(dir, "Pa.json"))
 
-	if _, err := a.MigratePages([]string{"Pa"}, MigrateOptions{}); err != nil {
+	if _, err := a.MigratePages(context.Background(), []string{"Pa"}, MigrateOptions{}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -303,7 +304,7 @@ func TestMigrateLegacyEditDiff(t *testing.T) {
 	}
 	stripVersion(t, filepath.Join(dir, "Pa.json")) // simulate a stale archive.
 
-	results, err := a.MigrateAll(MigrateOptions{})
+	results, err := a.MigrateAll(context.Background(), MigrateOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -342,7 +343,7 @@ func TestMigrateLegacyEditDiff(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	results2, err := a.MigrateAll(MigrateOptions{})
+	results2, err := a.MigrateAll(context.Background(), MigrateOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -369,7 +370,7 @@ func TestMigrateStreamsResults(t *testing.T) {
 	stripVersion(t, filepath.Join(root, "F_TEST", "Pa.json"))
 
 	var streamed []MigrateResult
-	results, err := a.MigrateAll(MigrateOptions{
+	results, err := a.MigrateAll(context.Background(), MigrateOptions{
 		OnResult: func(r MigrateResult) { streamed = append(streamed, r) },
 	})
 	if err != nil {

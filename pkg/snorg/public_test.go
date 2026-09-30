@@ -159,9 +159,9 @@ func TestPublicSurface(t *testing.T) {
 	var _ []snorg.NameChange = pe.Names
 
 	// The three batch commands all stream their per-item results the same way.
-	var _ func([]string, snorg.IngestOptions) ([]snorg.IngestResult, error) = c.Ingest
-	var _ func([]string, snorg.MigrateOptions) ([]snorg.MigrateResult, error) = c.Migrate
-	var _ func(snorg.MigrateOptions) ([]snorg.MigrateResult, error) = c.MigrateAll
+	var _ func(context.Context, []string, snorg.IngestOptions) ([]snorg.IngestResult, error) = c.Ingest
+	var _ func(context.Context, []string, snorg.MigrateOptions) ([]snorg.MigrateResult, error) = c.Migrate
+	var _ func(context.Context, snorg.MigrateOptions) ([]snorg.MigrateResult, error) = c.MigrateAll
 	var _ snorg.IngestOptions = snorg.IngestOptions{OnResult: func(snorg.IngestResult) {}}
 	var _ snorg.MigrateOptions = snorg.MigrateOptions{OnResult: func(snorg.MigrateResult) {}}
 }

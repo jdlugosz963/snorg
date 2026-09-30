@@ -1,8 +1,10 @@
 package snorg
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -287,5 +289,26 @@ func TestConfigIsSnapshot(t *testing.T) {
 	}
 	if again := c.Config(); again.Export.Template != "" {
 		t.Errorf("second Config().Export.Template = %q, want empty", again.Export.Template)
+	}
+}
+
+// TestBatchContextCancel: Ingest and Migrate stop on a cancelled context the way
+// Analyze does — nothing processed, the context's error returned.
+func TestBatchContextCancel(t *testing.T) {
+	c := seedArchive(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	ing, err := c.Ingest(ctx, []string{"never-read.note"}, IngestOptions{})
+	if !errors.Is(err, context.Canceled) || len(ing) != 0 {
+		t.Errorf("Ingest = %d results, %v; want none, context.Canceled", len(ing), err)
+	}
+	mig, err := c.Migrate(ctx, []string{"P1"}, MigrateOptions{})
+	if !errors.Is(err, context.Canceled) || len(mig) != 0 {
+		t.Errorf("Migrate = %d results, %v; want none, context.Canceled", len(mig), err)
+	}
+	mig, err = c.MigrateAll(ctx, MigrateOptions{})
+	if !errors.Is(err, context.Canceled) || len(mig) != 0 {
+		t.Errorf("MigrateAll = %d results, %v; want none, context.Canceled", len(mig), err)
 	}
 }

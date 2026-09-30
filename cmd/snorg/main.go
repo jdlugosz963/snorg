@@ -46,6 +46,7 @@ import (
 	"maps"
 	"net/http"
 	"os"
+	"os/signal"
 	"slices"
 	"strings"
 
@@ -55,7 +56,13 @@ import (
 )
 
 func main() {
-	if err := root().Run(context.Background(), os.Args); err != nil {
+	// Ctrl-C cancels the context, so a batch command stops between items and still
+	// reports what it finished. The handler is released on the first one, so a second
+	// Ctrl-C kills the process as usual (an item that never finishes stays killable).
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+	context.AfterFunc(ctx, stop)
+	if err := root().Run(ctx, os.Args); err != nil {
 		fmt.Fprintln(os.Stderr, "snorg: "+err.Error())
 		os.Exit(1)
 	}
@@ -166,7 +173,7 @@ func ingestCmd(a *app) *cli.Command {
 		Name:      "ingest",
 		Usage:     "register a .note file (or all *.note under a dir) into the archive",
 		ArgsUsage: "<file-or-dir>",
-		Action: func(_ context.Context, cmd *cli.Command) error {
+		Action: func(ctx context.Context, cmd *cli.Command) error {
 			if cmd.Args().Len() != 1 {
 				return fmt.Errorf("usage: snorg [-a <archive-path>] ingest <file-or-dir>")
 			}
@@ -193,7 +200,7 @@ func ingestCmd(a *app) *cli.Command {
 			r := newReporter(os.Stderr, len(paths), "ingest", "notes", a.verbose)
 			defer r.close()
 			var failed int
-			results, err := a.client.Ingest(paths, snorg.IngestOptions{
+			results, err := a.client.Ingest(ctx, paths, snorg.IngestOptions{
 				OnResult: func(res snorg.IngestResult) {
 					if res.Err != nil {
 						failed++
@@ -688,7 +695,7 @@ func migrateCmd(a *app) *cli.Command {
 		Name:      "migrate",
 		Usage:     "upgrade note.json/page JSON to the current schema version (no PAGEIDs and no pipe = whole archive)",
 		ArgsUsage: "[PAGEID ...]",
-		Action: func(_ context.Context, cmd *cli.Command) error {
+		Action: func(ctx context.Context, cmd *cli.Command) error {
 			// Selection mirrors serve, but routes to the archive's un-gated
 			// migrator (not query): migrate must read the stale grammars it exists
 			// to repair, which the gated readers refuse.
@@ -723,14 +730,14 @@ func migrateCmd(a *app) *cli.Command {
 			var err error
 			switch {
 			case cmd.Args().Len() > 0:
-				results, err = a.client.Migrate(cmd.Args().Slice(), opts)
+				results, err = a.client.Migrate(ctx, cmd.Args().Slice(), opts)
 			case stdinPiped():
 				var ids []string
 				if ids, err = readLines(os.Stdin); err == nil {
-					results, err = a.client.Migrate(ids, opts)
+					results, err = a.client.Migrate(ctx, ids, opts)
 				}
 			default:
-				results, err = a.client.MigrateAll(opts)
+				results, err = a.client.MigrateAll(ctx, opts)
 			}
 			if err != nil {
 				return err

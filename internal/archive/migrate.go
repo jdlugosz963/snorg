@@ -2,6 +2,7 @@ package archive
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -140,21 +141,28 @@ func emit(out *[]MigrateResult, opts MigrateOptions, rs ...MigrateResult) {
 }
 
 // MigrateAll migrates every note.json and page JSON in the archive: note first,
-// then its pages, in List/sorted order. The only top-level error is an enumeration
-// failure (a directory that cannot be read); per-file failures land in the results.
-func (a *Archive) MigrateAll(opts MigrateOptions) ([]MigrateResult, error) {
+// then its pages, in List/sorted order. The only top-level errors are an enumeration
+// failure (a directory that cannot be read) and a cancelled ctx, which stops the walk
+// between files and returns the results so far; per-file failures land in the results.
+func (a *Archive) MigrateAll(ctx context.Context, opts MigrateOptions) ([]MigrateResult, error) {
 	fileIDs, err := a.List()
 	if err != nil {
 		return nil, err
 	}
 	var out []MigrateResult
 	for _, fileID := range fileIDs {
+		if err := ctx.Err(); err != nil {
+			return out, err
+		}
 		emit(&out, opts, a.migrateNote(fileID))
 		pageIDs, err := a.sortedPageIDs(fileID)
 		if err != nil {
 			return nil, err
 		}
 		for _, pid := range pageIDs {
+			if err := ctx.Err(); err != nil {
+				return out, err
+			}
 			emit(&out, opts, a.migratePage(fileID, pid)...)
 		}
 	}
@@ -167,6 +175,9 @@ func (a *Archive) MigrateAll(opts MigrateOptions) ([]MigrateResult, error) {
 		return nil, err
 	}
 	for _, pid := range parked {
+		if err := ctx.Err(); err != nil {
+			return out, err
+		}
 		emit(&out, opts, a.migratePage(orphanDir, pid)...)
 	}
 	return out, nil
@@ -174,8 +185,9 @@ func (a *Archive) MigrateAll(opts MigrateOptions) ([]MigrateResult, error) {
 
 // MigratePages migrates the given pages' JSON plus each owning note's note.json
 // (once per note). Notes come before their pages, both in sorted order. An unknown
-// PAGEID yields a result with Err rather than aborting the batch.
-func (a *Archive) MigratePages(pageIDs []string, opts MigrateOptions) ([]MigrateResult, error) {
+// PAGEID yields a result with Err rather than aborting the batch; a cancelled ctx
+// stops it between files, as in MigrateAll.
+func (a *Archive) MigratePages(ctx context.Context, pageIDs []string, opts MigrateOptions) ([]MigrateResult, error) {
 	index, err := a.pageIndex()
 	if err != nil {
 		return nil, err
@@ -200,10 +212,16 @@ func (a *Archive) MigratePages(pageIDs []string, opts MigrateOptions) ([]Migrate
 	sort.Strings(noteOrder)
 
 	for _, fileID := range noteOrder {
+		if err := ctx.Err(); err != nil {
+			return out, err
+		}
 		emit(&out, opts, a.migrateNote(fileID))
 		pages := notes[fileID]
 		sort.Strings(pages)
 		for _, pid := range pages {
+			if err := ctx.Err(); err != nil {
+				return out, err
+			}
 			emit(&out, opts, a.migratePage(fileID, pid)...)
 		}
 	}

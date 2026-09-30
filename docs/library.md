@@ -47,12 +47,12 @@ PAGEID/FILE_ID), `ErrSchemaVersion` (a stale file — run `Migrate`) and
 | `EffectiveTags(nd, pd)` (package func) | a page's effective tag set: its own tags unioned with its note's — the inheritance rule every read surface applies |
 | `Retrieve(pageIDs)` | assemble pages into a `*Result` (`{Archive, Notes}`) |
 | `ReadNote/ReadPage/ReadSVG/FindPage` | raw on-disk document access |
-| `Ingest(paths, opts)` | register `.note` files (`NoteFiles(dir)` enumerates them); `IngestOptions.OnResult` streams each note as it lands; each `IngestResult.Report` (`*WriteReport`) says what the incremental reconcile changed |
+| `Ingest(ctx, paths, opts)` | register `.note` files (`NoteFiles(dir)` enumerates them); `IngestOptions.OnResult` streams each note as it lands; each `IngestResult.Report` (`*WriteReport`) says what the incremental reconcile changed |
 | `Export(pageIDs)` | render through the config's template (`RenderTemplate` for an arbitrary one) |
 | `ServeHandler(res, ServeOptions{Flat})` | the built-in viewer over a `Retrieve`d `*Result` as an `http.Handler` |
 | `NewProvider()` | resolve the API key, validate the provider config, build the configured backend — call once at startup, reuse across batches |
 | `Analyze(ctx, prov, pageIDs, opts)` | vision-LLM transcription with a caller-owned `Provider`; each `AnalyzeResult` embeds a `PageResult` saying what the page cost and what moved |
-| `Migrate(pageIDs, opts)` / `MigrateAll(opts)` | schema upgrade; `MigrateOptions{OnResult}` streams per-file results |
+| `Migrate(ctx, pageIDs, opts)` / `MigrateAll(ctx, opts)` | schema upgrade; `MigrateOptions{OnResult}` streams per-file results |
 | `PageBuffer(id)` / `ApplyPage(id, buf)` | programmatic transcription edit — no `$EDITOR`; returns a `PageEdit` |
 | `TextChangeOf/TextDiff/TextStat` (package funcs) | build a `TextChange`, render it as a unified diff, count its `±` lines |
 | `RenderRegion(fileID, pageID, rect, styled)` | crop a page rect to PNG bytes at native 1920x2560 resolution |
@@ -173,7 +173,7 @@ page is analyzed — so a consumer can log or commit incrementally instead of wa
 the whole batch (pages run sequentially for LLM rate limits). Every result also comes
 back in the returned slice. A page failure lands in its `AnalyzeResult.Err` and the
 batch continues; a cancelled `ctx` stops it, returning the results so far plus
-`ctx.Err()`. `AnalyzeOptions.Spec` overrides the config's prompts (`nil` =
+`ctx.Err()`. `Ingest` and `Migrate` take a `ctx` with the same meaning. `AnalyzeOptions.Spec` overrides the config's prompts (`nil` =
 `AnalyzeSpec()`), which is how a single page runs with a bespoke prompt.
 
 ### Knowing what changed

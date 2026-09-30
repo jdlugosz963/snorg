@@ -11,6 +11,7 @@
 package snorg
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 
@@ -221,11 +222,13 @@ type IngestOptions struct {
 // Ingest registers each note path into the archive, running the config's SVG
 // pipeline. Results preserve input order; a note's failure is reported in its
 // IngestResult.Err without aborting the batch.
-func (c *Client) Ingest(paths []string, opts IngestOptions) ([]IngestResult, error) {
+//
+// A cancelled ctx stops the batch: the results so far are returned with ctx.Err().
+func (c *Client) Ingest(ctx context.Context, paths []string, opts IngestOptions) ([]IngestResult, error) {
 	if err := c.cfg.ValidateIngest(); err != nil {
 		return nil, err
 	}
-	return ingest.RunMany(sntool.New(), c.arch, paths, ingest.Options{OnResult: opts.OnResult}), nil
+	return ingest.RunMany(ctx, sntool.New(), c.arch, paths, ingest.Options{OnResult: opts.OnResult})
 }
 
 // Export retrieves the given pages and renders them through the config's export
@@ -269,14 +272,17 @@ type MigrateOptions struct {
 // Migrate upgrades the given pages (and their owning notes) to the current schema
 // version; an empty pageIDs migrates the whole archive (see MigrateAll). Per-file
 // errors are reported in the results, not returned.
-func (c *Client) Migrate(pageIDs []string, opts MigrateOptions) ([]MigrateResult, error) {
+//
+// A cancelled ctx stops the batch: the results so far are returned with ctx.Err().
+func (c *Client) Migrate(ctx context.Context, pageIDs []string, opts MigrateOptions) ([]MigrateResult, error) {
 	if len(pageIDs) == 0 {
-		return c.MigrateAll(opts)
+		return c.MigrateAll(ctx, opts)
 	}
-	return c.arch.MigratePages(pageIDs, archive.MigrateOptions{OnResult: opts.OnResult})
+	return c.arch.MigratePages(ctx, pageIDs, archive.MigrateOptions{OnResult: opts.OnResult})
 }
 
-// MigrateAll upgrades every note and page in the archive to the current schema.
-func (c *Client) MigrateAll(opts MigrateOptions) ([]MigrateResult, error) {
-	return c.arch.MigrateAll(archive.MigrateOptions{OnResult: opts.OnResult})
+// MigrateAll upgrades every note and page in the archive to the current schema; ctx
+// cancels it as in Migrate.
+func (c *Client) MigrateAll(ctx context.Context, opts MigrateOptions) ([]MigrateResult, error) {
+	return c.arch.MigrateAll(ctx, archive.MigrateOptions{OnResult: opts.OnResult})
 }

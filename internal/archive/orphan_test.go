@@ -1,6 +1,7 @@
 package archive
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -145,7 +146,7 @@ func TestMigrateWalksOrphanStore(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	results, err := a.MigrateAll(MigrateOptions{})
+	results, err := a.MigrateAll(context.Background(), MigrateOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
