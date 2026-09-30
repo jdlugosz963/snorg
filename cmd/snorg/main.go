@@ -659,10 +659,7 @@ func serveCmd(a *app) *cli.Command {
 			if err != nil {
 				return err
 			}
-			handler, err := a.client.ServeHandler(pageIDs, cmd.Bool("flat"))
-			if err != nil {
-				return err
-			}
+			handler := a.client.ServeHandler(res, snorg.ServeOptions{Flat: cmd.Bool("flat")})
 			addr := cmd.String("listen")
 			pages := 0
 			for _, n := range res.Notes {

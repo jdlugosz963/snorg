@@ -49,7 +49,7 @@ PAGEID/FILE_ID), `ErrSchemaVersion` (a stale file — run `Migrate`) and
 | `ReadNote/ReadPage/ReadSVG/FindPage` | raw on-disk document access |
 | `Ingest(paths, opts)` | register `.note` files (`NoteFiles(dir)` enumerates them); `IngestOptions.OnResult` streams each note as it lands; each `IngestResult.Report` (`*WriteReport`) says what the incremental reconcile changed |
 | `Export(pageIDs)` | render through the config's template (`RenderTemplate` for an arbitrary one) |
-| `ServeHandler(pageIDs, flat)` | the built-in viewer as an `http.Handler` (empty = whole archive) |
+| `ServeHandler(res, ServeOptions{Flat})` | the built-in viewer over a `Retrieve`d `*Result` as an `http.Handler` |
 | `NewProvider()` | resolve the API key, validate the provider config, build the configured backend — call once at startup, reuse across batches |
 | `Analyze(ctx, prov, pageIDs, opts)` | vision-LLM transcription with a caller-owned `Provider`; each `AnalyzeResult` embeds a `PageResult` saying what the page cost and what moved |
 | `Migrate(pageIDs, opts)` / `MigrateAll(opts)` | schema upgrade; `MigrateOptions{OnResult}` streams per-file results |

@@ -244,25 +244,16 @@ func RenderTemplate(res *Result, template string) (string, error) {
 	return export.Render(res, template)
 }
 
-// ServeHandler assembles the given pages and returns the built-in HTTP viewer as an
-// http.Handler — grouped by note, or one flat gallery when flat. An empty pageIDs
-// serves the whole archive. Binding a listener is left to the caller.
-func (c *Client) ServeHandler(pageIDs []string, flat bool) (http.Handler, error) {
-	if len(pageIDs) == 0 {
-		matches, err := query.Pages(c.arch, func(archive.NoteDoc, archive.PageDoc) (bool, error) { return true, nil })
-		if err != nil {
-			return nil, err
-		}
-		pageIDs = make([]string, len(matches))
-		for i, m := range matches {
-			pageIDs[i] = m.PageID
-		}
-	}
-	res, err := retrieve.Get(c.arch, pageIDs)
-	if err != nil {
-		return nil, err
-	}
-	return serve.Handler(c.arch, res.Notes, flat), nil
+// ServeOptions tunes the built-in viewer.
+type ServeOptions struct {
+	// Flat serves one gallery of all pages instead of grouping them by note.
+	Flat bool
+}
+
+// ServeHandler returns the built-in HTTP viewer over an already-retrieved Result
+// (see Retrieve) as an http.Handler. Binding a listener is left to the caller.
+func (c *Client) ServeHandler(res *Result, opts ServeOptions) http.Handler {
+	return serve.Handler(c.arch, res.Notes, opts.Flat)
 }
 
 // MigrateOptions tunes a migration batch.

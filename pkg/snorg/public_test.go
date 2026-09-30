@@ -366,7 +366,7 @@ func TestAccessorSurface(t *testing.T) {
 	var _ func() (*snorg.Templates, error) = c.Templates
 	var _ func(string) (string, error) = c.FindPage
 	var _ func() ([]snorg.ValueCount, error) = c.Keywords
-	var _ func([]string, bool) (http.Handler, error) = c.ServeHandler
+	var _ func(*snorg.Result, snorg.ServeOptions) http.Handler = c.ServeHandler
 	var _ func(*snorg.Result, string) (string, error) = snorg.RenderTemplate
 	var _ func(string, string, string) (snorg.Provider, error) = snorg.NewOpenAIProvider
 	var _ func(string) ([]string, error) = snorg.NoteFiles
@@ -399,8 +399,8 @@ func TestAccessorSurface(t *testing.T) {
 	if out, err := snorg.RenderTemplate(&snorg.Result{}, "{{ notes|length }}"); err != nil || out != "0" {
 		t.Errorf("RenderTemplate = (%q, %v), want (\"0\", nil)", out, err)
 	}
-	if _, err := c.ServeHandler(nil, false); err != nil {
-		t.Errorf("ServeHandler: %v", err)
+	if h := c.ServeHandler(&snorg.Result{}, snorg.ServeOptions{}); h == nil {
+		t.Error("ServeHandler returned nil")
 	}
 	if kws, err := c.Keywords(); err != nil || len(kws) != 0 {
 		t.Errorf("Keywords = (%v, %v), want none", kws, err)
