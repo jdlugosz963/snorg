@@ -76,11 +76,11 @@ func TestPublicSurface(t *testing.T) {
 	}
 	// Name the alias, and prove Tag is callable (an unknown page is an error).
 	var _ []snorg.ValueCount = tags
-	if _, err := c.Tag("work", []string{"Pmissing"}, false); err == nil {
+	if _, err := c.Tag([]string{"Pmissing"}, "work"); err == nil {
 		t.Error("Tag on an unknown PAGEID should error")
 	}
 	// Same for the note-level tag, plus the inheritance rule it feeds.
-	if _, err := c.TagNote("work", []string{"Fmissing"}, false); err == nil {
+	if _, err := c.TagNote([]string{"Fmissing"}, "work"); err == nil {
 		t.Error("TagNote on an unknown FILE_ID should error")
 	}
 	if got := snorg.EffectiveTags(snorg.NoteDoc{Tags: []string{"note"}}, snorg.PageDoc{Tags: []string{"own"}}); len(got) != 2 {
@@ -366,6 +366,10 @@ func TestAccessorSurface(t *testing.T) {
 	var _ func() *snorg.Templates = c.Templates
 	var _ func(string) (string, error) = c.FindPage
 	var _ func() ([]snorg.ValueCount, error) = c.Keywords
+	var _ func([]string, string) (int, error) = c.Tag
+	var _ func([]string, string) (int, error) = c.Untag
+	var _ func([]string, string) (int, error) = c.TagNote
+	var _ func([]string, string) (int, error) = c.UntagNote
 	var _ func(*snorg.Result, snorg.ServeOptions) http.Handler = c.ServeHandler
 	var _ func(*snorg.Result, string) (string, error) = snorg.RenderTemplate
 	var _ func(string, string, string) (snorg.Provider, error) = snorg.NewOpenAIProvider
@@ -384,10 +388,10 @@ func TestAccessorSurface(t *testing.T) {
 	if _, err := c.ReadNote("Fmissing"); !errors.Is(err, snorg.ErrNotFound) {
 		t.Errorf("ReadNote err = %v, want ErrNotFound", err)
 	}
-	if _, err := c.Tag("work", []string{"Pmissing"}, false); !errors.Is(err, snorg.ErrNotFound) {
+	if _, err := c.Tag([]string{"Pmissing"}, "work"); !errors.Is(err, snorg.ErrNotFound) {
 		t.Errorf("Tag err = %v, want ErrNotFound", err)
 	}
-	if _, err := c.TagNote("work", []string{"Fmissing"}, false); !errors.Is(err, snorg.ErrNotFound) {
+	if _, err := c.TagNote([]string{"Fmissing"}, "work"); !errors.Is(err, snorg.ErrNotFound) {
 		t.Errorf("TagNote err = %v, want ErrNotFound", err)
 	}
 	if _, err := c.Export(nil); !errors.Is(err, snorg.ErrNoExportTemplate) {

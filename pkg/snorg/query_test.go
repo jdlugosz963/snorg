@@ -201,14 +201,14 @@ func TestMatchNotAndIDs(t *testing.T) {
 
 func TestMatchTagIncludingInherited(t *testing.T) {
 	c := seedFiltered(t)
-	if _, err := c.Tag("todo", []string{"Pa", "Pb"}, false); err != nil {
+	if _, err := c.Tag([]string{"Pa", "Pb"}, "todo"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := c.Tag("important", []string{"Pa"}, false); err != nil {
+	if _, err := c.Tag([]string{"Pa"}, "important"); err != nil {
 		t.Fatal(err)
 	}
 	// A note tag lives only in note.json, yet every page of the note matches it.
-	if _, err := c.TagNote("shared", []string{"F_B"}, false); err != nil {
+	if _, err := c.TagNote([]string{"F_B"}, "shared"); err != nil {
 		t.Fatal(err)
 	}
 

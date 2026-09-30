@@ -474,10 +474,15 @@ func tagCmd(a *app) *cli.Command {
 			}
 			remove := cmd.Bool("remove")
 			tagFn := a.client.Tag
-			if notes {
+			switch {
+			case notes && remove:
+				tagFn = a.client.UntagNote
+			case notes:
 				tagFn = a.client.TagNote
+			case remove:
+				tagFn = a.client.Untag
 			}
-			changed, err := tagFn(tag, ids, remove)
+			changed, err := tagFn(ids, tag)
 			if err != nil {
 				return err
 			}

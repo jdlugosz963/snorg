@@ -42,8 +42,8 @@ PAGEID/FILE_ID), `ErrSchemaVersion` (a stale file — run `Migrate`) and
 | `ParseQuery(expr)` (package func) | compile a query expression into a `Predicate` (terms joined by `AND`/`OR`/`NOT`; see `QuerySyntax`) |
 | `ReadAnalysis(fileID, pageID)` | a page's transcription (the `<PAGEID>.md` sidecar); empty when never analyzed |
 | `Templates()` | the template set built from the config's `templates:` section (already resolved by `Open`) |
-| `Tag(tag, pageIDs, remove)` | add/remove a snorg-managed tag on pages (independent of device keywords); returns the count changed |
-| `TagNote(tag, fileIDs, remove)` | same, but note-scoped: stored in `note.json` only and inherited by every page of the note; returns the count of notes changed |
+| `Tag(pageIDs, tag)` / `Untag(pageIDs, tag)` | add/remove a snorg-managed tag on pages (independent of device keywords); returns the count changed |
+| `TagNote(fileIDs, tag)` / `UntagNote(fileIDs, tag)` | same, but note-scoped: stored in `note.json` only and inherited by every page of the note; returns the count of notes changed |
 | `EffectiveTags(nd, pd)` (package func) | a page's effective tag set: its own tags unioned with its note's — the inheritance rule every read surface applies |
 | `Retrieve(pageIDs)` | assemble pages into a `*Result` (`{Archive, Notes}`) |
 | `ReadNote/ReadPage/ReadSVG/FindPage` | raw on-disk document access |

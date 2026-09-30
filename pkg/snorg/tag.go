@@ -2,22 +2,33 @@ package snorg
 
 import "github.com/jdlugosz963/snorg/internal/archive"
 
-// Tag adds tag to (or, when remove is set, removes it from) each of pageIDs — the
-// snorg-managed labels that live alongside a page's device keywords. Tags are kept
-// sorted and de-duplicated on disk. It returns the number of pages actually changed
-// (a no-op add/remove writes nothing); it stops and reports the first error, so an
-// unknown PAGEID aborts the batch.
-func (c *Client) Tag(tag string, pageIDs []string, remove bool) (int, error) {
-	return countChanged(pageIDs, func(id string) (bool, error) { return c.arch.TagPage(id, tag, remove) })
+// Tag adds tag to each of pageIDs — the snorg-managed labels that live alongside a
+// page's device keywords. Tags are kept sorted and de-duplicated on disk. It returns
+// the number of pages actually changed (a page already carrying the tag writes
+// nothing); it stops and reports the first error, so an unknown PAGEID aborts the
+// batch.
+func (c *Client) Tag(pageIDs []string, tag string) (int, error) {
+	return countChanged(pageIDs, func(id string) (bool, error) { return c.arch.TagPage(id, tag, false) })
 }
 
-// TagNote adds tag to (or, when remove is set, removes it from) each of fileIDs —
-// a note-level snorg tag, stored in that note's note.json only and inherited by
-// every one of its pages (the pages' own tags are never touched). It returns the
-// number of notes actually changed (a no-op add/remove writes nothing); it stops and
+// Untag removes tag from each of pageIDs, like Tag in reverse. A tag the page only
+// inherits from its note is not its own to remove (see UntagNote) and counts as
+// unchanged.
+func (c *Client) Untag(pageIDs []string, tag string) (int, error) {
+	return countChanged(pageIDs, func(id string) (bool, error) { return c.arch.TagPage(id, tag, true) })
+}
+
+// TagNote adds tag to each of fileIDs — a note-level snorg tag, stored in that
+// note's note.json only and inherited by every one of its pages (the pages' own tags
+// are never touched). It returns the number of notes actually changed; it stops and
 // reports the first error, so an unknown FILE_ID aborts the batch.
-func (c *Client) TagNote(tag string, fileIDs []string, remove bool) (int, error) {
-	return countChanged(fileIDs, func(id string) (bool, error) { return c.arch.TagNote(id, tag, remove) })
+func (c *Client) TagNote(fileIDs []string, tag string) (int, error) {
+	return countChanged(fileIDs, func(id string) (bool, error) { return c.arch.TagNote(id, tag, false) })
+}
+
+// UntagNote removes a note-level tag from each of fileIDs, like TagNote in reverse.
+func (c *Client) UntagNote(fileIDs []string, tag string) (int, error) {
+	return countChanged(fileIDs, func(id string) (bool, error) { return c.arch.TagNote(id, tag, true) })
 }
 
 // countChanged applies apply to each id in order and counts the ones it changed,
