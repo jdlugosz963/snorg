@@ -1,7 +1,6 @@
 package snorg
 
 import (
-	"fmt"
 	"regexp"
 	"strings"
 
@@ -9,36 +8,33 @@ import (
 )
 
 // Page is one candidate page as a Predicate sees it: the two documents exactly as
-// stored, plus the Client they came from — so a predicate can reach anything else
-// the archive knows (the transcription sidecar, the configured templates) instead
-// of being limited to the two structs.
+// stored, plus read-only access to what else the archive knows about the page (its
+// transcription, its template). Only Query builds one.
 type Page struct {
-	Client *Client
-	Note   NoteDoc
-	Doc    PageDoc
+	Note NoteDoc
+	Doc  PageDoc
 
-	// fail is where Fail records; Query owns it, since a Page is passed by value.
-	fail *queryErr
+	c *Client
 }
 
-// queryErr holds the first error a predicate hit during one walk.
-type queryErr struct{ err error }
+// Transcription returns the page's <PAGEID>.md effective content, AI or
+// hand-written; a never-analyzed page reads as empty.
+func (p Page) Transcription() (string, error) {
+	return p.c.arch.ReadAnalysisMD(p.Note.FileID, p.Doc.PageID)
+}
 
-// Fail records err as the reason this query cannot be answered: Query abandons the
-// walk and returns it instead of a result set. A predicate that reads outside the two
-// documents must call it rather than answering false — an unreadable page counted as a
-// non-match is a page MatchNot then reports as a match. The first error wins, and a
-// predicate invoked outside Query has nowhere to report, so Fail is then a no-op.
-func (p Page) Fail(err error) {
-	if p.fail != nil && p.fail.err == nil {
-		p.fail.err = fmt.Errorf("page %s: %w", p.Doc.PageID, err)
-	}
+// Template returns the config template the page is drawn on, or nil (not templated,
+// or no templates configured).
+func (p Page) Template() *Template {
+	return p.c.tmpl.MatchBackground(p.Doc.BackgroundHash)
 }
 
 // Predicate decides whether a candidate page matches. Client.Query calls one per
 // page of the archive; every Match* function below builds one, and a hand-written
-// predicate is just a func of the same shape.
-type Predicate func(Page) bool
+// predicate is just a func of the same shape. A predicate that cannot decide (a read
+// failed) returns the error rather than false: Query stops and returns it, since an
+// unreadable page counted as a non-match is one MatchNot would report as a match.
+type Predicate func(Page) (bool, error)
 
 // TextMatcher decides whether one string matches; every text filter takes one.
 type TextMatcher func(string) bool
@@ -61,52 +57,59 @@ func Exact(want string) TextMatcher {
 }
 
 // MatchAll matches every page.
-func MatchAll(Page) bool { return true }
+func MatchAll(Page) (bool, error) { return true, nil }
 
 // MatchStarred matches pages flagged with a star.
-func MatchStarred(p Page) bool { return p.Doc.Starred }
+func MatchStarred(p Page) (bool, error) { return p.Doc.Starred, nil }
 
 // MatchUnanalyzed matches pages without a stored analysis.
-func MatchUnanalyzed(p Page) bool { return p.Doc.Analysis == nil }
+func MatchUnanalyzed(p Page) (bool, error) { return p.Doc.Analysis == nil, nil }
 
 // MatchTemplated matches pages drawn on a configured template — a page whose
 // background_hash resolves to a templates: entry. The resolution is the config's,
 // not the stored analysis', so a page matches before it is ever analyzed; with no
 // templates configured nothing matches, and MatchNot(MatchTemplated) is exactly
 // the free-form pages.
-func MatchTemplated(p Page) bool { return pageTemplate(p) != nil }
+func MatchTemplated(p Page) (bool, error) { return p.Template() != nil, nil }
 
 // MatchAnd matches a page only when every predicate does (empty = matches all).
 // Used to intersect a filter with a piped candidate set, so query A | query B ==
-// A∩B.
+// A∩B. The first error stops it.
 func MatchAnd(preds ...Predicate) Predicate {
-	return func(p Page) bool {
+	return func(p Page) (bool, error) {
 		for _, pred := range preds {
-			if !pred(p) {
-				return false
+			if ok, err := pred(p); err != nil || !ok {
+				return false, err
 			}
 		}
-		return true
+		return true, nil
 	}
 }
 
 // MatchOr matches a page when any predicate does (empty = matches nothing, the
-// dual of MatchAnd).
+// dual of MatchAnd). The first error stops it.
 func MatchOr(preds ...Predicate) Predicate {
-	return func(p Page) bool {
+	return func(p Page) (bool, error) {
 		for _, pred := range preds {
-			if pred(p) {
-				return true
+			if ok, err := pred(p); err != nil || ok {
+				return ok, err
 			}
 		}
-		return false
+		return false, nil
 	}
 }
 
-// MatchNot matches exactly the pages pred does not (the inverse of a filter). Under
-// piping it combines via MatchAnd, so query A | query NOT B == A minus B.
+// MatchNot matches exactly the pages pred does not (the inverse of a filter); an
+// error passes through uninverted. Under piping it combines via MatchAnd, so
+// query A | query NOT B == A minus B.
 func MatchNot(pred Predicate) Predicate {
-	return func(p Page) bool { return !pred(p) }
+	return func(p Page) (bool, error) {
+		ok, err := pred(p)
+		if err != nil {
+			return false, err
+		}
+		return !ok, nil
+	}
 }
 
 // MatchIDs matches pages whose PAGEID is in ids (an empty set matches nothing).
@@ -116,39 +119,39 @@ func MatchIDs(ids []string) Predicate {
 	for _, id := range ids {
 		set[id] = struct{}{}
 	}
-	return func(p Page) bool {
+	return func(p Page) (bool, error) {
 		_, ok := set[p.Doc.PageID]
-		return ok
+		return ok, nil
 	}
 }
 
 // MatchNote matches the pages of the notes whose FILE_ID matches.
 func MatchNote(m TextMatcher) Predicate {
-	return func(p Page) bool { return m(p.Note.FileID) }
+	return func(p Page) (bool, error) { return m(p.Note.FileID), nil }
 }
 
 // MatchKeyword matches pages with at least one device keyword whose text matches.
 func MatchKeyword(m TextMatcher) Predicate {
-	return func(p Page) bool {
+	return func(p Page) (bool, error) {
 		for _, kw := range p.Doc.Keywords {
 			if m(kw.Text) {
-				return true
+				return true, nil
 			}
 		}
-		return false
+		return false, nil
 	}
 }
 
 // MatchTag matches pages with at least one matching snorg-managed tag — the
 // page's own tags plus the ones inherited from its note (EffectiveTags).
 func MatchTag(m TextMatcher) Predicate {
-	return func(p Page) bool {
+	return func(p Page) (bool, error) {
 		for _, t := range EffectiveTags(p.Note, p.Doc) {
 			if m(t) {
-				return true
+				return true, nil
 			}
 		}
-		return false
+		return false, nil
 	}
 }
 
@@ -156,47 +159,43 @@ func MatchTag(m TextMatcher) Predicate {
 // [from, to], both inclusive and formatted "YYYYMMDD"; an empty bound is open.
 // Pages whose PAGEID carries no date never match.
 func MatchDate(from, to string) Predicate {
-	return func(p Page) bool {
+	return func(p Page) (bool, error) {
 		d, ok := pageDate(p.Doc.PageID)
 		if !ok {
-			return false
+			return false, nil
 		}
-		return (from == "" || d >= from) && (to == "" || d <= to)
+		return (from == "" || d >= from) && (to == "" || d <= to), nil
 	}
 }
 
-// MatchContent matches pages whose transcription (the <PAGEID>.md effective
-// content, AI or hand-written) matches. A never-analyzed page reads as empty, so
-// it matches only a matcher that accepts the empty string; an unreadable sidecar
-// fails the whole query (see Page.Fail) rather than passing for empty. On a
-// templated page the sidecar is the whole region-section document, markers included
-// — MatchRegion is the per-box view of the same text.
+// MatchContent matches pages whose transcription (Page.Transcription) matches. A
+// never-analyzed page reads as empty, so it matches only a matcher that accepts the
+// empty string; an unreadable sidecar is an error, not empty. On a templated page
+// the transcription is the whole region-section document, markers included —
+// MatchRegion is the per-box view of the same text.
 func MatchContent(m TextMatcher) Predicate {
-	return func(p Page) bool {
-		md, err := p.Client.arch.ReadAnalysisMD(p.Note.FileID, p.Doc.PageID)
+	return func(p Page) (bool, error) {
+		md, err := p.Transcription()
 		if err != nil {
-			p.Fail(err)
-			return false
+			return false, err
 		}
-		return m(md)
+		return m(md), nil
 	}
 }
 
 // MatchRegion matches templated pages whose transcription of one template box
 // matches. boxID names the box ("" = any of them); only boxes the page's template
 // declares are considered, a declared box with no section yet reads as empty text,
-// and a non-templated page never matches. An unreadable sidecar fails the query, as
-// in MatchContent.
+// and a non-templated page never matches.
 func MatchRegion(boxID string, m TextMatcher) Predicate {
-	return func(p Page) bool {
-		tmpl := pageTemplate(p)
+	return func(p Page) (bool, error) {
+		tmpl := p.Template()
 		if tmpl == nil {
-			return false
+			return false, nil
 		}
-		md, err := p.Client.arch.ReadAnalysisMD(p.Note.FileID, p.Doc.PageID)
+		md, err := p.Transcription()
 		if err != nil {
-			p.Fail(err)
-			return false
+			return false, err
 		}
 		text := make(map[string]string)
 		for _, sec := range archive.ParseRegions(md) {
@@ -207,17 +206,11 @@ func MatchRegion(boxID string, m TextMatcher) Predicate {
 				continue
 			}
 			if m(text[b.ID]) {
-				return true
+				return true, nil
 			}
 		}
-		return false
+		return false, nil
 	}
-}
-
-// pageTemplate resolves the config template a page is drawn on, or nil (not templated
-// or none configured).
-func pageTemplate(p Page) *Template {
-	return p.Client.Templates().MatchBackground(p.Doc.BackgroundHash)
 }
 
 // pageDate extracts the "YYYYMMDD" day embedded in a supernote id. PAGEIDs (and

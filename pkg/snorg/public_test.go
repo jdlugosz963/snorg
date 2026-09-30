@@ -54,14 +54,16 @@ func TestPublicSurface(t *testing.T) {
 		snorg.MatchRegion("grade", snorg.Substring("A")),
 		snorg.MatchTemplated,
 	)
-	// A hand-written predicate names the candidate's fields and reports a read it
-	// could not complete, which is the whole error path Query surfaces.
-	var _ snorg.Predicate = func(p snorg.Page) bool {
-		var _ *snorg.Client = p.Client
+	// A hand-written predicate names the candidate's fields and read-only accessors,
+	// and returns a read it could not complete, which is the error Query surfaces.
+	var _ snorg.Predicate = func(p snorg.Page) (bool, error) {
 		var _ snorg.NoteDoc = p.Note
 		var _ snorg.PageDoc = p.Doc
-		p.Fail(errors.New("cannot decide"))
-		return false
+		var _ *snorg.Template = p.Template()
+		if _, err := p.Transcription(); err != nil {
+			return false, err
+		}
+		return false, errors.New("cannot decide")
 	}
 	// A bad regexp in an expression is reported rather than panicking.
 	if _, err := snorg.ParseQuery("region[grade]~("); err == nil {

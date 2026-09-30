@@ -59,37 +59,35 @@ PAGEID/FILE_ID), `ErrSchemaVersion` (a stale file — run `Migrate`) and
 
 ### Predicates
 
-A `Predicate` is `func(Page) bool`, where `Page` is one candidate: the two documents
-as stored (`Note`, `Doc`) plus the `Client` they came from. The client is what makes
-every filter a standalone function — `MatchContent` reads the transcription through
-`p.Client.ReadAnalysis`, `MatchRegion` resolves boxes through `p.Client.Templates`,
-and a hand-written predicate can do the same:
+A `Predicate` is `func(Page) (bool, error)`, where `Page` is one candidate: the two
+documents as stored (`Note`, `Doc`) plus two read-only accessors for what they don't
+hold — `p.Transcription()` (the `<PAGEID>.md`) and `p.Template()` (the config template
+the page is drawn on, or nil). That is what makes every filter a standalone function,
+and a hand-written predicate uses the same accessors `MatchContent`/`MatchRegion` do.
+A `Page` offers no way to write, so a filter cannot change the archive it is walking:
 
 ```go
-c.Query(func(p snorg.Page) bool {
-	md, err := p.Client.ReadAnalysis(p.Doc.PageID)
+c.Query(func(p snorg.Page) (bool, error) {
+	md, err := p.Transcription()
 	if err != nil {
-		p.Fail(err) // Query abandons the walk and returns this
-		return false
+		return false, err // Query abandons the walk and returns this
 	}
-	return p.Doc.Starred && strings.Contains(md, "TODO")
+	return p.Doc.Starred && strings.Contains(md, "TODO"), nil
 })
 ```
 
-A predicate that reads outside the two documents must report a failed read with
-`p.Fail(err)` instead of answering `false`: `Query` then returns that error rather
-than a result set. Answering `false` would be worse than an error, because
+A predicate that cannot decide returns the error rather than `false`, and `Query`
+returns it instead of a result set. `false` would be worse than an error, because
 `MatchNot` inverts it — a page whose transcription could not be read would come back
-as a match for `NOT content:secret`.
+as a match for `NOT content:secret`; errors pass through `MatchNot`/`MatchAnd`/`MatchOr`
+uninverted.
 
 The family is `MatchAll`, `MatchStarred`, `MatchUnanalyzed`, `MatchTemplated`,
 `MatchNot`, `MatchAnd`, `MatchOr`, `MatchIDs`, `MatchNote`, `MatchKeyword`,
 `MatchTag`, `MatchDate`, `MatchContent`, `MatchRegion` — one prefix, so they cluster
 in the reference and leave the plain nouns to the types. `MatchTag` matches inherited
-tags because the candidate carries the owning note; `MatchTemplated`/`MatchRegion`
-need no error return because `Open` resolves the `templates:` section once and fails
-there if it is broken, and because an unreadable transcription goes out through
-`Page.Fail`.
+tags because the candidate carries the owning note; `p.Template()` has no error return because `Open`
+resolves the `templates:` section once and fails there if it is broken.
 
 Every text filter takes a `TextMatcher` (`func(string) bool`) rather than a regexp,
 which is why one `MatchTag` covers all three of the language's operators:

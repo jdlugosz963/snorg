@@ -153,20 +153,16 @@ func TestParseQueryComposition(t *testing.T) {
 func TestHandWrittenPredicate(t *testing.T) {
 	c := seedFiltered(t)
 
-	pred := func(p Page) bool {
-		md, err := p.Client.ReadAnalysis(p.Doc.PageID)
+	pred := func(p Page) (bool, error) {
+		md, err := p.Transcription()
 		if err != nil {
-			p.Fail(err)
-			return false
+			return false, err
 		}
-		return md != "" && p.Doc.Starred && p.Note.Source == "alpha.note"
+		return md != "" && p.Doc.Starred && p.Note.Source == "alpha.note", nil
 	}
 	want(t, "custom", matched(t, c, pred), []string{"Pa"})
 
-	failing := func(p Page) bool {
-		p.Fail(errors.New("cannot decide"))
-		return false
-	}
+	failing := func(Page) (bool, error) { return false, errors.New("cannot decide") }
 	_, err := c.Query(failing)
 	if err == nil || !strings.Contains(err.Error(), "cannot decide") {
 		t.Errorf("Query(failing predicate) error = %v, want it to carry the predicate's error", err)

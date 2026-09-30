@@ -66,18 +66,18 @@ Flow: `cmd/snorg` → `pkg/snorg` (public API) → `internal/ingest` orchestrate
   PAGEID stdin conventions + formatting stay in `cmd`); the config layering, `~`
   expansion, date-spec and the query language's **semantics** live here (`Resolve`,
   `ParseQuery`, `ParseDateSpec`, `QuerySyntax`). **Query filters live here too**: a
-  `Predicate` is `func(Page) bool`
-  over a `Page{Client, Note, Doc}` candidate — the two stored documents plus the client
-  they came from — so every filter is a standalone `Match*` function
+  `Predicate` is `func(Page) (bool, error)`
+  over a `Page{Note, Doc}` candidate — the two stored documents plus read-only accessors
+  `Page.Transcription()` (the `<PAGEID>.md`) and `Page.Template()` (no client handle, so a
+  filter cannot write mid-walk) — so every filter is a standalone `Match*` function
   (`MatchAll`/`MatchStarred`/`MatchUnanalyzed`/`MatchTemplated`/`MatchNot`/`MatchAnd`/
   `MatchOr`/`MatchIDs`/`MatchNote`/`MatchKeyword`/`MatchTag`/`MatchDate`/`MatchContent`/
   `MatchRegion(boxID, m)`) instead
-  of a `Client` method, and a hand-written predicate can read whatever the documents don't
-  hold (`Client.ReadAnalysis` for the `<PAGEID>.md`, `Client.Templates` for the boxes). Such a
-  read is **not** allowed to fail silently: a predicate reports it with `Page.Fail(err)` and
-  `Query` abandons the walk and returns it, because a `false` from an unreadable page is a
-  page `MatchNot` would report as a match (`internal/query.Pages` takes an error-returning
-  match func for exactly this).
+  of a `Client` method, and a hand-written predicate reads what the documents don't hold
+  through the same accessors. Such a read is **not** allowed to fail silently: a predicate
+  returns the error, `MatchNot`/`MatchAnd`/`MatchOr` pass it through uninverted, and `Query`
+  abandons the walk and returns it (naming the page), because a `false` from an unreadable
+  page is a page `MatchNot` would report as a match.
   Every **text** filter takes a `TextMatcher` (`func(string) bool`), not a regexp, which is
   what makes one `Match*` per field cover all three operators: `Substring` (`:`, case-folded),
   `Regexp` (`~`), `Exact` (`=`), or a hand-written func. `ParseQuery` is the compiler over
