@@ -159,24 +159,26 @@ func textMatcher(op, value string) (TextMatcher, error) {
 	}
 }
 
-// ParseDateSpec turns a date term's value into an inclusive [from, to] range
-// formatted "YYYYMMDD" (an empty bound is open). It accepts "today"/"yesterday", a
-// single "YYYY-MM-DD" day, and "FROM..TO" ranges with either end omitted.
-func ParseDateSpec(spec string) (from, to string, err error) {
-	day := func(s string) (string, error) {
+// ParseDateSpec turns a date term's value into an inclusive [from, to] range of
+// days for MatchDate, each at midnight (a zero bound is open). It accepts
+// "today"/"yesterday" (local time), a single "YYYY-MM-DD" day, and "FROM..TO" ranges
+// with either end omitted.
+func ParseDateSpec(spec string) (from, to time.Time, err error) {
+	switch spec {
+	case "today", "yesterday":
+		y, m, d := time.Now().Date()
+		if spec == "yesterday" {
+			d--
+		}
+		day := time.Date(y, m, d, 0, 0, 0, 0, time.Local)
+		return day, day, nil
+	}
+	day := func(s string) (time.Time, error) {
 		t, err := time.Parse("2006-01-02", s)
 		if err != nil {
-			return "", fmt.Errorf("invalid date %q (want YYYY-MM-DD): %w", s, err)
+			return time.Time{}, fmt.Errorf("invalid date %q (want YYYY-MM-DD): %w", s, err)
 		}
-		return t.Format("20060102"), nil
-	}
-	switch spec {
-	case "today":
-		d := time.Now().Format("20060102")
-		return d, d, nil
-	case "yesterday":
-		d := time.Now().AddDate(0, 0, -1).Format("20060102")
-		return d, d, nil
+		return t, nil
 	}
 	lo, hi, isRange := strings.Cut(spec, "..")
 	if !isRange {
@@ -185,16 +187,16 @@ func ParseDateSpec(spec string) (from, to string, err error) {
 	}
 	if lo != "" {
 		if from, err = day(lo); err != nil {
-			return "", "", err
+			return time.Time{}, time.Time{}, err
 		}
 	}
 	if hi != "" {
 		if to, err = day(hi); err != nil {
-			return "", "", err
+			return time.Time{}, time.Time{}, err
 		}
 	}
-	if from == "" && to == "" {
-		return "", "", fmt.Errorf("empty date range %q", spec)
+	if from.IsZero() && to.IsZero() {
+		return time.Time{}, time.Time{}, fmt.Errorf("empty date range %q", spec)
 	}
 	return from, to, nil
 }

@@ -86,8 +86,10 @@ The family is `MatchAll`, `MatchStarred`, `MatchUnanalyzed`, `MatchTemplated`,
 `MatchNot`, `MatchAnd`, `MatchOr`, `MatchIDs`, `MatchNote`, `MatchKeyword`,
 `MatchTag`, `MatchDate`, `MatchContent`, `MatchRegion` — one prefix, so they cluster
 in the reference and leave the plain nouns to the types. `MatchTag` matches inherited
-tags because the candidate carries the owning note; `p.Template()` has no error return because `Open`
-resolves the `templates:` section once and fails there if it is broken.
+tags because the candidate carries the owning note; `p.Template()` has no error return
+because `Open` resolves the `templates:` section once and fails there if it is broken.
+`MatchDate` takes `time.Time` bounds (zero = open, only the calendar day counts), so a
+malformed date cannot reach it.
 
 Every text filter takes a `TextMatcher` (`func(string) bool`) rather than a regexp,
 which is why one `MatchTag` covers all three of the language's operators:

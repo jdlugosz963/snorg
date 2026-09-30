@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jdlugosz963/snorg/internal/archive"
 	"github.com/jdlugosz963/snorg/internal/snote"
@@ -230,16 +231,20 @@ func TestMatchDate(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	day := func(y int, m time.Month, d int) time.Time { return time.Date(y, m, d, 0, 0, 0, 0, time.UTC) }
+	jul := func(d int) time.Time { return day(2026, time.July, d) }
+	var open time.Time
 	for _, tc := range []struct {
 		name     string
-		from, to string
+		from, to time.Time
 		exp      []string
 	}{
-		{"exact day", "20260715", "20260715", []string{"P20260715120000CD"}},
-		{"range", "20260701", "20260715", []string{"P20260701090000AB", "P20260715120000CD"}},
-		{"open from", "", "20260715", []string{"P20260701090000AB", "P20260715120000CD"}},
-		{"open to", "20260715", "", []string{"P20260715120000CD", "P20260722080000EF"}},
-		{"no match", "20250101", "20250101", nil},
+		{"exact day", jul(15), jul(15), []string{"P20260715120000CD"}},
+		{"range", jul(1), jul(15), []string{"P20260701090000AB", "P20260715120000CD"}},
+		{"open from", open, jul(15), []string{"P20260701090000AB", "P20260715120000CD"}},
+		{"open to", jul(15), open, []string{"P20260715120000CD", "P20260722080000EF"}},
+		{"time of day ignored", jul(15).Add(23 * time.Hour), jul(15).Add(time.Hour), []string{"P20260715120000CD"}},
+		{"no match", day(2025, time.January, 1), day(2025, time.January, 1), nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			want(t, "MatchDate", matched(t, c, MatchDate(tc.from, tc.to)), tc.exp)

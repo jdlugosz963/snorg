@@ -217,12 +217,13 @@ func TestParseDateSpec(t *testing.T) {
 		{"not-a-date", "", "", true},
 	}
 	for _, tc := range cases {
-		from, to, err := ParseDateSpec(tc.spec)
+		lo, hi, err := ParseDateSpec(tc.spec)
 		if (err != nil) != tc.wantErr {
 			t.Errorf("ParseDateSpec(%q) err = %v, wantErr %v", tc.spec, err, tc.wantErr)
 			continue
 		}
-		if err == nil && (from != tc.from || to != tc.to) {
+		// Compared as the day MatchDate uses ("" = open bound).
+		if from, to := dayOf(lo), dayOf(hi); err == nil && (from != tc.from || to != tc.to) {
 			t.Errorf("ParseDateSpec(%q) = (%q,%q), want (%q,%q)", tc.spec, from, to, tc.from, tc.to)
 		}
 	}

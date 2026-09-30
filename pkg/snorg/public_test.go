@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"regexp"
 	"testing"
+	"time"
 
 	snorg "github.com/jdlugosz963/snorg/pkg/snorg"
 )
@@ -40,9 +41,11 @@ func TestPublicSurface(t *testing.T) {
 	// Name the returned alias types to prove they are usable from outside.
 	var _ []snorg.Match = matches
 
-	if from, to, err := snorg.ParseDateSpec("2026-07-01.."); err != nil || from != "20260701" || to != "" {
-		t.Errorf("ParseDateSpec = (%q, %q, %v)", from, to, err)
+	if from, to, err := snorg.ParseDateSpec("2026-07-01.."); err != nil ||
+		!from.Equal(time.Date(2026, time.July, 1, 0, 0, 0, 0, time.UTC)) || !to.IsZero() {
+		t.Errorf("ParseDateSpec = (%v, %v, %v)", from, to, err)
 	}
+	var _ snorg.Predicate = snorg.MatchDate(time.Now(), time.Time{})
 
 	// The matcher constructors and the Match* family they feed are nameable from
 	// outside, hand-written matchers included.

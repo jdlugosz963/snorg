@@ -3,6 +3,7 @@ package snorg
 import (
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/jdlugosz963/snorg/internal/archive"
 )
@@ -156,16 +157,27 @@ func MatchTag(m TextMatcher) Predicate {
 }
 
 // MatchDate matches pages whose creation day (embedded in the PAGEID) falls within
-// [from, to], both inclusive and formatted "YYYYMMDD"; an empty bound is open.
-// Pages whose PAGEID carries no date never match.
-func MatchDate(from, to string) Predicate {
+// [from, to], both inclusive. Only each bound's calendar day counts (in its own
+// location; the time of day is ignored), and a zero bound is open. Pages whose
+// PAGEID carries no date never match.
+func MatchDate(from, to time.Time) Predicate {
+	lo, hi := dayOf(from), dayOf(to)
 	return func(p Page) (bool, error) {
 		d, ok := pageDate(p.Doc.PageID)
 		if !ok {
 			return false, nil
 		}
-		return (from == "" || d >= from) && (to == "" || d <= to), nil
+		return (lo == "" || d >= lo) && (hi == "" || d <= hi), nil
 	}
+}
+
+// dayOf formats t as the "YYYYMMDD" a PAGEID embeds, or "" for the zero time (an
+// open bound). Fixed-width digits, so the days order as strings.
+func dayOf(t time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	return t.Format("20060102")
 }
 
 // MatchContent matches pages whose transcription (Page.Transcription) matches. A
