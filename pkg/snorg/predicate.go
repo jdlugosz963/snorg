@@ -173,7 +173,7 @@ func MatchDate(from, to string) Predicate {
 // — MatchRegion is the per-box view of the same text.
 func MatchContent(m TextMatcher) Predicate {
 	return func(p Page) bool {
-		md, err := p.Client.ReadAnalysis(p.Note.FileID, p.Doc.PageID)
+		md, err := p.Client.arch.ReadAnalysisMD(p.Note.FileID, p.Doc.PageID)
 		if err != nil {
 			p.Fail(err)
 			return false
@@ -193,7 +193,7 @@ func MatchRegion(boxID string, m TextMatcher) Predicate {
 		if tmpl == nil {
 			return false
 		}
-		md, err := p.Client.ReadAnalysis(p.Note.FileID, p.Doc.PageID)
+		md, err := p.Client.arch.ReadAnalysisMD(p.Note.FileID, p.Doc.PageID)
 		if err != nil {
 			p.Fail(err)
 			return false

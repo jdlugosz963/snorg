@@ -10,14 +10,10 @@ import (
 // rect, in either form, and refuses a rect that is not on the page.
 func TestRenderRegion(t *testing.T) {
 	c := seedArchive(t)
-	fid, err := c.FindPage("P1")
-	if err != nil {
-		t.Fatal(err)
-	}
 	box := Rect{X: 100, Y: 100, W: 400, H: 400} // the fixture's filled contour
 
 	for _, styled := range []bool{false, true} {
-		b, err := c.RenderRegion(fid, "P1", box, styled)
+		b, err := c.RenderRegion("P1", box, styled)
 		if err != nil {
 			t.Fatalf("styled=%v: %v", styled, err)
 		}
@@ -35,10 +31,10 @@ func TestRenderRegion(t *testing.T) {
 		}
 	}
 
-	if _, err := c.RenderRegion(fid, "P1", Rect{X: 5000, Y: 5000, W: 10, H: 10}, false); err == nil {
+	if _, err := c.RenderRegion("P1", Rect{X: 5000, Y: 5000, W: 10, H: 10}, false); err == nil {
 		t.Error("an off-page rect must error")
 	}
-	if _, err := c.RenderRegion(fid, "nope", box, false); err == nil {
+	if _, err := c.RenderRegion("nope", box, false); err == nil {
 		t.Error("an unknown PAGEID must error")
 	}
 }

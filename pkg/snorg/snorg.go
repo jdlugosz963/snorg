@@ -183,19 +183,33 @@ func (c *Client) Retrieve(pageIDs []string) (*Result, error) { return retrieve.G
 // ReadNote returns the raw note.json document for fileID.
 func (c *Client) ReadNote(fileID string) (NoteDoc, error) { return c.arch.ReadNote(fileID) }
 
-// ReadPage returns the raw <PAGEID>.json document.
-func (c *Client) ReadPage(fileID, pageID string) (PageDoc, error) {
+// ReadPage returns the raw <PAGEID>.json document. Like every single-page reader it
+// takes the PAGEID alone (it names one page in one note) and wraps ErrNotFound for
+// an unknown one.
+func (c *Client) ReadPage(pageID string) (PageDoc, error) {
+	fileID, err := c.arch.FindPage(pageID)
+	if err != nil {
+		return PageDoc{}, err
+	}
 	return c.arch.ReadPage(fileID, pageID)
 }
 
 // ReadSVG returns a page's rendered SVG bytes.
-func (c *Client) ReadSVG(fileID, pageID string) ([]byte, error) {
+func (c *Client) ReadSVG(pageID string) ([]byte, error) {
+	fileID, err := c.arch.FindPage(pageID)
+	if err != nil {
+		return nil, err
+	}
 	return c.arch.ReadSVG(fileID, pageID)
 }
 
 // ReadAnalysis returns a page's transcription — the <PAGEID>.md sidecar, AI-produced
 // or hand-written. A never-analyzed page reads as empty, not as an error.
-func (c *Client) ReadAnalysis(fileID, pageID string) (string, error) {
+func (c *Client) ReadAnalysis(pageID string) (string, error) {
+	fileID, err := c.arch.FindPage(pageID)
+	if err != nil {
+		return "", err
+	}
 	return c.arch.ReadAnalysisMD(fileID, pageID)
 }
 

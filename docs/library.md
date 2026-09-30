@@ -40,13 +40,13 @@ PAGEID/FILE_ID), `ErrSchemaVersion` (a stale file — run `Migrate`) and
 | `Keywords()` / `Tags()` | distinct device keywords / snorg tags with per-value page counts (`[]ValueCount`) |
 | `Query(pred)` | pages matching a `Predicate` |
 | `ParseQuery(expr)` (package func) | compile a query expression into a `Predicate` (terms joined by `AND`/`OR`/`NOT`; see `QuerySyntax`) |
-| `ReadAnalysis(fileID, pageID)` | a page's transcription (the `<PAGEID>.md` sidecar); empty when never analyzed |
+| `ReadAnalysis(pageID)` | a page's transcription (the `<PAGEID>.md` sidecar); empty when never analyzed |
 | `Templates()` | the template set built from the config's `templates:` section (already resolved by `Open`) |
 | `Tag(pageIDs, tag)` / `Untag(pageIDs, tag)` | add/remove a snorg-managed tag on pages (independent of device keywords); returns the count changed |
 | `TagNote(fileIDs, tag)` / `UntagNote(fileIDs, tag)` | same, but note-scoped: stored in `note.json` only and inherited by every page of the note; returns the count of notes changed |
 | `EffectiveTags(nd, pd)` (package func) | a page's effective tag set: its own tags unioned with its note's — the inheritance rule every read surface applies |
 | `Retrieve(pageIDs)` | assemble pages into a `*Result` (`{Archive, Notes}`) |
-| `ReadNote/ReadPage/ReadSVG/FindPage` | raw on-disk document access |
+| `ReadNote(fileID)` / `ReadPage/ReadSVG(pageID)` / `FindPage(pageID)` | raw on-disk document access; the page readers take the PAGEID alone (it names one page in one note) |
 | `Ingest(ctx, paths, opts)` | register `.note` files (`NoteFiles(dir)` enumerates them); `IngestOptions.OnResult` streams each note as it lands; each `IngestResult.Report` (`*WriteReport`) says what the incremental reconcile changed |
 | `Export(pageIDs)` | render through the config's template (`RenderTemplate` for an arbitrary one) |
 | `ServeHandler(res, ServeOptions{Flat})` | the built-in viewer over a `Retrieve`d `*Result` as an `http.Handler` |
@@ -55,7 +55,7 @@ PAGEID/FILE_ID), `ErrSchemaVersion` (a stale file — run `Migrate`) and
 | `Migrate(ctx, pageIDs, opts)` / `MigrateAll(ctx, opts)` | schema upgrade; `MigrateOptions{OnResult}` streams per-file results |
 | `PageBuffer(id)` / `ApplyPage(id, buf)` | programmatic transcription edit — no `$EDITOR`; returns a `PageEdit` |
 | `TextChangeOf/TextDiff/TextStat` (package funcs) | build a `TextChange`, render it as a unified diff, count its `±` lines |
-| `RenderRegion(fileID, pageID, rect, styled)` | crop a page rect to PNG bytes at native 1920x2560 resolution |
+| `RenderRegion(pageID, rect, styled)` | crop a page rect to PNG bytes at native 1920x2560 resolution |
 
 ### Predicates
 
@@ -67,7 +67,7 @@ and a hand-written predicate can do the same:
 
 ```go
 c.Query(func(p snorg.Page) bool {
-	md, err := p.Client.ReadAnalysis(p.Note.FileID, p.Doc.PageID)
+	md, err := p.Client.ReadAnalysis(p.Doc.PageID)
 	if err != nil {
 		p.Fail(err) // Query abandons the walk and returns this
 		return false
@@ -121,8 +121,7 @@ SVG as-is, keeping pen shades and baked overlays. Neither draws the template
 background image.
 
 ```go
-fid, _ := c.FindPage(pageID)
-png, err := c.RenderRegion(fid, pageID, snorg.Rect{X: 0, Y: 0, W: 1920, H: 384}, false)
+png, err := c.RenderRegion(pageID, snorg.Rect{X: 0, Y: 0, W: 1920, H: 384}, false)
 ```
 
 ### Analyzing

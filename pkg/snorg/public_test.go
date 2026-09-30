@@ -122,7 +122,7 @@ func TestPublicSurface(t *testing.T) {
 	// Rendering: a rect (the aliased snote.Rect, as carried by a PageDoc title or
 	// a templates: box) crops straight to PNG bytes, in either the canonical or
 	// the styled form.
-	var _ func(string, string, snorg.Rect, bool) ([]byte, error) = c.RenderRegion
+	var _ func(string, snorg.Rect, bool) ([]byte, error) = c.RenderRegion
 
 	// The change vocabulary and its two renderers. The edit surface had no guard
 	// before, which is how its result type could drift from the analyze one.
@@ -360,9 +360,9 @@ func TestAccessorSurface(t *testing.T) {
 	var _ string = c.ArchivePath()
 	var _ *snorg.Config = c.Config()
 	var _ func(string) (snorg.NoteDoc, error) = c.ReadNote
-	var _ func(string, string) (snorg.PageDoc, error) = c.ReadPage
-	var _ func(string, string) ([]byte, error) = c.ReadSVG
-	var _ func(string, string) (string, error) = c.ReadAnalysis
+	var _ func(string) (snorg.PageDoc, error) = c.ReadPage
+	var _ func(string) ([]byte, error) = c.ReadSVG
+	var _ func(string) (string, error) = c.ReadAnalysis
 	var _ func() *snorg.Templates = c.Templates
 	var _ func(string) (string, error) = c.FindPage
 	var _ func() ([]snorg.ValueCount, error) = c.Keywords
@@ -381,6 +381,16 @@ func TestAccessorSurface(t *testing.T) {
 	// An unknown id is ErrNotFound on every lookup path.
 	if _, err := c.FindPage("Pmissing"); !errors.Is(err, snorg.ErrNotFound) {
 		t.Errorf("FindPage err = %v, want ErrNotFound", err)
+	}
+	for name, read := range map[string]func(string) error{
+		"ReadPage":     func(id string) error { _, err := c.ReadPage(id); return err },
+		"ReadSVG":      func(id string) error { _, err := c.ReadSVG(id); return err },
+		"ReadAnalysis": func(id string) error { _, err := c.ReadAnalysis(id); return err },
+		"RenderRegion": func(id string) error { _, err := c.RenderRegion(id, snorg.Rect{W: 1, H: 1}, false); return err },
+	} {
+		if err := read("Pmissing"); !errors.Is(err, snorg.ErrNotFound) {
+			t.Errorf("%s err = %v, want ErrNotFound", name, err)
+		}
 	}
 	if _, err := c.Retrieve([]string{"Pmissing"}); !errors.Is(err, snorg.ErrNotFound) {
 		t.Errorf("Retrieve err = %v, want ErrNotFound", err)

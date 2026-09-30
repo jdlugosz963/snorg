@@ -154,7 +154,7 @@ func TestHandWrittenPredicate(t *testing.T) {
 	c := seedFiltered(t)
 
 	pred := func(p Page) bool {
-		md, err := p.Client.ReadAnalysis(p.Note.FileID, p.Doc.PageID)
+		md, err := p.Client.ReadAnalysis(p.Doc.PageID)
 		if err != nil {
 			p.Fail(err)
 			return false
@@ -175,7 +175,7 @@ func TestHandWrittenPredicate(t *testing.T) {
 
 func TestMatchUnanalyzed(t *testing.T) {
 	c := seedFiltered(t)
-	pd, err := c.ReadPage("F_A", "Pa")
+	pd, err := c.ReadPage("Pa")
 	if err != nil {
 		t.Fatal(err)
 	}
