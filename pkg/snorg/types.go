@@ -83,8 +83,9 @@ const (
 	LinkWeb     = snote.LinkWeb
 )
 
-// Match is one page a query predicate accepted, as returned by Client.Query. The
-// Page a predicate examines and the Predicate type itself live in query.go.
+// Match is one page a query predicate accepted, as returned by Client.Query, carrying
+// the NoteDoc and PageDoc the walk already read. The Page a predicate examines and the
+// Predicate type itself live in predicate.go.
 type Match = query.Match
 
 // The template regions a page can be drawn on: the resolved set (Client.Templates),

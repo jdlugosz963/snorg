@@ -12,10 +12,13 @@ import (
 	"github.com/jdlugosz963/snorg/internal/archive"
 )
 
-// Match is one page that satisfied a query predicate.
+// Match is one page that satisfied a query predicate, with the two documents the
+// walk already read for it, so a caller never decodes them a second time.
 type Match struct {
 	FileID string
 	PageID string
+	Note   archive.NoteDoc
+	Doc    archive.PageDoc
 }
 
 // Pages walks every note/page in the archive (List order, then note.json page
@@ -45,7 +48,7 @@ func Pages(a *archive.Archive, match func(archive.NoteDoc, archive.PageDoc) (boo
 				return nil, err
 			}
 			if ok {
-				out = append(out, Match{FileID: fileID, PageID: pd.PageID})
+				out = append(out, Match{FileID: fileID, PageID: pd.PageID, Note: nd, Doc: pd})
 			}
 		}
 	}

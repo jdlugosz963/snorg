@@ -386,7 +386,8 @@ func queryCmd(a *app) *cli.Command {
 				return err
 			}
 			if cmd.Bool("long") {
-				return printQueryLong(a.client, matches)
+				printQueryLong(matches)
+				return nil
 			}
 			for _, m := range matches {
 				fmt.Println(m.PageID)
@@ -408,29 +409,15 @@ func queryCmd(a *app) *cli.Command {
 // it for the fzf → serve workflow). Fixed \t separators keep the columns machine-
 // splittable (cut -f) regardless of value widths. This is deliberately NOT the
 // bare-PAGEID pipe contract, so it is never fed downstream.
-func printQueryLong(c *snorg.Client, matches []snorg.Match) error {
-	notes := make(map[string]*snorg.NoteDoc)
+func printQueryLong(matches []snorg.Match) {
 	for _, m := range matches {
-		nd, ok := notes[m.FileID]
-		if !ok {
-			read, err := c.ReadNote(m.FileID)
-			if err != nil {
-				return fmt.Errorf("note %s: %w", m.FileID, err)
-			}
-			nd = &read
-			notes[m.FileID] = nd
-		}
-		name := nd.Name()
+		nd, pd := m.Note, m.Doc
 		number := 0
 		for _, ref := range nd.Pages {
 			if ref.ID == m.PageID {
 				number = ref.Number
 				break
 			}
-		}
-		pd, err := c.ReadPage(m.FileID, m.PageID)
-		if err != nil {
-			return fmt.Errorf("note %s page %s: %w", m.FileID, m.PageID, err)
 		}
 		var headings, keywords, tags []string
 		for _, t := range pd.Titles {
@@ -441,7 +428,7 @@ func printQueryLong(c *snorg.Client, matches []snorg.Match) error {
 		for _, k := range pd.Keywords {
 			keywords = append(keywords, "#"+k.Text)
 		}
-		for _, t := range snorg.EffectiveTags(*nd, pd) {
+		for _, t := range snorg.EffectiveTags(nd, pd) {
 			tags = append(tags, "@"+t)
 		}
 		star := ""
@@ -449,10 +436,9 @@ func printQueryLong(c *snorg.Client, matches []snorg.Match) error {
 			star = "*"
 		}
 		fmt.Printf("%s\t%s\tp%d\t%s\t%s\t%s\t%s\n",
-			m.PageID, name, number, star,
+			m.PageID, nd.Name(), number, star,
 			strings.Join(headings, " / "), strings.Join(keywords, " "), strings.Join(tags, " "))
 	}
-	return nil
 }
 
 func tagCmd(a *app) *cli.Command {
