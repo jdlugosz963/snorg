@@ -215,15 +215,9 @@ func MatchRegion(boxID string, m TextMatcher) Predicate {
 }
 
 // pageTemplate resolves the config template a page is drawn on, or nil (not templated
-// or none configured). Open already resolved the set, so the error cannot happen here;
-// it still fails the query rather than reading as "not templated".
+// or none configured).
 func pageTemplate(p Page) *Template {
-	ts, err := p.Client.Templates()
-	if err != nil {
-		p.Fail(err)
-		return nil
-	}
-	return ts.MatchBackground(p.Doc.BackgroundHash)
+	return p.Client.Templates().MatchBackground(p.Doc.BackgroundHash)
 }
 
 // pageDate extracts the "YYYYMMDD" day embedded in a supernote id. PAGEIDs (and

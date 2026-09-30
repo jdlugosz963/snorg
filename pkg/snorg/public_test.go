@@ -363,7 +363,7 @@ func TestAccessorSurface(t *testing.T) {
 	var _ func(string, string) (snorg.PageDoc, error) = c.ReadPage
 	var _ func(string, string) ([]byte, error) = c.ReadSVG
 	var _ func(string, string) (string, error) = c.ReadAnalysis
-	var _ func() (*snorg.Templates, error) = c.Templates
+	var _ func() *snorg.Templates = c.Templates
 	var _ func(string) (string, error) = c.FindPage
 	var _ func() ([]snorg.ValueCount, error) = c.Keywords
 	var _ func(*snorg.Result, snorg.ServeOptions) http.Handler = c.ServeHandler

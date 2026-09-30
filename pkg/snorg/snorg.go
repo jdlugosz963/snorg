@@ -31,6 +31,7 @@ import (
 type Client struct {
 	arch *archive.Archive
 	cfg  *config.Config
+	tmpl *Templates
 	// apiKey is the resolved provider credential, deliberately kept off cfg: Config
 	// hands that out, and a secret does not belong in a struct callers can marshal.
 	apiKey string
@@ -66,10 +67,11 @@ func Open(archivePath string, cfg *Config) (*Client, error) {
 	// invalid boxes is a broken config, and it should fail here rather than half a
 	// command later — which is also why no read path (a query predicate included)
 	// has to carry a template-resolution error.
-	if _, err := arch.Templates(); err != nil {
+	tmpl, err := arch.Templates()
+	if err != nil {
 		return nil, err
 	}
-	return &Client{arch: arch, cfg: cfg}, nil
+	return &Client{arch: arch, cfg: cfg, tmpl: tmpl}, nil
 }
 
 // svgPipeline builds the archive's SVG pipeline from the config's ingest.svg
@@ -196,9 +198,9 @@ func (c *Client) ReadAnalysis(fileID, pageID string) (string, error) {
 }
 
 // Templates returns the template set built from the config's templates: section,
-// against which a page's BackgroundHash is matched. Open already resolved it, so
-// this is a cached lookup and the error is there for symmetry only.
-func (c *Client) Templates() (*Templates, error) { return c.arch.Templates() }
+// against which a page's BackgroundHash is matched. Open resolved it, so a broken
+// templates: section already failed there.
+func (c *Client) Templates() *Templates { return c.tmpl }
 
 // FindPage returns the FILE_ID that owns pageID (error if none or ambiguous).
 func (c *Client) FindPage(pageID string) (string, error) { return c.arch.FindPage(pageID) }
