@@ -175,9 +175,9 @@ func TestAliasSurface(t *testing.T) {
 	var cfg snorg.Config
 	var _ string = cfg.Archive
 	var _ snorg.ProviderConfig = cfg.Provider
-	var _ snorg.Analysis = cfg.Analysis
-	var _ snorg.Export = cfg.Export
-	var _ snorg.Ingest = cfg.Ingest
+	var _ snorg.AnalysisConfig = cfg.Analysis
+	var _ snorg.ExportConfig = cfg.Export
+	var _ snorg.IngestConfig = cfg.Ingest
 	var _ []snorg.TemplateConfig = cfg.Templates
 	var _, _, _, _ string = cfg.Provider.Endpoint, cfg.Provider.APIKey, cfg.Provider.APIKeyCommand, cfg.Provider.Model
 	var _ snorg.Task = cfg.Analysis.Content

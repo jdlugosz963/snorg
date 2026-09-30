@@ -16,15 +16,17 @@ import (
 // Client returns (the internal/* packages are not importable from outside the
 // module). Aliases are the same type — field access and methods work unchanged.
 
-// Config and its nested sections, as loaded from YAML by LoadConfig. The provider
-// credentials section is ProviderConfig, since Provider is the analysis-backend
-// interface (analyze.go); a templates: entry is TemplateConfig and its boxes
-// BoxConfig, distinct from the resolved Template/Box below.
+// Config and its nested sections, as loaded from YAML by LoadConfig. A section
+// alias carries a Config suffix wherever the bare name is taken by something else:
+// ExportConfig/IngestConfig next to the Client.Export/Client.Ingest operations,
+// AnalysisConfig next to PageAnalysis, ProviderConfig next to the Provider
+// interface (analyze.go), and TemplateConfig/BoxConfig next to the resolved
+// Template/Box below.
 type (
 	Config         = config.Config
-	Analysis       = config.Analysis
-	Export         = config.Export
-	Ingest         = config.Ingest
+	AnalysisConfig = config.Analysis
+	ExportConfig   = config.Export
+	IngestConfig   = config.Ingest
 	Task           = config.Task
 	SVGToggles     = config.SVGToggles
 	ProviderConfig = config.Provider
