@@ -174,7 +174,7 @@ func TestGetAssemblesAnalysis(t *testing.T) {
 	pd.Titles[0].Analysis = &archive.TitleAnalysis{Name: "Chapter", Edited: true}
 	pd.Links[0].Analysis = &archive.LinkAnalysis{Name: "see also", Edited: true}
 	pd.Analysis = &archive.PageAnalysis{SourceHash: "abc", Fields: map[string]string{"description": "short"}}
-	if _, err := a.WritePage("F_TEST", pd); err != nil {
+	if _, err := a.WritePage("F_TEST", pd, false); err != nil {
 		t.Fatal(err)
 	}
 	if err := a.WriteAnalysisMD("F_TEST", "Pa", "# Chapter\n\nbody"); err != nil {

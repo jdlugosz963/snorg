@@ -1,6 +1,11 @@
 package archive
 
-import "github.com/jdlugosz963/snorg/internal/snote"
+import (
+	"strings"
+	"time"
+
+	"github.com/jdlugosz963/snorg/internal/snote"
+)
 
 // The Doc types are the serialization boundary: they define the stable plaintext
 // JSON contract written to disk, decoupled from the in-memory domain model.
@@ -11,7 +16,7 @@ import "github.com/jdlugosz963/snorg/internal/snote"
 // migration step) whenever the JSON contract changes; a future `migrate` command
 // walks stale files forward one version at a time. 0 (absent field) is
 // pre-versioning, and is also stale.
-const CurrentSchemaVersion = 5
+const CurrentSchemaVersion = 6
 
 // NoteDoc is note.json — file metadata plus ordered page placement.
 //
@@ -29,6 +34,18 @@ type NoteDoc struct {
 	Source        string        `json:"source"`
 	Tags          []string      `json:"tags,omitempty"`
 	Pages         []NotePageRef `json:"pages"`
+}
+
+// Name is the note's display name (see NoteName).
+func (nd NoteDoc) Name() string { return NoteName(nd.FileID, nd.Source) }
+
+// NoteName is a note's display name: its source .note filename without the
+// extension, or the FILE_ID when the source is unknown.
+func NoteName(fileID, source string) string {
+	if name := strings.TrimSuffix(source, ".note"); name != "" {
+		return name
+	}
+	return fileID
 }
 
 // NotePageRef is one entry in note.json's page placement.
@@ -49,16 +66,25 @@ type NotePageRef struct {
 // device-set Keywords. They are not sourced from the .note (pageDoc leaves them
 // empty), so re-ingest carries them forward like Analysis. Kept sorted and
 // de-duplicated for deterministic, VCS-friendly output.
+//
+// ModifiedAt and DeviceModifiedAt are the page's change stamps (see stamp.go):
+// the last time anything about the page changed in the archive, and the last time
+// it changed on the device. DeviceHash is the ingest bookkeeping behind the
+// latter — empty right after migrate, when the next ingest records it as a
+// baseline without bumping the stamp.
 type PageDoc struct {
-	SchemaVersion  int           `json:"schema_version"`
-	PageID         string        `json:"page_id"`
-	Starred        bool          `json:"starred"`
-	BackgroundHash string        `json:"background_hash,omitempty"`
-	Tags           []string      `json:"tags,omitempty"`
-	Titles         []TitleDoc    `json:"titles"`
-	Keywords       []KeywordDoc  `json:"keywords"`
-	Links          []LinkDoc     `json:"links"`
-	Analysis       *PageAnalysis `json:"analysis,omitempty"`
+	SchemaVersion    int           `json:"schema_version"`
+	PageID           string        `json:"page_id"`
+	Starred          bool          `json:"starred"`
+	BackgroundHash   string        `json:"background_hash,omitempty"`
+	ModifiedAt       time.Time     `json:"modified_at,omitzero"`
+	DeviceModifiedAt time.Time     `json:"device_modified_at,omitzero"`
+	DeviceHash       string        `json:"device_hash,omitempty"`
+	Tags             []string      `json:"tags,omitempty"`
+	Titles           []TitleDoc    `json:"titles"`
+	Keywords         []KeywordDoc  `json:"keywords"`
+	Links            []LinkDoc     `json:"links"`
+	Analysis         *PageAnalysis `json:"analysis,omitempty"`
 }
 
 // RegionDoc is the per-box fingerprint state for a templated page: ID is the

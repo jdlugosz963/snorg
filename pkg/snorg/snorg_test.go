@@ -1,8 +1,10 @@
 package snorg
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -121,8 +123,10 @@ func TestParseQuery(t *testing.T) {
 		"starred:x",
 		"keyword",
 		"keyword~(",
-		"date:not-a-date",
-		"date~today",
+		"ctime:not-a-date",
+		"ctime~today",
+		"mtime=today",
+		"date:today",
 		"tag[x]:y",
 	} {
 		if _, err := ParseQuery(expr); err == nil {
@@ -215,12 +219,13 @@ func TestParseDateSpec(t *testing.T) {
 		{"not-a-date", "", "", true},
 	}
 	for _, tc := range cases {
-		from, to, err := ParseDateSpec(tc.spec)
+		lo, hi, err := ParseDateSpec(tc.spec)
 		if (err != nil) != tc.wantErr {
 			t.Errorf("ParseDateSpec(%q) err = %v, wantErr %v", tc.spec, err, tc.wantErr)
 			continue
 		}
-		if err == nil && (from != tc.from || to != tc.to) {
+		// Compared as the day MatchCreated uses ("" = open bound).
+		if from, to := dayOf(lo), dayOf(hi); err == nil && (from != tc.from || to != tc.to) {
 			t.Errorf("ParseDateSpec(%q) = (%q,%q), want (%q,%q)", tc.spec, from, to, tc.from, tc.to)
 		}
 	}
@@ -262,5 +267,51 @@ func TestOpenBridgesTemplateSpecs(t *testing.T) {
 	}
 	if len(tmpl.Boxes) != 1 || tmpl.Boxes[0].ID != "title" {
 		t.Errorf("boxes = %+v", tmpl.Boxes)
+	}
+}
+
+// TestConfigIsSnapshot: Config hands out a copy, so a caller cannot reach into the
+// client's own configuration — the reason NewProvider can resolve a secret without it
+// showing up there.
+func TestConfigIsSnapshot(t *testing.T) {
+	c := seedArchive(t)
+	c.cfg.Analysis.Fields = map[string]Task{"summary": {Prompt: "summarize"}}
+
+	got := c.Config()
+	if got == c.cfg {
+		t.Fatal("Config returned the client's own config pointer")
+	}
+	got.Export.Template = "{{ archive }}"
+	got.Analysis.Fields["summary"] = Task{Prompt: "hijacked"}
+
+	if c.cfg.Export.Template != "" {
+		t.Errorf("export template = %q, want the client's config untouched", c.cfg.Export.Template)
+	}
+	if p := c.cfg.Analysis.Fields["summary"].Prompt; p != "summarize" {
+		t.Errorf("field prompt = %q, want %q", p, "summarize")
+	}
+	if again := c.Config(); again.Export.Template != "" {
+		t.Errorf("second Config().Export.Template = %q, want empty", again.Export.Template)
+	}
+}
+
+// TestBatchContextCancel: Ingest and Migrate stop on a cancelled context the way
+// Analyze does — nothing processed, the context's error returned.
+func TestBatchContextCancel(t *testing.T) {
+	c := seedArchive(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	ing, err := c.Ingest(ctx, []string{"never-read.note"}, IngestOptions{})
+	if !errors.Is(err, context.Canceled) || len(ing) != 0 {
+		t.Errorf("Ingest = %d results, %v; want none, context.Canceled", len(ing), err)
+	}
+	mig, err := c.Migrate(ctx, []string{"P1"}, MigrateOptions{})
+	if !errors.Is(err, context.Canceled) || len(mig) != 0 {
+		t.Errorf("Migrate = %d results, %v; want none, context.Canceled", len(mig), err)
+	}
+	mig, err = c.MigrateAll(ctx, MigrateOptions{})
+	if !errors.Is(err, context.Canceled) || len(mig) != 0 {
+		t.Errorf("MigrateAll = %d results, %v; want none, context.Canceled", len(mig), err)
 	}
 }

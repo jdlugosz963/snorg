@@ -11,6 +11,7 @@
 package snorg
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 
@@ -24,11 +25,17 @@ import (
 	"github.com/jdlugosz963/snorg/internal/snote/sntool"
 )
 
-// Client is a handle on one archive plus its merged configuration. It is safe to
-// reuse; its methods hold no cross-call state.
+// Client is a handle on one archive plus its merged configuration. It is meant to be
+// reused; the one piece of cross-call state is the API key NewProvider resolves, cached
+// so a shell api_key_command runs once per client (which also makes a Client unsafe to
+// share across goroutines).
 type Client struct {
 	arch *archive.Archive
 	cfg  *config.Config
+	tmpl *Templates
+	// apiKey is the resolved provider credential, deliberately kept off cfg: Config
+	// hands that out, and a secret does not belong in a struct callers can marshal.
+	apiKey string
 }
 
 // LoadConfig loads and deep-merges the YAML config files (later paths override
@@ -52,9 +59,26 @@ func Open(archivePath string, cfg *Config) (*Client, error) {
 		}
 	}
 	arch := archive.New(archivePath)
-	// Apply the ingest.svg toggles defensively: a config from LoadConfig has them
-	// populated, but a hand-built Config leaves the bool pointers nil — keep the
-	// default pipeline stage for any unset field.
+	arch.SVG = svgPipeline(cfg)
+	// Bridge the config's template specs (image paths already resolved to absolute
+	// by config.Load) into the archive, which hashes each image to match a page's
+	// background. A hand-built Config with no templates leaves the feature inert.
+	arch.SetTemplateSpecs(templateSpecs(cfg))
+	// Resolve them right away: a templates: section that names a missing image or
+	// invalid boxes is a broken config, and it should fail here rather than half a
+	// command later — which is also why no read path (a query predicate included)
+	// has to carry a template-resolution error.
+	tmpl, err := arch.Templates()
+	if err != nil {
+		return nil, err
+	}
+	return &Client{arch: arch, cfg: cfg, tmpl: tmpl}, nil
+}
+
+// svgPipeline builds the archive's SVG pipeline from the config's ingest.svg
+// toggles. A hand-built Config leaves the bool pointers nil, so any unset field
+// keeps the default stage.
+func svgPipeline(cfg *config.Config) archive.SVGPipeline {
 	svg := archive.DefaultSVGPipeline()
 	s := cfg.Ingest.SVG
 	if s.Links != nil {
@@ -72,19 +96,7 @@ func Open(archivePath string, cfg *Config) (*Client, error) {
 	if s.Colors != nil {
 		svg.Colors = s.Colors
 	}
-	arch.SVG = svg
-	// Bridge the config's template specs (image paths already resolved to absolute
-	// by config.Load) into the archive, which hashes each image to match a page's
-	// background. A hand-built Config with no templates leaves the feature inert.
-	arch.SetTemplateSpecs(templateSpecs(cfg))
-	// Resolve them right away: a templates: section that names a missing image or
-	// invalid boxes is a broken config, and it should fail here rather than half a
-	// command later — which is also why no read path (a query predicate included)
-	// has to carry a template-resolution error.
-	if _, err := arch.Templates(); err != nil {
-		return nil, err
-	}
-	return &Client{arch: arch, cfg: cfg}, nil
+	return svg
 }
 
 // templateSpecs converts the config's template section into the archive's raw spec
@@ -128,7 +140,11 @@ func Resolve(opts ResolveOptions) (*Client, error) {
 		archivePath = cfg.Archive
 	}
 	if archivePath == "" {
-		return nil, fmt.Errorf("no archive path: set ArchivePath or the archive: key in %s", userPath)
+		where := userPath
+		if where == "" {
+			where = "the user config"
+		}
+		return nil, fmt.Errorf("no archive path: set ArchivePath or the archive: key in %s", where)
 	}
 	archivePath = config.ExpandHome(archivePath)
 	return Open(archivePath, cfg)
@@ -137,19 +153,25 @@ func Resolve(opts ResolveOptions) (*Client, error) {
 // ArchivePath returns the client's archive root.
 func (c *Client) ArchivePath() string { return c.arch.Root }
 
-// Config returns the client's merged configuration.
-func (c *Client) Config() *Config { return c.cfg }
+// Config returns a snapshot of the client's merged configuration. Mutating it has no
+// effect on the client — configure through LoadConfig/Open.
+func (c *Client) Config() *Config { return c.cfg.Clone() }
 
 // List returns the archived FILE_IDs, sorted.
 func (c *Client) List() ([]string, error) { return retrieve.List(c.arch) }
 
 // Query returns the pages matching pred (see the Match* constructors and
-// ParseQuery). Order follows the archive walk: List order, then note.json page
-// order. The walk hands each candidate to pred as a Page, this client included, so
-// a predicate can read whatever the two documents do not hold.
+// ParseQuery), each with the note.json and <PAGEID>.json documents the walk read.
+// Order follows the archive walk: List order, then note.json page order. The first
+// error a predicate returns aborts the walk and is returned, naming its page, so the
+// result set never mixes matched pages with pages that were never read.
 func (c *Client) Query(pred Predicate) ([]Match, error) {
-	return query.Pages(c.arch, func(nd archive.NoteDoc, pd archive.PageDoc) bool {
-		return pred(Page{Client: c, Note: nd, Doc: pd})
+	return query.Pages(c.arch, func(nd archive.NoteDoc, pd archive.PageDoc) (bool, error) {
+		ok, err := pred(Page{Note: nd, Doc: pd, c: c})
+		if err != nil {
+			return false, fmt.Errorf("page %s: %w", pd.PageID, err)
+		}
+		return ok, nil
 	})
 }
 
@@ -161,26 +183,40 @@ func (c *Client) Retrieve(pageIDs []string) (*Result, error) { return retrieve.G
 // ReadNote returns the raw note.json document for fileID.
 func (c *Client) ReadNote(fileID string) (NoteDoc, error) { return c.arch.ReadNote(fileID) }
 
-// ReadPage returns the raw <PAGEID>.json document.
-func (c *Client) ReadPage(fileID, pageID string) (PageDoc, error) {
+// ReadPage returns the raw <PAGEID>.json document. Like every single-page reader it
+// takes the PAGEID alone (it names one page in one note) and wraps ErrNotFound for
+// an unknown one.
+func (c *Client) ReadPage(pageID string) (PageDoc, error) {
+	fileID, err := c.arch.FindPage(pageID)
+	if err != nil {
+		return PageDoc{}, err
+	}
 	return c.arch.ReadPage(fileID, pageID)
 }
 
 // ReadSVG returns a page's rendered SVG bytes.
-func (c *Client) ReadSVG(fileID, pageID string) ([]byte, error) {
+func (c *Client) ReadSVG(pageID string) ([]byte, error) {
+	fileID, err := c.arch.FindPage(pageID)
+	if err != nil {
+		return nil, err
+	}
 	return c.arch.ReadSVG(fileID, pageID)
 }
 
 // ReadAnalysis returns a page's transcription — the <PAGEID>.md sidecar, AI-produced
 // or hand-written. A never-analyzed page reads as empty, not as an error.
-func (c *Client) ReadAnalysis(fileID, pageID string) (string, error) {
+func (c *Client) ReadAnalysis(pageID string) (string, error) {
+	fileID, err := c.arch.FindPage(pageID)
+	if err != nil {
+		return "", err
+	}
 	return c.arch.ReadAnalysisMD(fileID, pageID)
 }
 
 // Templates returns the template set built from the config's templates: section,
-// against which a page's BackgroundHash is matched. Open already resolved it, so
-// this is a cached lookup and the error is there for symmetry only.
-func (c *Client) Templates() (*Templates, error) { return c.arch.Templates() }
+// against which a page's BackgroundHash is matched. Open resolved it, so a broken
+// templates: section already failed there.
+func (c *Client) Templates() *Templates { return c.tmpl }
 
 // FindPage returns the FILE_ID that owns pageID (error if none or ambiguous).
 func (c *Client) FindPage(pageID string) (string, error) { return c.arch.FindPage(pageID) }
@@ -200,11 +236,13 @@ type IngestOptions struct {
 // Ingest registers each note path into the archive, running the config's SVG
 // pipeline. Results preserve input order; a note's failure is reported in its
 // IngestResult.Err without aborting the batch.
-func (c *Client) Ingest(paths []string, opts IngestOptions) ([]IngestResult, error) {
+//
+// A cancelled ctx stops the batch: the results so far are returned with ctx.Err().
+func (c *Client) Ingest(ctx context.Context, paths []string, opts IngestOptions) ([]IngestResult, error) {
 	if err := c.cfg.ValidateIngest(); err != nil {
 		return nil, err
 	}
-	return ingest.RunMany(sntool.New(), c.arch, paths, ingest.Options{OnResult: opts.OnResult}), nil
+	return ingest.RunMany(ctx, sntool.New(), c.arch, paths, ingest.Options{OnResult: opts.OnResult})
 }
 
 // Export retrieves the given pages and renders them through the config's export
@@ -212,7 +250,7 @@ func (c *Client) Ingest(paths []string, opts IngestOptions) ([]IngestResult, err
 // already-retrieved Result through an arbitrary template.
 func (c *Client) Export(pageIDs []string) (string, error) {
 	if c.cfg.Export.Template == "" {
-		return "", fmt.Errorf("export.template is required")
+		return "", ErrNoExportTemplate
 	}
 	res, err := retrieve.Get(c.arch, pageIDs)
 	if err != nil {
@@ -226,25 +264,16 @@ func RenderTemplate(res *Result, template string) (string, error) {
 	return export.Render(res, template)
 }
 
-// ServeHandler assembles the given pages and returns the built-in HTTP viewer as an
-// http.Handler — grouped by note, or one flat gallery when flat. An empty pageIDs
-// serves the whole archive. Binding a listener is left to the caller.
-func (c *Client) ServeHandler(pageIDs []string, flat bool) (http.Handler, error) {
-	if len(pageIDs) == 0 {
-		matches, err := query.Pages(c.arch, func(archive.NoteDoc, archive.PageDoc) bool { return true })
-		if err != nil {
-			return nil, err
-		}
-		pageIDs = make([]string, len(matches))
-		for i, m := range matches {
-			pageIDs[i] = m.PageID
-		}
-	}
-	res, err := retrieve.Get(c.arch, pageIDs)
-	if err != nil {
-		return nil, err
-	}
-	return serve.Handler(c.arch, res.Notes, flat), nil
+// ServeOptions tunes the built-in viewer.
+type ServeOptions struct {
+	// Flat serves one gallery of all pages instead of grouping them by note.
+	Flat bool
+}
+
+// ServeHandler returns the built-in HTTP viewer over an already-retrieved Result
+// (see Retrieve) as an http.Handler. Binding a listener is left to the caller.
+func (c *Client) ServeHandler(res *Result, opts ServeOptions) http.Handler {
+	return serve.Handler(c.arch, res.Notes, opts.Flat)
 }
 
 // MigrateOptions tunes a migration batch.
@@ -257,14 +286,17 @@ type MigrateOptions struct {
 // Migrate upgrades the given pages (and their owning notes) to the current schema
 // version; an empty pageIDs migrates the whole archive (see MigrateAll). Per-file
 // errors are reported in the results, not returned.
-func (c *Client) Migrate(pageIDs []string, opts MigrateOptions) ([]MigrateResult, error) {
+//
+// A cancelled ctx stops the batch: the results so far are returned with ctx.Err().
+func (c *Client) Migrate(ctx context.Context, pageIDs []string, opts MigrateOptions) ([]MigrateResult, error) {
 	if len(pageIDs) == 0 {
-		return c.MigrateAll(opts)
+		return c.MigrateAll(ctx, opts)
 	}
-	return c.arch.MigratePages(pageIDs, archive.MigrateOptions{OnResult: opts.OnResult})
+	return c.arch.MigratePages(ctx, pageIDs, archive.MigrateOptions{OnResult: opts.OnResult})
 }
 
-// MigrateAll upgrades every note and page in the archive to the current schema.
-func (c *Client) MigrateAll(opts MigrateOptions) ([]MigrateResult, error) {
-	return c.arch.MigrateAll(archive.MigrateOptions{OnResult: opts.OnResult})
+// MigrateAll upgrades every note and page in the archive to the current schema; ctx
+// cancels it as in Migrate.
+func (c *Client) MigrateAll(ctx context.Context, opts MigrateOptions) ([]MigrateResult, error) {
+	return c.arch.MigrateAll(ctx, archive.MigrateOptions{OnResult: opts.OnResult})
 }

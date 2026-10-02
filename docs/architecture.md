@@ -57,9 +57,10 @@ templated` selects the free-form pages) or a field with an operator and a value:
 `note`, `keyword` (device keywords, matched against `Keyword.Text`), `tag`
 (snorg-managed tags, the page's own plus the ones inherited from its note),
 `content` (the page's transcribed `<PAGEID>.md`), `region[<box-id>]` (the text of
-one template box inside that file; unscoped = any box) and `date:<spec>`. The
+one template box inside that file; unscoped = any box) and `ctime`/`mtime`/`dtime:<spec>`
+(page created per its PAGEID / `modified_at` / `device_modified_at`). The
 operator chooses the match: `:` substring (case-insensitive), `~` regexp, `=`
-exact. So `snorg query 'starred AND (tag:work OR date:2026-04-04..)'`. `retrieve`, `analyze` and `export` all take PAGEIDs
+exact. So `snorg query 'starred AND (tag:work OR ctime:2026-04-04..)'`. `retrieve`, `analyze` and `export` all take PAGEIDs
 as arguments, or read them one-per-line from stdin when none are given, so
 `query` pipes into any of them. `tag` is the one write on the read side: it adds or
 removes a snorg-managed tag on the PAGEIDs (args or stdin), the archive-side
@@ -132,7 +133,8 @@ migrates its owning `note.json`. Idempotent, needs no provider config.
 <archive>/<FILE_ID>/
     note.json          # schema_version + file metadata + tags[] (snorg-managed, note-scoped:
                        #   inherited by every page of the note) + ordered page placement (id, number)
-    <PAGEID>.json      # schema_version + per page: starred, background_hash, tags[] (snorg-managed),
+    <PAGEID>.json      # schema_version + per page: starred, background_hash,
+                       # modified_at/device_modified_at (+ device_hash), tags[] (snorg-managed),
                        # titles(rect,level,analysis), keywords(text), links(...,analysis),
                        # analysis{source_hash, fields, regions[](id,source_hash)}
     <PAGEID>.md        # per page: the transcription (Markdown), AI-produced and/or
@@ -278,7 +280,8 @@ idempotent (already-current files report `current` and are not rewritten) and re
 to downgrade a file newer than the binary. Selection mirrors `serve` (PAGEID args /
 stdin / bare = whole archive), but a page selection also migrates its owning
 `note.json`. Version 0 (absent field) = pre-versioning, migrated to 1 by the first
-(no-op) step.
+(no-op) step. The v5→v6 step backfills a page's `modified_at`/`device_modified_at` from
+its PAGEID's creation time (no history exists to recover them from).
 
 `migrate` additionally normalizes each page's `<PAGEID>.md.diff`
 (`archive.migrateEditDiff`). That sidecar carries no `schema_version`, so there is no
@@ -326,7 +329,13 @@ than a bar.
   `source_hash` + `fields` + `regions[]` (per-box fingerprint state); the top-level
   `background_hash` (ingest-stamped selector) + `analysis.regions[]` support template regions;
   the top-level `tags` are the snorg-managed labels, note-scoped in `note.json` and
-  page-scoped in `<PAGEID>.json`; both
+  page-scoped in `<PAGEID>.json`; the page's change stamps `modified_at` (owned by
+  `WritePage`, the single page-doc writer: bumped when the doc's content differs from the
+  stored one or a sibling svg/md changed in the same operation, which is why callers write
+  those first) and `device_modified_at` (owned by `Write`: bumped when `device_hash` —
+  sha256 of the device-derived doc + the raw pre-pipeline SVG — moves, so restyling never
+  counts; an empty stored hash after `migrate` is recorded as a baseline, not a change), see
+  `stamp.go`; both
   docs carry `schema_version` = `CurrentSchemaVersion`);
   `Write` reconciles a note's directory in place, stamps `background_hash` (sha256 of the
   decoded background, from `background.go`) and runs the
@@ -372,7 +381,7 @@ than a bar.
   a value on a term that takes none, a bad regexp or a bad date spec all parse here and are
   rejected by `pkg/snorg`'s compiler, which has the `Term.Pos` to point at. The lexer is
   **stateful**: a value is lexed by different rules than an expression (so
-  `date:2026-04-04..2026-09-12` is one token), and the value state has no whitespace rule, which
+  `ctime:2026-04-04..2026-09-12` is one token), and the value state has no whitespace rule, which
   is what makes `content: x` an error rather than a quietly different query. Quote handling
   (`"…"` with `\"`/`\\` escapes, `'…'` verbatim) is done at capture, so a `Term.Value` is
   already the literal string the user meant. External dep: `participle/v2`.

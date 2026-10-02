@@ -582,7 +582,7 @@ it is long and opaque, and every command reads it back with
   "List the archive pages matching the query EXPR in `*snorg-query*'.
 EXPR is a snorg query expression -- terms joined by AND/OR/NOT and
 grouped with parentheses, e.g. \"all\", \"starred AND tag:work\",
-\"date:today\", \"content~regexp\"; see the snorg README for the full
+\"mtime:today\", \"content~regexp\"; see the snorg README for the full
 vocabulary.  Defaults to \"all\"."
   (interactive
    (list (read-string "snorg query: " nil 'snorg--query-history "all")))

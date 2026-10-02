@@ -5,6 +5,7 @@
 package ingest
 
 import (
+	"context"
 	"fmt"
 	"io/fs"
 	"path/filepath"
@@ -63,17 +64,22 @@ type Options struct {
 }
 
 // RunMany ingests paths into store one note at a time. A failed note never
-// aborts the batch — every path yields a Result, in input order.
-func RunMany(src snote.Source, store *archive.Archive, paths []string, opts Options) []Result {
-	results := make([]Result, len(paths))
-	for i, path := range paths {
+// aborts the batch — every path yields a Result, in input order. A cancelled ctx
+// stops it between notes: the results so far are returned with ctx.Err().
+func RunMany(ctx context.Context, src snote.Source, store *archive.Archive, paths []string, opts Options) ([]Result, error) {
+	results := make([]Result, 0, len(paths))
+	for _, path := range paths {
+		if err := ctx.Err(); err != nil {
+			return results, err
+		}
 		note, report, err := Run(src, store, path)
-		results[i] = Result{Path: path, Note: note, Report: report, Err: err}
+		r := Result{Path: path, Note: note, Report: report, Err: err}
+		results = append(results, r)
 		if opts.OnResult != nil {
-			opts.OnResult(results[i])
+			opts.OnResult(r)
 		}
 	}
-	return results
+	return results, nil
 }
 
 // NoteFiles walks root recursively and returns every *.note file path, sorted for

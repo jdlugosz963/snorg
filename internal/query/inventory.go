@@ -37,7 +37,7 @@ func Tags(a *archive.Archive) ([]ValueCount, error) {
 // each value at most once per page, then returns them sorted by value.
 func countValues(a *archive.Archive, extract func(archive.NoteDoc, archive.PageDoc) []string) ([]ValueCount, error) {
 	counts := map[string]int{}
-	if _, err := Pages(a, func(nd archive.NoteDoc, pd archive.PageDoc) bool {
+	if _, err := Pages(a, func(nd archive.NoteDoc, pd archive.PageDoc) (bool, error) {
 		seen := map[string]struct{}{}
 		for _, v := range extract(nd, pd) {
 			if _, ok := seen[v]; ok {
@@ -46,7 +46,7 @@ func countValues(a *archive.Archive, extract func(archive.NoteDoc, archive.PageD
 			seen[v] = struct{}{}
 			counts[v]++
 		}
-		return false
+		return false, nil
 	}); err != nil {
 		return nil, err
 	}

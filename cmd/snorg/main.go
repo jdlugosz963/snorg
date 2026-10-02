@@ -46,6 +46,7 @@ import (
 	"maps"
 	"net/http"
 	"os"
+	"os/signal"
 	"slices"
 	"strings"
 
@@ -55,7 +56,13 @@ import (
 )
 
 func main() {
-	if err := root().Run(context.Background(), os.Args); err != nil {
+	// Ctrl-C cancels the context, so a batch command stops between items and still
+	// reports what it finished. The handler is released on the first one, so a second
+	// Ctrl-C kills the process as usual (an item that never finishes stays killable).
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+	context.AfterFunc(ctx, stop)
+	if err := root().Run(ctx, os.Args); err != nil {
 		fmt.Fprintln(os.Stderr, "snorg: "+err.Error())
 		os.Exit(1)
 	}
@@ -166,7 +173,7 @@ func ingestCmd(a *app) *cli.Command {
 		Name:      "ingest",
 		Usage:     "register a .note file (or all *.note under a dir) into the archive",
 		ArgsUsage: "<file-or-dir>",
-		Action: func(_ context.Context, cmd *cli.Command) error {
+		Action: func(ctx context.Context, cmd *cli.Command) error {
 			if cmd.Args().Len() != 1 {
 				return fmt.Errorf("usage: snorg [-a <archive-path>] ingest <file-or-dir>")
 			}
@@ -193,7 +200,7 @@ func ingestCmd(a *app) *cli.Command {
 			r := newReporter(os.Stderr, len(paths), "ingest", "notes", a.verbose)
 			defer r.close()
 			var failed int
-			results, err := a.client.Ingest(paths, snorg.IngestOptions{
+			results, err := a.client.Ingest(ctx, paths, snorg.IngestOptions{
 				OnResult: func(res snorg.IngestResult) {
 					if res.Err != nil {
 						failed++
@@ -288,11 +295,7 @@ func listCmd(a *app) *cli.Command {
 				if err != nil {
 					return fmt.Errorf("note %s: %w", id, err)
 				}
-				name := strings.TrimSuffix(nd.Source, ".note")
-				if name == "" {
-					name = id
-				}
-				fmt.Printf("%s\t%s\n", id, name)
+				fmt.Printf("%s\t%s\n", id, nd.Name())
 			}
 			return nil
 		},
@@ -355,7 +358,7 @@ func queryCmd(a *app) *cli.Command {
 	return &cli.Command{
 		Name:        "query",
 		Usage:       "print PAGEIDs of matching pages, one per line (pipe into retrieve/analyze/export); -l/--long annotates them (browse-only, not pipe-safe)",
-		ArgsUsage:   "<expr>   e.g. 'starred AND (tag:work OR date:today)'",
+		ArgsUsage:   "<expr>   e.g. 'starred AND (tag:work OR mtime:today)'",
 		Description: "The filter is a boolean expression, " + snorg.QuerySyntax,
 		Flags: []cli.Flag{
 			&cli.BoolFlag{
@@ -390,7 +393,8 @@ func queryCmd(a *app) *cli.Command {
 				return err
 			}
 			if cmd.Bool("long") {
-				return printQueryLong(a.client, matches)
+				printQueryLong(matches)
+				return nil
 			}
 			for _, m := range matches {
 				fmt.Println(m.PageID)
@@ -412,32 +416,15 @@ func queryCmd(a *app) *cli.Command {
 // it for the fzf → serve workflow). Fixed \t separators keep the columns machine-
 // splittable (cut -f) regardless of value widths. This is deliberately NOT the
 // bare-PAGEID pipe contract, so it is never fed downstream.
-func printQueryLong(c *snorg.Client, matches []snorg.Match) error {
-	notes := make(map[string]*snorg.NoteDoc)
+func printQueryLong(matches []snorg.Match) {
 	for _, m := range matches {
-		nd, ok := notes[m.FileID]
-		if !ok {
-			read, err := c.ReadNote(m.FileID)
-			if err != nil {
-				return fmt.Errorf("note %s: %w", m.FileID, err)
-			}
-			nd = &read
-			notes[m.FileID] = nd
-		}
-		name := strings.TrimSuffix(nd.Source, ".note")
-		if name == "" {
-			name = m.FileID
-		}
+		nd, pd := m.Note, m.Doc
 		number := 0
 		for _, ref := range nd.Pages {
 			if ref.ID == m.PageID {
 				number = ref.Number
 				break
 			}
-		}
-		pd, err := c.ReadPage(m.FileID, m.PageID)
-		if err != nil {
-			return fmt.Errorf("note %s page %s: %w", m.FileID, m.PageID, err)
 		}
 		var headings, keywords, tags []string
 		for _, t := range pd.Titles {
@@ -448,7 +435,7 @@ func printQueryLong(c *snorg.Client, matches []snorg.Match) error {
 		for _, k := range pd.Keywords {
 			keywords = append(keywords, "#"+k.Text)
 		}
-		for _, t := range snorg.EffectiveTags(*nd, pd) {
+		for _, t := range snorg.EffectiveTags(nd, pd) {
 			tags = append(tags, "@"+t)
 		}
 		star := ""
@@ -456,10 +443,9 @@ func printQueryLong(c *snorg.Client, matches []snorg.Match) error {
 			star = "*"
 		}
 		fmt.Printf("%s\t%s\tp%d\t%s\t%s\t%s\t%s\n",
-			m.PageID, name, number, star,
+			m.PageID, nd.Name(), number, star,
 			strings.Join(headings, " / "), strings.Join(keywords, " "), strings.Join(tags, " "))
 	}
-	return nil
 }
 
 func tagCmd(a *app) *cli.Command {
@@ -495,10 +481,15 @@ func tagCmd(a *app) *cli.Command {
 			}
 			remove := cmd.Bool("remove")
 			tagFn := a.client.Tag
-			if notes {
+			switch {
+			case notes && remove:
+				tagFn = a.client.UntagNote
+			case notes:
 				tagFn = a.client.TagNote
+			case remove:
+				tagFn = a.client.Untag
 			}
-			changed, err := tagFn(tag, ids, remove)
+			changed, err := tagFn(ids, tag)
 			if err != nil {
 				return err
 			}
@@ -666,10 +657,7 @@ func serveCmd(a *app) *cli.Command {
 			if err != nil {
 				return err
 			}
-			handler, err := a.client.ServeHandler(pageIDs, cmd.Bool("flat"))
-			if err != nil {
-				return err
-			}
+			handler := a.client.ServeHandler(res, snorg.ServeOptions{Flat: cmd.Bool("flat")})
 			addr := cmd.String("listen")
 			pages := 0
 			for _, n := range res.Notes {
@@ -707,7 +695,7 @@ func migrateCmd(a *app) *cli.Command {
 		Name:      "migrate",
 		Usage:     "upgrade note.json/page JSON to the current schema version (no PAGEIDs and no pipe = whole archive)",
 		ArgsUsage: "[PAGEID ...]",
-		Action: func(_ context.Context, cmd *cli.Command) error {
+		Action: func(ctx context.Context, cmd *cli.Command) error {
 			// Selection mirrors serve, but routes to the archive's un-gated
 			// migrator (not query): migrate must read the stale grammars it exists
 			// to repair, which the gated readers refuse.
@@ -742,14 +730,14 @@ func migrateCmd(a *app) *cli.Command {
 			var err error
 			switch {
 			case cmd.Args().Len() > 0:
-				results, err = a.client.Migrate(cmd.Args().Slice(), opts)
+				results, err = a.client.Migrate(ctx, cmd.Args().Slice(), opts)
 			case stdinPiped():
 				var ids []string
 				if ids, err = readLines(os.Stdin); err == nil {
-					results, err = a.client.Migrate(ids, opts)
+					results, err = a.client.Migrate(ctx, ids, opts)
 				}
 			default:
-				results, err = a.client.MigrateAll(opts)
+				results, err = a.client.MigrateAll(ctx, opts)
 			}
 			if err != nil {
 				return err

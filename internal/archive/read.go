@@ -16,6 +16,11 @@ import (
 // stale file; the future `migrate` command is the only reader that bypasses it.
 var ErrSchemaVersion = errors.New("incompatible schema version")
 
+// ErrNotFound is wrapped by every lookup of a PAGEID or FILE_ID the archive does
+// not hold (FindPage, ReadNote, retrieve.Get). A missing note.json still also
+// wraps os.ErrNotExist, which the ingest preflight relies on.
+var ErrNotFound = errors.New("not found in archive")
+
 // verifySchema gates a parsed doc: a version other than CurrentSchemaVersion is a
 // stale (or future) grammar this binary must not touch, so it errors with a
 // recovery hint rather than misinterpreting the bytes.
@@ -59,6 +64,9 @@ func (a *Archive) List() ([]string, error) {
 func (a *Archive) ReadNote(fileID string) (NoteDoc, error) {
 	var nd NoteDoc
 	if err := readJSON(filepath.Join(a.Root, fileID, "note.json"), &nd); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return NoteDoc{}, fmt.Errorf("note %s: %w (%w)", fileID, ErrNotFound, err)
+		}
 		return NoteDoc{}, err
 	}
 	if err := verifySchema("note", fileID, nd.SchemaVersion); err != nil {
@@ -113,7 +121,7 @@ func (a *Archive) FindPage(pageID string) (string, error) {
 	}
 	switch len(found) {
 	case 0:
-		return "", fmt.Errorf("page %s not found in archive", pageID)
+		return "", fmt.Errorf("page %s: %w", pageID, ErrNotFound)
 	case 1:
 		return found[0], nil
 	default:
@@ -126,9 +134,27 @@ func (a *Archive) FindPage(pageID string) (string, error) {
 // current schema version so a persisted doc always reports the grammar it was
 // written in (and never fails its own next read). It reports whether the bytes
 // actually changed, so a caller can tell a real metadata write from a no-op.
-func (a *Archive) WritePage(fileID string, pd PageDoc) (bool, error) {
+//
+// It is the single page-doc writer, so it owns ModifiedAt: the stored stamp is
+// kept unless the doc's content differs from the stored one (bookkeeping aside, see
+// sameContent), the page is new, or touched says a sibling page file (svg, md,
+// md.diff) changed in the same operation — which is why callers write those first.
+func (a *Archive) WritePage(fileID string, pd PageDoc, touched bool) (bool, error) {
+	path := filepath.Join(a.Root, fileID, pd.PageID+".json")
 	pd.SchemaVersion = CurrentSchemaVersion
-	return writeJSONIfChanged(filepath.Join(a.Root, fileID, pd.PageID+".json"), pd)
+	var prev PageDoc
+	switch err := readJSON(path, &prev); {
+	case err == nil:
+		pd.ModifiedAt = prev.ModifiedAt
+		if touched || !sameContent(prev, pd) {
+			pd.ModifiedAt = a.now()
+		}
+	case errors.Is(err, os.ErrNotExist):
+		pd.ModifiedAt = a.now()
+	default:
+		return false, err
+	}
+	return writeJSONIfChanged(path, pd)
 }
 
 // WriteNote writes nd to <nd.FileID>/note.json in the canonical format, leaving

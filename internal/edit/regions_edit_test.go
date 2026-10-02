@@ -35,7 +35,7 @@ func templatedPage(t *testing.T) *archive.Archive {
 	pd, _ := a.ReadPage("F_A", "Pa")
 	pd.BackgroundHash = hash
 	pd.Analysis = &archive.PageAnalysis{Regions: []archive.RegionDoc{{ID: "body", SourceHash: "h"}}}
-	a.WritePage("F_A", pd)
+	a.WritePage("F_A", pd, false)
 	// Seed an AI region transcription (no diff → the md becomes the AI base).
 	if _, err := a.MergeAnalysis("F_A", "Pa",
 		archive.AssembleRegions([]archive.RegionSection{{ID: "body", Label: "Body", Text: "ai text"}})); err != nil {

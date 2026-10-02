@@ -389,7 +389,7 @@ func TestPageKeepsEditedRegionNames(t *testing.T) {
 	}
 	pd.Titles[0].Analysis = &archive.TitleAnalysis{Name: "My title", Edited: true}
 	pd.Links[0].Analysis = &archive.LinkAnalysis{Name: "My link", Edited: true}
-	if _, err := a.WritePage("F_A", pd); err != nil {
+	if _, err := a.WritePage("F_A", pd, false); err != nil {
 		t.Fatal(err)
 	}
 

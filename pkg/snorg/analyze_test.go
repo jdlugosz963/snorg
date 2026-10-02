@@ -148,7 +148,8 @@ func TestNewProviderValidates(t *testing.T) {
 }
 
 // TestNewProviderResolvesKeyOnce: api_key_command is a subprocess; building the
-// Provider twice must not run it twice (the reason to build once at startup).
+// Provider twice must not run it twice (the reason to build once at startup) — and the
+// resolved key lands on the Client, not on the client's config.
 func TestNewProviderResolvesKeyOnce(t *testing.T) {
 	c := seedArchive(t)
 	marker := filepath.Join(t.TempDir(), "runs")
@@ -162,8 +163,13 @@ func TestNewProviderResolvesKeyOnce(t *testing.T) {
 			t.Fatalf("NewProvider #%d: %v", i+1, err)
 		}
 	}
-	if got := c.cfg.Provider.APIKey; got != "secret" {
-		t.Errorf("resolved api key = %q, want %q", got, "secret")
+	if got := c.apiKey; got != "secret" {
+		t.Errorf("cached api key = %q, want %q", got, "secret")
+	}
+	// The secret is cached on the Client, never written back to the config Config()
+	// hands out.
+	if got := c.cfg.Provider.APIKey; got != "" {
+		t.Errorf("config api key = %q, want it left empty", got)
 	}
 	b, err := os.ReadFile(marker)
 	if err != nil {

@@ -24,6 +24,13 @@ A `Client` bundles an archive root with merged configuration.
   XDG user → `-c` files (later wins).
 
 `Client.ArchivePath()` / `Client.Config()` expose the resolved root and config.
+`Config()` is a **snapshot**: mutating it changes nothing (configure through
+`LoadConfig`/`Open`), which is also what keeps the credential `NewProvider` resolves
+off a struct callers can marshal.
+
+Errors worth branching on are sentinels for `errors.Is`: `ErrNotFound` (an unknown
+PAGEID/FILE_ID), `ErrSchemaVersion` (a stale file — run `Migrate`) and
+`ErrNoExportTemplate`.
 
 ## Capabilities
 
@@ -33,45 +40,57 @@ A `Client` bundles an archive root with merged configuration.
 | `Keywords()` / `Tags()` | distinct device keywords / snorg tags with per-value page counts (`[]ValueCount`) |
 | `Query(pred)` | pages matching a `Predicate` |
 | `ParseQuery(expr)` (package func) | compile a query expression into a `Predicate` (terms joined by `AND`/`OR`/`NOT`; see `QuerySyntax`) |
-| `ReadAnalysis(fileID, pageID)` | a page's transcription (the `<PAGEID>.md` sidecar); empty when never analyzed |
+| `ReadAnalysis(pageID)` | a page's transcription (the `<PAGEID>.md` sidecar); empty when never analyzed |
 | `Templates()` | the template set built from the config's `templates:` section (already resolved by `Open`) |
-| `Tag(tag, pageIDs, remove)` | add/remove a snorg-managed tag on pages (independent of device keywords); returns the count changed |
-| `TagNote(tag, fileIDs, remove)` | same, but note-scoped: stored in `note.json` only and inherited by every page of the note; returns the count of notes changed |
+| `Tag(pageIDs, tag)` / `Untag(pageIDs, tag)` | add/remove a snorg-managed tag on pages (independent of device keywords); returns the count changed |
+| `TagNote(fileIDs, tag)` / `UntagNote(fileIDs, tag)` | same, but note-scoped: stored in `note.json` only and inherited by every page of the note; returns the count of notes changed |
 | `EffectiveTags(nd, pd)` (package func) | a page's effective tag set: its own tags unioned with its note's — the inheritance rule every read surface applies |
 | `Retrieve(pageIDs)` | assemble pages into a `*Result` (`{Archive, Notes}`) |
-| `ReadNote/ReadPage/ReadSVG/FindPage` | raw on-disk document access |
-| `Ingest(paths, opts)` | register `.note` files (`NoteFiles(dir)` enumerates them); `IngestOptions.OnResult` streams each note as it lands; each `IngestResult.Report` (`*WriteReport`) says what the incremental reconcile changed |
+| `ReadNote(fileID)` / `ReadPage/ReadSVG(pageID)` / `FindPage(pageID)` | raw on-disk document access; the page readers take the PAGEID alone (it names one page in one note) |
+| `Ingest(ctx, paths, opts)` | register `.note` files (`NoteFiles(dir)` enumerates them); `IngestOptions.OnResult` streams each note as it lands; each `IngestResult.Report` (`*WriteReport`) says what the incremental reconcile changed |
 | `Export(pageIDs)` | render through the config's template (`RenderTemplate` for an arbitrary one) |
-| `ServeHandler(pageIDs, flat)` | the built-in viewer as an `http.Handler` (empty = whole archive) |
+| `ServeHandler(res, ServeOptions{Flat})` | the built-in viewer over a `Retrieve`d `*Result` as an `http.Handler` |
 | `NewProvider()` | resolve the API key, validate the provider config, build the configured backend — call once at startup, reuse across batches |
 | `Analyze(ctx, prov, pageIDs, opts)` | vision-LLM transcription with a caller-owned `Provider`; each `AnalyzeResult` embeds a `PageResult` saying what the page cost and what moved |
-| `Migrate(pageIDs, opts)` / `MigrateAll(opts)` | schema upgrade; `MigrateOptions{OnResult}` streams per-file results |
+| `Migrate(ctx, pageIDs, opts)` / `MigrateAll(ctx, opts)` | schema upgrade; `MigrateOptions{OnResult}` streams per-file results |
 | `PageBuffer(id)` / `ApplyPage(id, buf)` | programmatic transcription edit — no `$EDITOR`; returns a `PageEdit` |
 | `TextChangeOf/TextDiff/TextStat` (package funcs) | build a `TextChange`, render it as a unified diff, count its `±` lines |
-| `RenderRegion(fileID, pageID, rect, styled)` | crop a page rect to PNG bytes at native 1920x2560 resolution |
+| `RenderRegion(pageID, rect, styled)` | crop a page rect to PNG bytes at native 1920x2560 resolution |
 
 ### Predicates
 
-A `Predicate` is `func(Page) bool`, where `Page` is one candidate: the two documents
-as stored (`Note`, `Doc`) plus the `Client` they came from. The client is what makes
-every filter a standalone function — `MatchContent` reads the transcription through
-`p.Client.ReadAnalysis`, `MatchRegion` resolves boxes through `p.Client.Templates`,
-and a hand-written predicate can do the same:
+A `Predicate` is `func(Page) (bool, error)`, where `Page` is one candidate: the two
+documents as stored (`Note`, `Doc`) plus two read-only accessors for what they don't
+hold — `p.Transcription()` (the `<PAGEID>.md`) and `p.Template()` (the config template
+the page is drawn on, or nil). That is what makes every filter a standalone function,
+and a hand-written predicate uses the same accessors `MatchContent`/`MatchRegion` do.
+A `Page` offers no way to write, so a filter cannot change the archive it is walking:
 
 ```go
-c.Query(func(p snorg.Page) bool {
-	md, err := p.Client.ReadAnalysis(p.Note.FileID, p.Doc.PageID)
-	return err == nil && p.Doc.Starred && strings.Contains(md, "TODO")
+c.Query(func(p snorg.Page) (bool, error) {
+	md, err := p.Transcription()
+	if err != nil {
+		return false, err // Query abandons the walk and returns this
+	}
+	return p.Doc.Starred && strings.Contains(md, "TODO"), nil
 })
 ```
 
+A predicate that cannot decide returns the error rather than `false`, and `Query`
+returns it instead of a result set. `false` would be worse than an error, because
+`MatchNot` inverts it — a page whose transcription could not be read would come back
+as a match for `NOT content:secret`; errors pass through `MatchNot`/`MatchAnd`/`MatchOr`
+uninverted.
+
 The family is `MatchAll`, `MatchStarred`, `MatchUnanalyzed`, `MatchTemplated`,
 `MatchNot`, `MatchAnd`, `MatchOr`, `MatchIDs`, `MatchNote`, `MatchKeyword`,
-`MatchTag`, `MatchDate`, `MatchContent`, `MatchRegion` — one prefix, so they cluster
+`MatchTag`, `MatchCreated`, `MatchModified`, `MatchDeviceModified`, `MatchContent`,
+`MatchRegion` — one prefix, so they cluster
 in the reference and leave the plain nouns to the types. `MatchTag` matches inherited
-tags because the candidate carries the owning note; `MatchTemplated`/`MatchRegion`
-need no error return because `Open` resolves the `templates:` section once and fails
-there if it is broken.
+tags because the candidate carries the owning note; `p.Template()` has no error return
+because `Open` resolves the `templates:` section once and fails there if it is broken.
+The three time filters take `time.Time` bounds (zero = open, only the local calendar
+day counts), so a malformed date cannot reach them.
 
 Every text filter takes a `TextMatcher` (`func(string) bool`) rather than a regexp,
 which is why one `MatchTag` covers all three of the language's operators:
@@ -103,8 +122,7 @@ SVG as-is, keeping pen shades and baked overlays. Neither draws the template
 background image.
 
 ```go
-fid, _ := c.FindPage(pageID)
-png, err := c.RenderRegion(fid, pageID, snorg.Rect{X: 0, Y: 0, W: 1920, H: 384}, false)
+png, err := c.RenderRegion(pageID, snorg.Rect{X: 0, Y: 0, W: 1920, H: 384}, false)
 ```
 
 ### Analyzing
@@ -114,7 +132,8 @@ build it once with `NewProvider()` — which resolves the key (`api_key` >
 `api_key_command` stdout > `$OPENAI_API_KEY`), validates the `provider:` section and
 constructs the backend — and pass it to every `Analyze`. Bad credentials then fail at
 startup instead of on the first page, and `api_key_command` runs once rather than per
-batch. `NewOpenAIProvider(endpoint, key, model)` builds one from explicit credentials
+batch — the resolved key is cached on the `Client`, deliberately not written back into
+the configuration. `NewOpenAIProvider(endpoint, key, model)` builds one from explicit credentials
 instead of the config; any type satisfying `Provider` works, so a test double or an
 alternate backend drops straight in.
 
@@ -154,7 +173,7 @@ page is analyzed — so a consumer can log or commit incrementally instead of wa
 the whole batch (pages run sequentially for LLM rate limits). Every result also comes
 back in the returned slice. A page failure lands in its `AnalyzeResult.Err` and the
 batch continues; a cancelled `ctx` stops it, returning the results so far plus
-`ctx.Err()`. `AnalyzeOptions.Spec` overrides the config's prompts (`nil` =
+`ctx.Err()`. `Ingest` and `Migrate` take a `ctx` with the same meaning. `AnalyzeOptions.Spec` overrides the config's prompts (`nil` =
 `AnalyzeSpec()`), which is how a single page runs with a bespoke prompt.
 
 ### Knowing what changed
@@ -217,7 +236,7 @@ supplies its own UI should use `PageBuffer`/`ApplyPage` instead.
 c, err := snorg.Open("/path/to/archive", nil)
 if err != nil { log.Fatal(err) }
 
-pred, _ := snorg.ParseQuery("date:today AND starred")
+pred, _ := snorg.ParseQuery("mtime:today AND starred")
 matches, _ := c.Query(pred)
 
 ids := make([]string, len(matches))
@@ -234,3 +253,6 @@ for _, n := range res.Notes {
 All types a method returns are re-exported from this package as aliases
 (`snorg.Result`, `snorg.NoteView`, `snorg.Match`, `snorg.Spec`, `snorg.Config`, …),
 so importing `pkg/snorg` alone is sufficient — no `internal/*` import is ever needed.
+Because they are aliases, a field rename in an internal struct is a public API
+change; `TestAliasSurface` names every alias and its fields so such a rename fails
+the build.

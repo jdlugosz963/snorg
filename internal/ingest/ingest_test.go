@@ -1,13 +1,16 @@
 package ingest_test
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jdlugosz963/snorg/internal/archive"
 	"github.com/jdlugosz963/snorg/internal/ingest"
@@ -145,7 +148,15 @@ func TestIngestUpdatesArchive(t *testing.T) {
 	}
 
 	root := t.TempDir()
-	note, _, err := ingest.Run(sntool.New(), archive.New(root), filepath.Join(repo, "note.note"))
+	// Each ingest runs a day after the previous one, so a stamp names the run that wrote it.
+	clock := time.Date(2026, time.July, 1, 12, 0, 0, 0, time.UTC)
+	arch := func() *archive.Archive {
+		a := archive.New(root)
+		a.Now = func() time.Time { return clock }
+		clock = clock.Add(24 * time.Hour)
+		return a
+	}
+	note, _, err := ingest.Run(sntool.New(), arch(), filepath.Join(repo, "note.note"))
 	if err != nil {
 		t.Fatalf("ingest note: %v", err)
 	}
@@ -164,7 +175,7 @@ func TestIngestUpdatesArchive(t *testing.T) {
 	}
 
 	// Update to note2.note: page C92b removed.
-	if _, _, err := ingest.Run(sntool.New(), archive.New(root), filepath.Join(repo, "note2.note")); err != nil {
+	if _, _, err := ingest.Run(sntool.New(), arch(), filepath.Join(repo, "note2.note")); err != nil {
 		t.Fatalf("ingest note2: %v", err)
 	}
 	for _, suffix := range []string{".json", ".svg", ".analysis.json"} {
@@ -192,8 +203,19 @@ func TestIngestUpdatesArchive(t *testing.T) {
 	}
 
 	// Update to note3.note: new page Q5Fob inserted before the last page.
-	if _, _, err := ingest.Run(sntool.New(), archive.New(root), filepath.Join(repo, "note3.note")); err != nil {
+	if _, _, err := ingest.Run(sntool.New(), arch(), filepath.Join(repo, "note3.note")); err != nil {
 		t.Fatalf("ingest note3: %v", err)
+	}
+	// The kept page gained a new neighbour: its baked nav moved (an archive change),
+	// its handwriting did not (no device change).
+	var kept3 archive.PageDoc
+	readJSON(t, filepath.Join(dir, pageKept+".json"), &kept3)
+	if !kept3.ModifiedAt.After(keptBefore.ModifiedAt) {
+		t.Errorf("kept page ModifiedAt = %v, want after %v (its nav SVG changed)", kept3.ModifiedAt, keptBefore.ModifiedAt)
+	}
+	if !kept3.DeviceModifiedAt.Equal(keptBefore.DeviceModifiedAt) || kept3.DeviceHash != keptBefore.DeviceHash {
+		t.Errorf("kept page device stamp moved: %v (%s) -> %v (%s)",
+			keptBefore.DeviceModifiedAt, keptBefore.DeviceHash, kept3.DeviceModifiedAt, kept3.DeviceHash)
 	}
 	var newPage archive.PageDoc
 	readJSON(t, filepath.Join(dir, pageNew+".json"), &newPage)
@@ -266,12 +288,22 @@ func (f *fakeSource) RenderSVGs(path string) ([][]byte, error) {
 	return svgs, nil
 }
 
+// runMany is ingest.RunMany under a live context, where the batch itself cannot fail.
+func runMany(t *testing.T, src snote.Source, a *archive.Archive, paths []string, opts ingest.Options) []ingest.Result {
+	t.Helper()
+	results, err := ingest.RunMany(context.Background(), src, a, paths, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return results
+}
+
 func TestRunManyArchivesAllInOrder(t *testing.T) {
 	root := t.TempDir()
 	a := archive.New(root)
 	paths := []string{"a.note", "b.note", "c.note", "d.note"}
 
-	results := ingest.RunMany(&fakeSource{}, a, paths, ingest.Options{})
+	results := runMany(t, &fakeSource{}, a, paths, ingest.Options{})
 	if len(results) != len(paths) {
 		t.Fatalf("results = %d want %d", len(results), len(paths))
 	}
@@ -292,12 +324,31 @@ func TestRunManyArchivesAllInOrder(t *testing.T) {
 	}
 }
 
+// TestRunManyCancelled: a cancelled context stops the batch before the next note,
+// returning what landed so far and the context's error.
+func TestRunManyCancelled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	var landed []string
+	results, err := ingest.RunMany(ctx, &fakeSource{}, archive.New(t.TempDir()), []string{"a.note", "b.note"}, ingest.Options{
+		OnResult: func(r ingest.Result) {
+			landed = append(landed, r.Path)
+			cancel()
+		},
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want context.Canceled", err)
+	}
+	if len(results) != 1 || !reflect.DeepEqual(landed, []string{"a.note"}) {
+		t.Errorf("results = %d, landed = %v; want only a.note", len(results), landed)
+	}
+}
+
 func TestRunManyContinuesOnError(t *testing.T) {
 	root := t.TempDir()
 	src := &fakeSource{failOn: map[string]bool{"b.note": true}}
 	paths := []string{"a.note", "b.note", "c.note"}
 
-	results := ingest.RunMany(src, archive.New(root), paths, ingest.Options{})
+	results := runMany(t, src, archive.New(root), paths, ingest.Options{})
 	if results[0].Err != nil || results[2].Err != nil {
 		t.Errorf("ok notes errored: %v, %v", results[0].Err, results[2].Err)
 	}
@@ -344,7 +395,7 @@ func TestRunManyStreamsResults(t *testing.T) {
 
 	streamed := map[string]int{}
 	var order []string
-	results := ingest.RunMany(src, archive.New(root), paths, ingest.Options{
+	results := runMany(t, src, archive.New(root), paths, ingest.Options{
 		OnResult: func(r ingest.Result) {
 			streamed[r.Path]++
 			order = append(order, r.Path)
@@ -396,7 +447,7 @@ func TestIngestOrderIndependent(t *testing.T) {
 
 			// Before the move: a.note holds all three pages, and P3 has been analyzed.
 			before := &fakeSource{pages: map[string][]string{"a.note": {"P1", "P2", "P3"}}}
-			if res := ingest.RunMany(before, a, []string{"a.note"}, ingest.Options{}); res[0].Err != nil {
+			if res := runMany(t, before, a, []string{"a.note"}, ingest.Options{}); res[0].Err != nil {
 				t.Fatal(res[0].Err)
 			}
 			if err := a.WriteAnalysisMD("F_a", "P3", "handwritten notes"); err != nil {
@@ -408,13 +459,13 @@ func TestIngestOrderIndependent(t *testing.T) {
 			}
 			pd.Analysis = &archive.PageAnalysis{SourceHash: "h3"}
 			pd.Tags = []string{"keep"}
-			if _, err := a.WritePage("F_a", pd); err != nil {
+			if _, err := a.WritePage("F_a", pd, false); err != nil {
 				t.Fatal(err)
 			}
 
 			src := &fakeSource{pages: moved}
 			for _, paths := range tc.runs {
-				for _, r := range ingest.RunMany(src, a, paths, ingest.Options{}) {
+				for _, r := range runMany(t, src, a, paths, ingest.Options{}) {
 					if r.Err != nil {
 						t.Fatalf("ingest %s: %v", r.Path, r.Err)
 					}

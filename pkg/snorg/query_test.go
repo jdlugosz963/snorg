@@ -3,11 +3,14 @@ package snorg
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/jdlugosz963/snorg/internal/archive"
 	"github.com/jdlugosz963/snorg/internal/snote"
@@ -146,25 +149,35 @@ func TestParseQueryComposition(t *testing.T) {
 	}
 }
 
-// A hand-written predicate reaches the same accessors the built-in ones use.
+// A hand-written predicate reaches the same accessors the built-in ones use, and
+// reports a read it could not complete the same way they do.
 func TestHandWrittenPredicate(t *testing.T) {
 	c := seedFiltered(t)
 
-	pred := func(p Page) bool {
-		md, err := p.Client.ReadAnalysis(p.Note.FileID, p.Doc.PageID)
-		return err == nil && md != "" && p.Doc.Starred && p.Note.Source == "alpha.note"
+	pred := func(p Page) (bool, error) {
+		md, err := p.Transcription()
+		if err != nil {
+			return false, err
+		}
+		return md != "" && p.Doc.Starred && p.Note.Source == "alpha.note", nil
 	}
 	want(t, "custom", matched(t, c, pred), []string{"Pa"})
+
+	failing := func(Page) (bool, error) { return false, errors.New("cannot decide") }
+	_, err := c.Query(failing)
+	if err == nil || !strings.Contains(err.Error(), "cannot decide") {
+		t.Errorf("Query(failing predicate) error = %v, want it to carry the predicate's error", err)
+	}
 }
 
 func TestMatchUnanalyzed(t *testing.T) {
 	c := seedFiltered(t)
-	pd, err := c.ReadPage("F_A", "Pa")
+	pd, err := c.ReadPage("Pa")
 	if err != nil {
 		t.Fatal(err)
 	}
 	pd.Analysis = &archive.PageAnalysis{SourceHash: "abc"}
-	if _, err := c.arch.WritePage("F_A", pd); err != nil {
+	if _, err := c.arch.WritePage("F_A", pd, false); err != nil {
 		t.Fatal(err)
 	}
 
@@ -185,14 +198,14 @@ func TestMatchNotAndIDs(t *testing.T) {
 
 func TestMatchTagIncludingInherited(t *testing.T) {
 	c := seedFiltered(t)
-	if _, err := c.Tag("todo", []string{"Pa", "Pb"}, false); err != nil {
+	if _, err := c.Tag([]string{"Pa", "Pb"}, "todo"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := c.Tag("important", []string{"Pa"}, false); err != nil {
+	if _, err := c.Tag([]string{"Pa"}, "important"); err != nil {
 		t.Fatal(err)
 	}
 	// A note tag lives only in note.json, yet every page of the note matches it.
-	if _, err := c.TagNote("shared", []string{"F_B"}, false); err != nil {
+	if _, err := c.TagNote([]string{"F_B"}, "shared"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -201,7 +214,7 @@ func TestMatchTagIncludingInherited(t *testing.T) {
 	want(t, "tag shared (inherited)", matched(t, c, MatchTag(Exact("shared"))), []string{"Pc", "Pd"})
 }
 
-func TestMatchDate(t *testing.T) {
+func TestMatchCreated(t *testing.T) {
 	root := t.TempDir()
 	a := archive.New(root)
 	writeNote(t, a, &snote.Note{
@@ -218,21 +231,53 @@ func TestMatchDate(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	day := func(y int, m time.Month, d int) time.Time { return time.Date(y, m, d, 0, 0, 0, 0, time.UTC) }
+	jul := func(d int) time.Time { return day(2026, time.July, d) }
+	var open time.Time
 	for _, tc := range []struct {
 		name     string
-		from, to string
+		from, to time.Time
 		exp      []string
 	}{
-		{"exact day", "20260715", "20260715", []string{"P20260715120000CD"}},
-		{"range", "20260701", "20260715", []string{"P20260701090000AB", "P20260715120000CD"}},
-		{"open from", "", "20260715", []string{"P20260701090000AB", "P20260715120000CD"}},
-		{"open to", "20260715", "", []string{"P20260715120000CD", "P20260722080000EF"}},
-		{"no match", "20250101", "20250101", nil},
+		{"exact day", jul(15), jul(15), []string{"P20260715120000CD"}},
+		{"range", jul(1), jul(15), []string{"P20260701090000AB", "P20260715120000CD"}},
+		{"open from", open, jul(15), []string{"P20260701090000AB", "P20260715120000CD"}},
+		{"open to", jul(15), open, []string{"P20260715120000CD", "P20260722080000EF"}},
+		{"time of day ignored", jul(15).Add(23 * time.Hour), jul(15).Add(time.Hour), []string{"P20260715120000CD"}},
+		{"no match", day(2025, time.January, 1), day(2025, time.January, 1), nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			want(t, "MatchDate", matched(t, c, MatchDate(tc.from, tc.to)), tc.exp)
+			want(t, "MatchCreated", matched(t, c, MatchCreated(tc.from, tc.to)), tc.exp)
 		})
 	}
+}
+
+// TestMatchModified: both pages are ingested on Jul 10; Pb is then tagged on Jul
+// 20, which is an archive change (mtime) but not a device one (dtime).
+func TestMatchModified(t *testing.T) {
+	root := t.TempDir()
+	a := archive.New(root)
+	clock := time.Date(2026, time.July, 10, 12, 0, 0, 0, time.UTC)
+	a.Now = func() time.Time { return clock }
+	writeNote(t, a, &snote.Note{
+		FileID: "F_M",
+		Pages:  []snote.Page{{ID: "Pa", Number: 1}, {ID: "Pb", Number: 2}},
+	})
+	clock = time.Date(2026, time.July, 20, 12, 0, 0, 0, time.UTC)
+	if _, err := a.TagPage("Pb", "x", false); err != nil {
+		t.Fatal(err)
+	}
+	c, err := Open(root, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	jul := func(d int) time.Time { return time.Date(2026, time.July, d, 0, 0, 0, 0, time.UTC) }
+	var open time.Time
+	want(t, "mtime Jul 10", matched(t, c, MatchModified(jul(10), jul(10))), []string{"Pa"})
+	want(t, "mtime Jul 20..", matched(t, c, MatchModified(jul(20), open)), []string{"Pb"})
+	want(t, "dtime Jul 10", matched(t, c, MatchDeviceModified(jul(10), jul(10))), []string{"Pa", "Pb"})
+	want(t, "dtime Jul 20..", matched(t, c, MatchDeviceModified(jul(20), open)), nil)
 }
 
 // templatedClient: F_A holds Pt (drawn on the configured template), Pother (some
@@ -265,7 +310,7 @@ func templatedClient(t *testing.T, declare bool) *Client {
 			t.Fatal(err)
 		}
 		pd.BackgroundHash = hash
-		if _, err := a.WritePage("F_A", pd); err != nil {
+		if _, err := a.WritePage("F_A", pd, false); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -363,4 +408,42 @@ func TestOpenRejectsBrokenTemplates(t *testing.T) {
 	if _, err := Open(t.TempDir(), cfg); err == nil {
 		t.Error("Open with a missing template image: want error")
 	}
+}
+
+// TestQueryFailsOnUnreadableSidecar: a page whose transcription cannot be read must
+// not silently count as a non-match, because MatchNot would then report it as a match —
+// a query answering about text it never read. Lever: a directory where the .md goes, so
+// the read fails for a reason other than "not there".
+func TestQueryFailsOnUnreadableSidecar(t *testing.T) {
+	c := seedFiltered(t)
+	if err := os.Remove(filepath.Join(c.ArchivePath(), "F_A", "Pa.md")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(c.ArchivePath(), "F_A", "Pa.md"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := c.Query(MatchContent(Substring("meeting")))
+	if err == nil {
+		t.Fatal("Query(content:meeting) = nil error, want the unreadable sidecar reported")
+	}
+	if !strings.Contains(err.Error(), "Pa") {
+		t.Errorf("error %q does not name the page it failed on", err)
+	}
+	// The case that used to give a wrong answer: NOT inverts the false the read error
+	// produced, so Pa would have been listed as a match.
+	if ms, err := c.Query(MatchNot(MatchContent(Substring("meeting")))); err == nil {
+		t.Errorf("Query(NOT content:meeting) = %v, nil error; want the read error", pageIDsOf(ms))
+	}
+	// A filter that reads only the two documents is unaffected.
+	want(t, "MatchAll", matched(t, c, MatchAll), []string{"Pa", "Pb", "Pc", "Pd"})
+}
+
+// pageIDsOf is only for failure messages.
+func pageIDsOf(ms []Match) []string {
+	ids := make([]string, len(ms))
+	for i, m := range ms {
+		ids[i] = m.PageID
+	}
+	return ids
 }

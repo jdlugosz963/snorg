@@ -32,7 +32,7 @@ distinct labels); `query` enumerates pages through a boolean **expression** — 
 `AND`/`OR`/`NOT` and grouped with parentheses:
 
 ```
-starred AND (date:2026-04-04..2026-09-12 OR content:"some thing")
+starred AND (ctime:2026-04-04..2026-09-12 OR content:"some thing")
 ```
 
 A term is either a standalone word — `all`, `starred`, `unanalyzed`, `templated`
@@ -41,15 +41,19 @@ pages) — or a field with an operator and a value: `note`, `keyword` (device
 keywords), `tag` (snorg-managed tags, the page's own plus the ones inherited from
 its note), `content` (the page's transcribed `<PAGEID>.md`), `region[<box-id>]`
 (the text of one template box in that same file; without `[<box-id>]`, any box) and
-`date:<spec>`, where the day is the PAGEID's leading 8 digits and spec is
-`today`/`yesterday`/`YYYY-MM-DD`/`FROM..TO` with open ends. The operator picks how
+the three times — `ctime:<spec>` (created: the day in the PAGEID's leading digits),
+`mtime:<spec>` (`modified_at`: anything about the page changed in the archive —
+re-ingest, restyle, analyze, analyze-edit, tag) and `dtime:<spec>`
+(`device_modified_at`: the page changed on the device — new or moved page, handwriting,
+titles/links/keywords, star, background) — where spec is
+`today`/`yesterday`/`YYYY-MM-DD`/`FROM..TO` with open ends, matched on the local day. The operator picks how
 the value is matched: `:` substring (case-insensitive), `~` regexp, `=` exact. A
 value must follow its operator immediately; quote it (`"…"` or `'…'`) if it holds
 spaces or parens.
 
 `query` also reads PAGEIDs from stdin when piped, restricting its expression to
 that set, so selections still intersect across a pipe: `query keyword:foo | query
-date:today` — the same thing as `query 'keyword:foo AND date:today'`.
+mtime:today` — the same thing as `query 'keyword:foo AND mtime:today'`.
 `retrieve` takes PAGEIDs — as
 arguments, or one-per-line on stdin when none are given, so `query` pipes
 straight into it — and returns a JSON **object** `{archive, notes}`: `archive`
@@ -74,6 +78,7 @@ consumer never needs to know the on-disk file split. A whole note is
     "pages": [{
       "number": 1, "page_id": "P...", "starred": false,
       "svg": "F.../P....svg",
+      "modified_at": "2026-10-02T08:15:00Z", "device_modified_at": "2026-09-30T19:02:11Z",
       "tags": ["exam", "important"],
       "titles":   [{"rect": {"x":0,"y":0,"w":0,"h":0}, "level": 1,
                     "analysis": {"name": "Chapter 1"}}],

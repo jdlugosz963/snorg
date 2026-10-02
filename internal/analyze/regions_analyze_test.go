@@ -49,7 +49,7 @@ func setupTemplated(t *testing.T, boxRect snote.Rect) (*archive.Archive, string)
 		t.Fatal(err)
 	}
 	pd.BackgroundHash = hash
-	if _, err := a.WritePage("F_A", pd); err != nil {
+	if _, err := a.WritePage("F_A", pd, false); err != nil {
 		t.Fatal(err)
 	}
 	return a, hash
@@ -200,7 +200,7 @@ func TestTwoBoxesGetDistinctFingerprints(t *testing.T) {
 	)
 	pd, _ := a.ReadPage("F_A", "Pa")
 	pd.BackgroundHash = hash
-	a.WritePage("F_A", pd)
+	a.WritePage("F_A", pd, false)
 
 	tr := &fakeTranscriber{replies: regionReplies()}
 	if _, err := Page(context.Background(), a, tr, tr, regionSpec(), "Pa", false); err != nil {
@@ -248,7 +248,7 @@ func TestPerRegionResults(t *testing.T) {
 	)
 	pd, _ := a.ReadPage("F_A", "Pa")
 	pd.BackgroundHash = hash
-	a.WritePage("F_A", pd)
+	a.WritePage("F_A", pd, false)
 
 	tr := &fakeTranscriber{replies: regionReplies()}
 	res, err := Page(context.Background(), a, tr, tr, regionSpec(), "Pa", false)
@@ -338,7 +338,7 @@ func TestBlankBoxCostsNoCall(t *testing.T) {
 	)
 	pd, _ := a.ReadPage("F_A", "Pa")
 	pd.BackgroundHash = hex.EncodeToString(sum[:])
-	if _, err := a.WritePage("F_A", pd); err != nil {
+	if _, err := a.WritePage("F_A", pd, false); err != nil {
 		t.Fatal(err)
 	}
 

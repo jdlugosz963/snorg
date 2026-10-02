@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/jdlugosz963/snorg/internal/archive"
 	"github.com/jdlugosz963/snorg/internal/snote"
@@ -341,5 +342,42 @@ func TestApplyUnchangedTouchesNothing(t *testing.T) {
 	}
 	if !diffAfter.ModTime().Equal(diffBefore.ModTime()) {
 		t.Error("diff sidecar rewritten by a no-op save")
+	}
+}
+
+// A text-only edit leaves the page JSON's own fields alone but still moves its
+// modified stamp; a no-op save moves nothing.
+func TestApplyStampsModified(t *testing.T) {
+	a := editArchive(t)
+	clock := time.Date(2026, time.August, 1, 12, 0, 0, 0, time.UTC)
+	a.Now = func() time.Time { return clock }
+	stamp := func() time.Time {
+		t.Helper()
+		pd, err := a.ReadPage("F_TEST", "Pa")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return pd.ModifiedAt
+	}
+
+	res, err := Apply(a, "Pa", "hand-written\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.JSONChanged || !stamp().Equal(clock) {
+		t.Errorf("text edit: JSONChanged=%v ModifiedAt=%v, want true/%v", res.JSONChanged, stamp(), clock)
+	}
+
+	edited := clock
+	clock = clock.Add(24 * time.Hour)
+	buf, err := Serialize(a, "Pa")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res, err = Apply(a, "Pa", buf); err != nil {
+		t.Fatal(err)
+	}
+	if res.JSONChanged || !stamp().Equal(edited) {
+		t.Errorf("no-op save: JSONChanged=%v ModifiedAt=%v, want false/%v", res.JSONChanged, stamp(), edited)
 	}
 }

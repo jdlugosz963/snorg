@@ -47,8 +47,9 @@ snorg query <expr>             PAGEIDs of matching pages. <expr> joins terms wit
                                AND/OR/NOT and parentheses; terms are all, starred,
                                unanalyzed, templated, and note/keyword/tag/content/
                                region[<box>] + an operator (`:` substring, `~` regexp,
-                               `=` exact), plus date:<spec>.
-                               e.g. 'starred AND (tag:work OR date:2026-04-04..)'
+                               `=` exact), plus ctime/mtime/dtime:<spec> (page created /
+                               modified in the archive / changed on the device).
+                               e.g. 'starred AND (tag:work OR ctime:2026-04-04..)'
                                -l = annotated browse form (tab-separated, PAGEID first)
 snorg tag [-r] <tag> [ID...]   add (-r removes) a snorg-managed tag on pages; with -n
                                the ids are FILE_IDs and the tag goes on the note,
@@ -72,9 +73,9 @@ global `-v`. All of it goes to stderr, so pipes and redirects are unaffected.
 lines, so `query` pipes into any of them. Because every step is just lines of PAGEIDs,
 you compose selections with ordinary shell tools (`sort -u`, `comm`, `grep`, `fzf`).
 `query` itself reads PAGEIDs from stdin when piped, so selections intersect:
-`snorg query keyword:foo | snorg query date:today` == foo ∩ today — though with
+`snorg query keyword:foo | snorg query mtime:today` == foo ∩ today — though with
 AND/OR/NOT in the expression, one call usually does: `snorg query 'keyword:foo AND
-date:today'`.
+mtime:today'`.
 
 Archive layout: `<archive>/<FILE_ID>/{note.json,<PAGEID>.json,<PAGEID>.md[.diff],<PAGEID>.svg,backgrounds/}`.
 

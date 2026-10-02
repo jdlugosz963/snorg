@@ -16,16 +16,22 @@ import (
 // Client returns (the internal/* packages are not importable from outside the
 // module). Aliases are the same type — field access and methods work unchanged.
 
-// Config and its nested sections, as loaded from YAML by LoadConfig. The provider
-// credentials are reachable as Config.Provider (the type is not aliased, so the name
-// Provider can denote the analysis-backend interface — see analyze.go).
+// Config and its nested sections, as loaded from YAML by LoadConfig. A section
+// alias carries a Config suffix wherever the bare name is taken by something else:
+// ExportConfig/IngestConfig next to the Client.Export/Client.Ingest operations,
+// AnalysisConfig next to PageAnalysis, ProviderConfig next to the Provider
+// interface (analyze.go), and TemplateConfig/BoxConfig next to the resolved
+// Template/Box below.
 type (
-	Config     = config.Config
-	Analysis   = config.Analysis
-	Export     = config.Export
-	Ingest     = config.Ingest
-	Task       = config.Task
-	SVGToggles = config.SVGToggles
+	Config         = config.Config
+	AnalysisConfig = config.Analysis
+	ExportConfig   = config.Export
+	IngestConfig   = config.Ingest
+	Task           = config.Task
+	SVGToggles     = config.SVGToggles
+	ProviderConfig = config.Provider
+	TemplateConfig = config.TemplateSpec
+	BoxConfig      = config.Box
 )
 
 // Result is the read contract returned by Client.Retrieve: an absolute archive
@@ -67,11 +73,21 @@ type (
 	Title    = snote.Title
 	Keyword  = snote.Keyword
 	Link     = snote.Link
+	LinkKind = snote.LinkKind
 	Rect     = snote.Rect
 )
 
-// Match is one page a query predicate accepted, as returned by Client.Query. The
-// Page a predicate examines and the Predicate type itself live in query.go.
+// The LinkKind values a Link.Kind takes.
+const (
+	LinkUnknown = snote.LinkUnknown
+	LinkNote    = snote.LinkNote
+	LinkFile    = snote.LinkFile
+	LinkWeb     = snote.LinkWeb
+)
+
+// Match is one page a query predicate accepted, as returned by Client.Query, carrying
+// the NoteDoc and PageDoc the walk already read. The Page a predicate examines and the
+// Predicate type itself live in predicate.go.
 type Match = query.Match
 
 // The template regions a page can be drawn on: the resolved set (Client.Templates),
@@ -117,12 +133,8 @@ const (
 // migrate upgrades older files to it.
 const CurrentSchemaVersion = archive.CurrentSchemaVersion
 
-// The shared change vocabulary: what one analyze or edit did, in orthogonal parts.
-// TextChange is a text document's before/after — it carries the text itself, so a
-// front-end renders or re-diffs the change (see TextDiff/TextStat) without going
-// back to the archive; NameChange is a title/link rename; RegionChange is one
-// template box. A part never carries a fact only one write path can produce, so no
-// field on a value you hold is permanently zero.
+// The shared change vocabulary: a text document's before/after, a title/link
+// rename, and one template box's change.
 type (
 	TextKind     = archive.TextKind
 	TextChange   = archive.TextChange
@@ -130,9 +142,7 @@ type (
 	RegionChange = archive.RegionChange
 )
 
-// The TextKind values a TextChange.Kind takes. TextReverted is reachable only
-// through an edit that lands exactly on the stored AI base — analysis cannot
-// produce it, and emptying a page that never had a base reads TextCleared.
+// The TextKind values a TextChange.Kind takes; only an edit produces TextReverted.
 const (
 	TextUnchanged = archive.TextUnchanged
 	TextNew       = archive.TextNew
@@ -141,9 +151,8 @@ const (
 	TextReverted  = archive.TextReverted
 )
 
-// The per-operation results assembled from those parts: PageResult is one analyzed
-// page (with the cost facts only analysis can produce — a fingerprint skip, a blank
-// crop, the LLM call count), PageEdit one editor round-trip.
+// The per-operation results built from those parts: one analyzed page, one of its
+// template boxes, one editor round-trip.
 type (
 	PageResult   = analyze.PageResult
 	RegionResult = analyze.RegionResult

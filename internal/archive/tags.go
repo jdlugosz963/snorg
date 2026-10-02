@@ -21,7 +21,7 @@ func (a *Archive) TagPage(pageID, tag string, remove bool) (bool, error) {
 		return false, nil
 	}
 	pd.Tags = next
-	if _, err := a.WritePage(fileID, pd); err != nil {
+	if _, err := a.WritePage(fileID, pd, false); err != nil {
 		return false, err
 	}
 	return true, nil

@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 )
 
@@ -306,5 +307,53 @@ func TestExpandHome(t *testing.T) {
 		if got := ExpandHome(in); got != want {
 			t.Errorf("ExpandHome(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+// TestCloneIsDeep writes through every reference-typed field of a clone and requires
+// the original to be untouched — the check that keeps Clone complete as Config grows.
+func TestCloneIsDeep(t *testing.T) {
+	p := writeCfg(t, "c.yaml", `
+provider:
+  api_key: k
+analysis:
+  fields:
+    summary:
+      prompt: summarize
+ingest:
+  svg:
+    links: false
+    colors:
+      black: "#111111"
+templates:
+  - image: t.png
+    boxes:
+      - id: title
+        rect: {x: 0, y: 0, w: 10, h: 10}
+`)
+	cfg, err := Load([]string{p})
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, err := Load([]string{p})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cp := cfg.Clone()
+	cp.Provider.APIKey = "leaked"
+	cp.Analysis.Fields["summary"] = Task{Prompt: "other"}
+	cp.Analysis.Fields["added"] = Task{Prompt: "new"}
+	cp.Ingest.SVG.Colors["black"] = "#222222"
+	*cp.Ingest.SVG.Links = true
+	cp.Templates[0].Image = "other.png"
+	cp.Templates[0].Boxes[0].ID = "renamed"
+
+	if !reflect.DeepEqual(cfg, before) {
+		t.Errorf("mutating the clone changed the original:\n got %+v\nwant %+v", cfg, before)
+	}
+	// The pointers are distinct, not merely equal in value.
+	if cp.Ingest.SVG.Links == cfg.Ingest.SVG.Links {
+		t.Error("Clone shares the SVG toggle pointer")
 	}
 }
