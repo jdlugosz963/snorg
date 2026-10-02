@@ -82,8 +82,9 @@ func TestWriteReportSVGChange(t *testing.T) {
 	if !p.SVGChanged {
 		t.Error("edited SVG should report SVGChanged")
 	}
-	if p.JSONChanged {
-		t.Error("unchanged page metadata should not report JSONChanged")
+	// The metadata is the same, but the stamps move with the handwriting.
+	if !p.JSONChanged {
+		t.Error("edited SVG should restamp the page JSON")
 	}
 }
 
@@ -117,7 +118,7 @@ func TestWriteReportDroppedRegion(t *testing.T) {
 		t.Fatal(err)
 	}
 	pd.Titles[0].Analysis = &TitleAnalysis{Name: "Chapter"}
-	if _, err := a.WritePage("F_TEST", pd); err != nil {
+	if _, err := a.WritePage("F_TEST", pd, false); err != nil {
 		t.Fatal(err)
 	}
 

@@ -358,7 +358,7 @@ func queryCmd(a *app) *cli.Command {
 	return &cli.Command{
 		Name:        "query",
 		Usage:       "print PAGEIDs of matching pages, one per line (pipe into retrieve/analyze/export); -l/--long annotates them (browse-only, not pipe-safe)",
-		ArgsUsage:   "<expr>   e.g. 'starred AND (tag:work OR date:today)'",
+		ArgsUsage:   "<expr>   e.g. 'starred AND (tag:work OR mtime:today)'",
 		Description: "The filter is a boolean expression, " + snorg.QuerySyntax,
 		Flags: []cli.Flag{
 			&cli.BoolFlag{

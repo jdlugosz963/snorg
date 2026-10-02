@@ -84,12 +84,13 @@ uninverted.
 
 The family is `MatchAll`, `MatchStarred`, `MatchUnanalyzed`, `MatchTemplated`,
 `MatchNot`, `MatchAnd`, `MatchOr`, `MatchIDs`, `MatchNote`, `MatchKeyword`,
-`MatchTag`, `MatchDate`, `MatchContent`, `MatchRegion` — one prefix, so they cluster
+`MatchTag`, `MatchCreated`, `MatchModified`, `MatchDeviceModified`, `MatchContent`,
+`MatchRegion` — one prefix, so they cluster
 in the reference and leave the plain nouns to the types. `MatchTag` matches inherited
 tags because the candidate carries the owning note; `p.Template()` has no error return
 because `Open` resolves the `templates:` section once and fails there if it is broken.
-`MatchDate` takes `time.Time` bounds (zero = open, only the calendar day counts), so a
-malformed date cannot reach it.
+The three time filters take `time.Time` bounds (zero = open, only the local calendar
+day counts), so a malformed date cannot reach them.
 
 Every text filter takes a `TextMatcher` (`func(string) bool`) rather than a regexp,
 which is why one `MatchTag` covers all three of the language's operators:
@@ -235,7 +236,7 @@ supplies its own UI should use `PageBuffer`/`ApplyPage` instead.
 c, err := snorg.Open("/path/to/archive", nil)
 if err != nil { log.Fatal(err) }
 
-pred, _ := snorg.ParseQuery("date:today AND starred")
+pred, _ := snorg.ParseQuery("mtime:today AND starred")
 matches, _ := c.Query(pred)
 
 ids := make([]string, len(matches))

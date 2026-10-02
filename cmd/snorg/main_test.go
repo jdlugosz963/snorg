@@ -120,7 +120,7 @@ func TestQueryLong(t *testing.T) {
 	pd.Titles[0].Analysis = &archive.TitleAnalysis{Name: "Agenda"}
 	pd.Titles[1].Analysis = &archive.TitleAnalysis{Name: "Action items"}
 	pd.Tags = []string{"important"}
-	if _, err := a.WritePage("F_TEST", pd); err != nil {
+	if _, err := a.WritePage("F_TEST", pd, false); err != nil {
 		t.Fatal(err)
 	}
 	// A note-level tag: inherited by both pages, indistinguishable from P1's own.

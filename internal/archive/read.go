@@ -134,9 +134,27 @@ func (a *Archive) FindPage(pageID string) (string, error) {
 // current schema version so a persisted doc always reports the grammar it was
 // written in (and never fails its own next read). It reports whether the bytes
 // actually changed, so a caller can tell a real metadata write from a no-op.
-func (a *Archive) WritePage(fileID string, pd PageDoc) (bool, error) {
+//
+// It is the single page-doc writer, so it owns ModifiedAt: the stored stamp is
+// kept unless the doc's content differs from the stored one (bookkeeping aside, see
+// sameContent), the page is new, or touched says a sibling page file (svg, md,
+// md.diff) changed in the same operation — which is why callers write those first.
+func (a *Archive) WritePage(fileID string, pd PageDoc, touched bool) (bool, error) {
+	path := filepath.Join(a.Root, fileID, pd.PageID+".json")
 	pd.SchemaVersion = CurrentSchemaVersion
-	return writeJSONIfChanged(filepath.Join(a.Root, fileID, pd.PageID+".json"), pd)
+	var prev PageDoc
+	switch err := readJSON(path, &prev); {
+	case err == nil:
+		pd.ModifiedAt = prev.ModifiedAt
+		if touched || !sameContent(prev, pd) {
+			pd.ModifiedAt = a.now()
+		}
+	case errors.Is(err, os.ErrNotExist):
+		pd.ModifiedAt = a.now()
+	default:
+		return false, err
+	}
+	return writeJSONIfChanged(path, pd)
 }
 
 // WriteNote writes nd to <nd.FileID>/note.json in the canonical format, leaving

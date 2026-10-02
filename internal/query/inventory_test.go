@@ -17,7 +17,7 @@ func tagPage(t *testing.T, a *archive.Archive, fileID, pageID string, tags ...st
 		t.Fatal(err)
 	}
 	pd.Tags = tags
-	if _, err := a.WritePage(fileID, pd); err != nil {
+	if _, err := a.WritePage(fileID, pd, false); err != nil {
 		t.Fatal(err)
 	}
 }

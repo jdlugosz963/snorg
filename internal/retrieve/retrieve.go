@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/jdlugosz963/snorg/internal/archive"
 	"github.com/jdlugosz963/snorg/internal/snote"
@@ -49,6 +50,10 @@ type PageView struct {
 	PageID  string `json:"page_id"`
 	Starred bool   `json:"starred"`
 	SVG     string `json:"svg"`
+	// ModifiedAt is when anything about the page last changed in the archive,
+	// DeviceModifiedAt when it last changed on the device (UTC, RFC3339).
+	ModifiedAt       time.Time `json:"modified_at,omitzero"`
+	DeviceModifiedAt time.Time `json:"device_modified_at,omitzero"`
 	// Tags is the page's effective tag set: its own tags unioned with the ones
 	// inherited from its note, sorted — inherited and own are indistinguishable here.
 	Tags     []string          `json:"tags,omitempty"`
@@ -282,14 +287,16 @@ func pageView(nd archive.NoteDoc, ref archive.NotePageRef, pd archive.PageDoc, s
 		})
 	}
 	return PageView{
-		Number:   ref.Number,
-		PageID:   ref.ID,
-		Starred:  pd.Starred,
-		SVG:      svg,
-		Tags:     archive.EffectiveTags(nd, pd),
-		Titles:   titles,
-		Keywords: keywords,
-		Links:    links,
-		Analysis: analysis,
+		Number:           ref.Number,
+		PageID:           ref.ID,
+		Starred:          pd.Starred,
+		SVG:              svg,
+		ModifiedAt:       pd.ModifiedAt,
+		DeviceModifiedAt: pd.DeviceModifiedAt,
+		Tags:             archive.EffectiveTags(nd, pd),
+		Titles:           titles,
+		Keywords:         keywords,
+		Links:            links,
+		Analysis:         analysis,
 	}
 }

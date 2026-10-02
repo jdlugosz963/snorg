@@ -21,7 +21,7 @@ func TestParse(t *testing.T) {
 		// Operators and values.
 		{"tag=work", "tag=work"},
 		{"tag:work", "tag:work"},
-		{"date:2026-04-04..2026-09-12", "date:2026-04-04..2026-09-12"},
+		{"ctime:2026-04-04..2026-09-12", "ctime:2026-04-04..2026-09-12"},
 		{`content:"some thing"`, `content:"some thing"`},
 		{`content:'some thing'`, `content:"some thing"`},
 		{`content~"^(a|b)$"`, `content~"^(a|b)$"`},
@@ -58,7 +58,7 @@ func TestParse(t *testing.T) {
 // the table above a sufficient check of the captures.
 func TestStringRoundTrips(t *testing.T) {
 	for _, in := range []string{
-		`starred AND (date:2026-04-04..2026-09-12 OR content:"some thing")`,
+		`starred AND (ctime:2026-04-04..2026-09-12 OR content:"some thing")`,
 		`NOT templated OR region[title]~^Inv`,
 		`content~"^(a|b)$"`,
 		`content~[Tt]odo`,

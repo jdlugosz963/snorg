@@ -156,17 +156,41 @@ func MatchTag(m TextMatcher) Predicate {
 	}
 }
 
-// MatchDate matches pages whose creation day (embedded in the PAGEID) falls within
-// [from, to], both inclusive. Only each bound's calendar day counts (in its own
-// location; the time of day is ignored), and a zero bound is open. Pages whose
+// MatchCreated matches pages whose creation day (embedded in the PAGEID) falls
+// within [from, to], both inclusive. Only each bound's calendar day counts (in its
+// own location; the time of day is ignored), and a zero bound is open. Pages whose
 // PAGEID carries no date never match.
-func MatchDate(from, to time.Time) Predicate {
+func MatchCreated(from, to time.Time) Predicate {
+	return matchDay(from, to, func(pd PageDoc) time.Time {
+		t, _ := archive.PageIDTime(pd.PageID)
+		return t
+	})
+}
+
+// MatchModified matches pages last modified in the archive (any page file changed:
+// re-ingest, analyze, analyze-edit, tag) on a local day within [from, to]; bounds as
+// in MatchCreated.
+func MatchModified(from, to time.Time) Predicate {
+	return matchDay(from, to, func(pd PageDoc) time.Time { return pd.ModifiedAt })
+}
+
+// MatchDeviceModified matches pages last changed on the device (new or moved page,
+// handwriting, titles/links/keywords, star, background) on a local day within
+// [from, to]; bounds as in MatchCreated.
+func MatchDeviceModified(from, to time.Time) Predicate {
+	return matchDay(from, to, func(pd PageDoc) time.Time { return pd.DeviceModifiedAt })
+}
+
+// matchDay matches pages whose stamp (as read by at) falls on a local calendar day
+// within [from, to]; a zero stamp never matches.
+func matchDay(from, to time.Time, at func(PageDoc) time.Time) Predicate {
 	lo, hi := dayOf(from), dayOf(to)
 	return func(p Page) (bool, error) {
-		d, ok := pageDate(p.Doc.PageID)
-		if !ok {
+		t := at(p.Doc)
+		if t.IsZero() {
 			return false, nil
 		}
+		d := dayOf(t.Local())
 		return (lo == "" || d >= lo) && (hi == "" || d <= hi), nil
 	}
 }
@@ -223,22 +247,4 @@ func MatchRegion(boxID string, m TextMatcher) Predicate {
 		}
 		return false, nil
 	}
-}
-
-// pageDate extracts the "YYYYMMDD" day embedded in a supernote id. PAGEIDs (and
-// FILE_IDs) are "P"/"F" + 14-digit YYYYMMDDHHMMSS + tail; fewer than 8 leading
-// digits after the optional prefix means no date (ok == false).
-func pageDate(id string) (string, bool) {
-	s := id
-	if len(s) > 0 && (s[0] == 'P' || s[0] == 'F') {
-		s = s[1:]
-	}
-	n := 0
-	for n < len(s) && s[n] >= '0' && s[n] <= '9' {
-		n++
-	}
-	if n < 8 {
-		return "", false
-	}
-	return s[:8], true
 }

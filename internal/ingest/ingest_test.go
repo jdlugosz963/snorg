@@ -10,6 +10,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jdlugosz963/snorg/internal/archive"
 	"github.com/jdlugosz963/snorg/internal/ingest"
@@ -147,7 +148,15 @@ func TestIngestUpdatesArchive(t *testing.T) {
 	}
 
 	root := t.TempDir()
-	note, _, err := ingest.Run(sntool.New(), archive.New(root), filepath.Join(repo, "note.note"))
+	// Each ingest runs a day after the previous one, so a stamp names the run that wrote it.
+	clock := time.Date(2026, time.July, 1, 12, 0, 0, 0, time.UTC)
+	arch := func() *archive.Archive {
+		a := archive.New(root)
+		a.Now = func() time.Time { return clock }
+		clock = clock.Add(24 * time.Hour)
+		return a
+	}
+	note, _, err := ingest.Run(sntool.New(), arch(), filepath.Join(repo, "note.note"))
 	if err != nil {
 		t.Fatalf("ingest note: %v", err)
 	}
@@ -166,7 +175,7 @@ func TestIngestUpdatesArchive(t *testing.T) {
 	}
 
 	// Update to note2.note: page C92b removed.
-	if _, _, err := ingest.Run(sntool.New(), archive.New(root), filepath.Join(repo, "note2.note")); err != nil {
+	if _, _, err := ingest.Run(sntool.New(), arch(), filepath.Join(repo, "note2.note")); err != nil {
 		t.Fatalf("ingest note2: %v", err)
 	}
 	for _, suffix := range []string{".json", ".svg", ".analysis.json"} {
@@ -194,8 +203,19 @@ func TestIngestUpdatesArchive(t *testing.T) {
 	}
 
 	// Update to note3.note: new page Q5Fob inserted before the last page.
-	if _, _, err := ingest.Run(sntool.New(), archive.New(root), filepath.Join(repo, "note3.note")); err != nil {
+	if _, _, err := ingest.Run(sntool.New(), arch(), filepath.Join(repo, "note3.note")); err != nil {
 		t.Fatalf("ingest note3: %v", err)
+	}
+	// The kept page gained a new neighbour: its baked nav moved (an archive change),
+	// its handwriting did not (no device change).
+	var kept3 archive.PageDoc
+	readJSON(t, filepath.Join(dir, pageKept+".json"), &kept3)
+	if !kept3.ModifiedAt.After(keptBefore.ModifiedAt) {
+		t.Errorf("kept page ModifiedAt = %v, want after %v (its nav SVG changed)", kept3.ModifiedAt, keptBefore.ModifiedAt)
+	}
+	if !kept3.DeviceModifiedAt.Equal(keptBefore.DeviceModifiedAt) || kept3.DeviceHash != keptBefore.DeviceHash {
+		t.Errorf("kept page device stamp moved: %v (%s) -> %v (%s)",
+			keptBefore.DeviceModifiedAt, keptBefore.DeviceHash, kept3.DeviceModifiedAt, kept3.DeviceHash)
 	}
 	var newPage archive.PageDoc
 	readJSON(t, filepath.Join(dir, pageNew+".json"), &newPage)
@@ -439,7 +459,7 @@ func TestIngestOrderIndependent(t *testing.T) {
 			}
 			pd.Analysis = &archive.PageAnalysis{SourceHash: "h3"}
 			pd.Tags = []string{"keep"}
-			if _, err := a.WritePage("F_a", pd); err != nil {
+			if _, err := a.WritePage("F_a", pd, false); err != nil {
 				t.Fatal(err)
 			}
 

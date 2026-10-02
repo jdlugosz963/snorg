@@ -23,6 +23,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/jdlugosz963/snorg/internal/snote"
 )
@@ -31,6 +32,8 @@ import (
 type Archive struct {
 	Root string
 	SVG  SVGPipeline
+	// Now is the clock the page change stamps read (see stamp.go); nil = time.Now.
+	Now func() time.Time
 
 	// templateSpecs are the template regions injected from the merged config (via
 	// SetTemplateSpecs); templates is the resolved, image-hashed set Templates()
@@ -212,6 +215,7 @@ func (a *Archive) Write(n *snote.Note, svgs map[string][]byte) (*WriteReport, er
 	report.NoteChanged = noteChanged
 	for i, p := range n.Pages {
 		pd := pageDoc(p)
+		devHash := deviceHash(pd, svgs[p.ID])
 		pc := PageWriteReport{PageID: p.ID, AdoptedFrom: adopted[p.ID]}
 		// Stamp the template selector from the source SVG (before the background
 		// pipeline runs), so it is captured under every background mode. Absent
@@ -225,18 +229,27 @@ func (a *Archive) Write(n *snote.Note, svgs map[string][]byte) (*WriteReport, er
 		// the existing page doc gathered in the preflight (ingest itself never
 		// produces one). Absent = the normal first-ingest case, nothing to carry.
 		// Region fingerprints ride along inside Analysis, so this carries them too.
-		if old, ok := oldPages[p.ID]; ok {
+		old, hadOld := oldPages[p.ID]
+		if hadOld {
 			pd.Analysis = old.Analysis
 			pd.Tags = old.Tags
 			pc.DroppedRegions = carryRegionAnalyses(&pd, old)
 		} else {
 			pc.New = true
 		}
-		jsonChanged, err := writeJSONIfChanged(filepath.Join(dir, p.ID+".json"), pd)
-		if err != nil {
-			return nil, err
+		// The device stamp moves only when the device's view of the page did. A page
+		// new to this note (first ingest or adopted from elsewhere) is a device
+		// change; an empty stored hash is a just-migrated page, whose hash is
+		// recorded as the baseline without claiming a change nobody observed.
+		pd.DeviceHash = devHash
+		switch {
+		case !hadOld || len(adopted[p.ID]) > 0:
+			pd.DeviceModifiedAt = a.now()
+		case old.DeviceHash != "" && old.DeviceHash != pd.DeviceHash:
+			pd.DeviceModifiedAt = a.now()
+		default:
+			pd.DeviceModifiedAt = old.DeviceModifiedAt
 		}
-		pc.JSONChanged = jsonChanged
 		if svg, ok := svgs[p.ID]; ok {
 			if a.SVG.Background == BackgroundExtract {
 				rewritten, img, name, hasBG := extractBackground(svg)
@@ -275,6 +288,13 @@ func (a *Archive) Write(n *snote.Note, svgs map[string][]byte) (*WriteReport, er
 			}
 			pc.SVGChanged = svgChanged
 		}
+		// The doc goes last so WritePage can stamp ModifiedAt for a page whose SVG
+		// alone changed.
+		jsonChanged, err := a.WritePage(n.FileID, pd, pc.SVGChanged)
+		if err != nil {
+			return nil, err
+		}
+		pc.JSONChanged = jsonChanged
 		if pc.New || len(pc.AdoptedFrom) > 0 || pc.JSONChanged || pc.SVGChanged || pc.BackgroundChanged || len(pc.DroppedRegions) > 0 {
 			report.Pages = append(report.Pages, pc)
 		}

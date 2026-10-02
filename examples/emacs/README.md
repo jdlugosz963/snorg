@@ -88,7 +88,7 @@ Config variables (all plain `defvar`s you may override):
   the CLI's `analyze` (asks first — it may spend an LLM call; prefix argument
   forces re-transcription of an unchanged page), then refresh the subtree.
 - `M-x snorg-query` — browse the archive by query. Prompts for a snorg query
-  expression (default `all` — e.g. `starred AND tag:work`, `date:today`,
+  expression (default `all` — e.g. `starred AND tag:work`, `mtime:today`,
   `content~regexp`) and lists every matching **page** in `*snorg-query*`, one
   row per page: note, page number, star, analyzed headings, device keywords and
   snorg tags. The PAGEID is the row id rather than a column, so the table stays

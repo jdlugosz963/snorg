@@ -196,11 +196,27 @@ func Page(ctx context.Context, a *archive.Archive, t Transcriber, g Generator, s
 		pd.Links[i].Analysis = &archive.LinkAnalysis{Name: name}
 	}
 
-	res.JSONChanged, err = a.WritePage(fileID, pd)
+	// The md was merged above, so the doc write that follows stamps the page as
+	// modified when the transcription moved even if the JSON did not.
+	res.JSONChanged, err = a.WritePage(fileID, pd, res.textChanged())
 	if err != nil {
 		return PageResult{}, err
 	}
 	return res, nil
+}
+
+// textChanged reports whether the page's transcription moved: the whole content,
+// or on a templated page any box's text.
+func (r PageResult) textChanged() bool {
+	if r.Content != nil && r.Content.Changed() {
+		return true
+	}
+	for _, reg := range r.Regions {
+		if reg.Text.Changed() {
+			return true
+		}
+	}
+	return false
 }
 
 // analyzeContent transcribes the whole page into the <PAGEID>.md content sidecar

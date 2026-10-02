@@ -21,7 +21,7 @@ func seedPage(t *testing.T, a *Archive, fileID, pageID, md string) {
 	}
 	pd.Analysis = &PageAnalysis{SourceHash: "hash-" + pageID, Fields: map[string]string{"summary": "s"}}
 	pd.Tags = []string{"work"}
-	if _, err := a.WritePage(fileID, pd); err != nil {
+	if _, err := a.WritePage(fileID, pd, false); err != nil {
 		t.Fatal(err)
 	}
 	if err := a.WriteAnalysisMD(fileID, pageID, md); err != nil {
@@ -146,7 +146,7 @@ func TestWriteAdoptionCarriesRegionAnalyses(t *testing.T) {
 		t.Fatal(err)
 	}
 	pd.Titles[0].Analysis = &TitleAnalysis{Name: "Heading"}
-	if _, err := a.WritePage("F_A", pd); err != nil {
+	if _, err := a.WritePage("F_A", pd, false); err != nil {
 		t.Fatal(err)
 	}
 

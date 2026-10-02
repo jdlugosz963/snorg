@@ -123,8 +123,10 @@ func TestParseQuery(t *testing.T) {
 		"starred:x",
 		"keyword",
 		"keyword~(",
-		"date:not-a-date",
-		"date~today",
+		"ctime:not-a-date",
+		"ctime~today",
+		"mtime=today",
+		"date:today",
 		"tag[x]:y",
 	} {
 		if _, err := ParseQuery(expr); err == nil {
@@ -222,7 +224,7 @@ func TestParseDateSpec(t *testing.T) {
 			t.Errorf("ParseDateSpec(%q) err = %v, wantErr %v", tc.spec, err, tc.wantErr)
 			continue
 		}
-		// Compared as the day MatchDate uses ("" = open bound).
+		// Compared as the day MatchCreated uses ("" = open bound).
 		if from, to := dayOf(lo), dayOf(hi); err == nil && (from != tc.from || to != tc.to) {
 			t.Errorf("ParseDateSpec(%q) = (%q,%q), want (%q,%q)", tc.spec, from, to, tc.from, tc.to)
 		}

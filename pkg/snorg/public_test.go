@@ -45,7 +45,7 @@ func TestPublicSurface(t *testing.T) {
 		!from.Equal(time.Date(2026, time.July, 1, 0, 0, 0, 0, time.UTC)) || !to.IsZero() {
 		t.Errorf("ParseDateSpec = (%v, %v, %v)", from, to, err)
 	}
-	var _ snorg.Predicate = snorg.MatchDate(time.Now(), time.Time{})
+	var _ snorg.Predicate = snorg.MatchCreated(time.Now(), time.Time{})
 
 	// The matcher constructors and the Match* family they feed are nameable from
 	// outside, hand-written matchers included.

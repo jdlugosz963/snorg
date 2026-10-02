@@ -52,7 +52,7 @@ func TestWritePreservesAnalysisOnReingest(t *testing.T) {
 		t.Fatal(err)
 	}
 	pd.Analysis = &PageAnalysis{SourceHash: "abc", Fields: map[string]string{"summary": "hello"}}
-	if _, err := a.WritePage("F_TEST", pd); err != nil {
+	if _, err := a.WritePage("F_TEST", pd, false); err != nil {
 		t.Fatal(err)
 	}
 	if err := a.WriteAnalysisMD("F_TEST", "Pa", "# hello"); err != nil {
@@ -99,7 +99,7 @@ func TestWriteCarriesRegionAnalysesByRect(t *testing.T) {
 	}
 	pd.Titles[0].Analysis = &TitleAnalysis{Name: "Essay"}
 	pd.Links[0].Analysis = &LinkAnalysis{Name: "see also"}
-	if _, err := a.WritePage("F_TEST", pd); err != nil {
+	if _, err := a.WritePage("F_TEST", pd, false); err != nil {
 		t.Fatal(err)
 	}
 
@@ -398,7 +398,7 @@ func TestSchemaVersionStamped(t *testing.T) {
 	}
 	// WritePage re-stamps even when handed a zeroed version.
 	pd.SchemaVersion = 0
-	if _, err := a.WritePage("F_TEST", pd); err != nil {
+	if _, err := a.WritePage("F_TEST", pd, false); err != nil {
 		t.Fatal(err)
 	}
 	if pd2, err := a.ReadPage("F_TEST", "Pa"); err != nil {

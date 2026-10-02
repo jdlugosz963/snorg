@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"time"
 
 	"github.com/jdlugosz963/snorg/internal/snote"
 	"github.com/jdlugosz963/snorg/internal/textmerge"
@@ -94,6 +95,22 @@ var schemaMigrations = []func(migKind, map[string]any) error{
 	// page of the note). Additive and omitempty like the page tags before it, so an
 	// absent key unmarshals to nil — no transformation needed.
 	func(migKind, map[string]any) error { return nil },
+	// v5 → v6: pages gained change stamps (modified_at, device_modified_at). No
+	// history exists to recover them from, so both start at the page's creation
+	// time from its PAGEID; device_hash stays absent, which the next ingest takes
+	// as a baseline to record rather than a device change.
+	func(k migKind, m map[string]any) error {
+		if k != kindPage {
+			return nil
+		}
+		id, _ := m["page_id"].(string)
+		if t, ok := PageIDTime(id); ok {
+			stamp := t.UTC().Format(time.RFC3339)
+			m["modified_at"] = stamp
+			m["device_modified_at"] = stamp
+		}
+		return nil
+	},
 }
 
 // realID reports whether a decoded JSON value is a present, non-"none" id string —

@@ -177,7 +177,7 @@ func TestMatchUnanalyzed(t *testing.T) {
 		t.Fatal(err)
 	}
 	pd.Analysis = &archive.PageAnalysis{SourceHash: "abc"}
-	if _, err := c.arch.WritePage("F_A", pd); err != nil {
+	if _, err := c.arch.WritePage("F_A", pd, false); err != nil {
 		t.Fatal(err)
 	}
 
@@ -214,7 +214,7 @@ func TestMatchTagIncludingInherited(t *testing.T) {
 	want(t, "tag shared (inherited)", matched(t, c, MatchTag(Exact("shared"))), []string{"Pc", "Pd"})
 }
 
-func TestMatchDate(t *testing.T) {
+func TestMatchCreated(t *testing.T) {
 	root := t.TempDir()
 	a := archive.New(root)
 	writeNote(t, a, &snote.Note{
@@ -247,9 +247,37 @@ func TestMatchDate(t *testing.T) {
 		{"no match", day(2025, time.January, 1), day(2025, time.January, 1), nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			want(t, "MatchDate", matched(t, c, MatchDate(tc.from, tc.to)), tc.exp)
+			want(t, "MatchCreated", matched(t, c, MatchCreated(tc.from, tc.to)), tc.exp)
 		})
 	}
+}
+
+// TestMatchModified: both pages are ingested on Jul 10; Pb is then tagged on Jul
+// 20, which is an archive change (mtime) but not a device one (dtime).
+func TestMatchModified(t *testing.T) {
+	root := t.TempDir()
+	a := archive.New(root)
+	clock := time.Date(2026, time.July, 10, 12, 0, 0, 0, time.UTC)
+	a.Now = func() time.Time { return clock }
+	writeNote(t, a, &snote.Note{
+		FileID: "F_M",
+		Pages:  []snote.Page{{ID: "Pa", Number: 1}, {ID: "Pb", Number: 2}},
+	})
+	clock = time.Date(2026, time.July, 20, 12, 0, 0, 0, time.UTC)
+	if _, err := a.TagPage("Pb", "x", false); err != nil {
+		t.Fatal(err)
+	}
+	c, err := Open(root, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	jul := func(d int) time.Time { return time.Date(2026, time.July, d, 0, 0, 0, 0, time.UTC) }
+	var open time.Time
+	want(t, "mtime Jul 10", matched(t, c, MatchModified(jul(10), jul(10))), []string{"Pa"})
+	want(t, "mtime Jul 20..", matched(t, c, MatchModified(jul(20), open)), []string{"Pb"})
+	want(t, "dtime Jul 10", matched(t, c, MatchDeviceModified(jul(10), jul(10))), []string{"Pa", "Pb"})
+	want(t, "dtime Jul 20..", matched(t, c, MatchDeviceModified(jul(20), open)), nil)
 }
 
 // templatedClient: F_A holds Pt (drawn on the configured template), Pother (some
@@ -282,7 +310,7 @@ func templatedClient(t *testing.T, declare bool) *Client {
 			t.Fatal(err)
 		}
 		pd.BackgroundHash = hash
-		if _, err := a.WritePage("F_A", pd); err != nil {
+		if _, err := a.WritePage("F_A", pd, false); err != nil {
 			t.Fatal(err)
 		}
 	}

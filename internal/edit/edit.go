@@ -169,11 +169,6 @@ func Apply(a *archive.Archive, pageID, buffer string) (PageEdit, error) {
 	}
 
 	res.Names = applyNames(&pd, titleNames, linkNames)
-	if len(res.Names) > 0 {
-		if res.JSONChanged, err = a.WritePage(fileID, pd); err != nil {
-			return PageEdit{}, err
-		}
-	}
 
 	// The page has exactly one effective md document: for a templated page the
 	// region sections rebuilt from the edited texts (canonical order, matching
@@ -202,6 +197,11 @@ func Apply(a *archive.Archive, pageID, buffer string) (PageEdit, error) {
 	// buffer needs no guard here — and the verdict comes from the writer that
 	// holds the AI base rather than from a second comparison.
 	if res.Content, err = a.WriteAnalysisEdit(fileID, pageID, base, doc); err != nil {
+		return PageEdit{}, err
+	}
+	// The doc goes after the md so its modified stamp covers a text-only edit; with
+	// no rename and no text change it is a byte-level no-op like the md writer.
+	if res.JSONChanged, err = a.WritePage(fileID, pd, res.Content.Changed()); err != nil {
 		return PageEdit{}, err
 	}
 	return res, nil

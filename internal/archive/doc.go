@@ -2,6 +2,7 @@ package archive
 
 import (
 	"strings"
+	"time"
 
 	"github.com/jdlugosz963/snorg/internal/snote"
 )
@@ -15,7 +16,7 @@ import (
 // migration step) whenever the JSON contract changes; a future `migrate` command
 // walks stale files forward one version at a time. 0 (absent field) is
 // pre-versioning, and is also stale.
-const CurrentSchemaVersion = 5
+const CurrentSchemaVersion = 6
 
 // NoteDoc is note.json — file metadata plus ordered page placement.
 //
@@ -65,16 +66,25 @@ type NotePageRef struct {
 // device-set Keywords. They are not sourced from the .note (pageDoc leaves them
 // empty), so re-ingest carries them forward like Analysis. Kept sorted and
 // de-duplicated for deterministic, VCS-friendly output.
+//
+// ModifiedAt and DeviceModifiedAt are the page's change stamps (see stamp.go):
+// the last time anything about the page changed in the archive, and the last time
+// it changed on the device. DeviceHash is the ingest bookkeeping behind the
+// latter — empty right after migrate, when the next ingest records it as a
+// baseline without bumping the stamp.
 type PageDoc struct {
-	SchemaVersion  int           `json:"schema_version"`
-	PageID         string        `json:"page_id"`
-	Starred        bool          `json:"starred"`
-	BackgroundHash string        `json:"background_hash,omitempty"`
-	Tags           []string      `json:"tags,omitempty"`
-	Titles         []TitleDoc    `json:"titles"`
-	Keywords       []KeywordDoc  `json:"keywords"`
-	Links          []LinkDoc     `json:"links"`
-	Analysis       *PageAnalysis `json:"analysis,omitempty"`
+	SchemaVersion    int           `json:"schema_version"`
+	PageID           string        `json:"page_id"`
+	Starred          bool          `json:"starred"`
+	BackgroundHash   string        `json:"background_hash,omitempty"`
+	ModifiedAt       time.Time     `json:"modified_at,omitzero"`
+	DeviceModifiedAt time.Time     `json:"device_modified_at,omitzero"`
+	DeviceHash       string        `json:"device_hash,omitempty"`
+	Tags             []string      `json:"tags,omitempty"`
+	Titles           []TitleDoc    `json:"titles"`
+	Keywords         []KeywordDoc  `json:"keywords"`
+	Links            []LinkDoc     `json:"links"`
+	Analysis         *PageAnalysis `json:"analysis,omitempty"`
 }
 
 // RegionDoc is the per-box fingerprint state for a templated page: ID is the

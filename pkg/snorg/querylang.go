@@ -13,11 +13,12 @@ import (
 // help and usage errors.
 const QuerySyntax = `an expression of terms joined by AND / OR / NOT, grouped with parentheses:
   terms (no value): all, starred, unanalyzed, templated
-  terms (with a value): note, keyword, tag, content, region[<box-id>], date:<spec>
+  terms (with a value): note, keyword, tag, content, region[<box-id>],
+    ctime:<spec> (created), mtime:<spec> (modified in the archive), dtime:<spec> (changed on the device)
   operators: ':' substring (case-insensitive), '~' regexp, '=' exact
-  date <spec>: today | yesterday | YYYY-MM-DD | FROM..TO (either end may be empty)
+  time <spec>: today | yesterday | YYYY-MM-DD | FROM..TO (either end may be empty)
   a value must follow its operator immediately; quote it if it holds spaces or parens
-  example: starred AND (date:2026-04-04..2026-09-12 OR content:"some thing")`
+  example: starred AND (ctime:2026-04-04..2026-09-12 OR content:"some thing")`
 
 // ParseQuery compiles a query expression into a Predicate — the string language
 // behind the CLI's query command (see QuerySyntax). The grammar (AND/OR/NOT,
@@ -108,6 +109,16 @@ func compileTerm(t *querylang.Term) (Predicate, error) {
 		}
 		return build(m), nil
 	}
+	day := func(build func(from, to time.Time) Predicate) (Predicate, error) {
+		if t.Op != ":" {
+			return fail("%s takes %s:<spec> (today|yesterday|YYYY-MM-DD|FROM..TO), not %q", t.Field, t.Field, t.Op+string(t.Value))
+		}
+		from, to, err := ParseDateSpec(string(t.Value))
+		if err != nil {
+			return fail("%v", err)
+		}
+		return build(from, to), nil
+	}
 	switch t.Field {
 	case "all":
 		return bare(MatchAll)
@@ -127,15 +138,12 @@ func compileTerm(t *querylang.Term) (Predicate, error) {
 		return text(MatchContent)
 	case "region":
 		return text(func(m TextMatcher) Predicate { return MatchRegion(string(t.Scope), m) })
-	case "date":
-		if t.Op != ":" {
-			return fail("date takes date:<spec> (today|yesterday|YYYY-MM-DD|FROM..TO), not %q", t.Op+string(t.Value))
-		}
-		from, to, err := ParseDateSpec(string(t.Value))
-		if err != nil {
-			return fail("%v", err)
-		}
-		return MatchDate(from, to), nil
+	case "ctime":
+		return day(MatchCreated)
+	case "mtime":
+		return day(MatchModified)
+	case "dtime":
+		return day(MatchDeviceModified)
 	default:
 		return fail("unknown term %q\n%s", t.Field, QuerySyntax)
 	}
@@ -159,10 +167,10 @@ func textMatcher(op, value string) (TextMatcher, error) {
 	}
 }
 
-// ParseDateSpec turns a date term's value into an inclusive [from, to] range of
-// days for MatchDate, each at midnight (a zero bound is open). It accepts
-// "today"/"yesterday" (local time), a single "YYYY-MM-DD" day, and "FROM..TO" ranges
-// with either end omitted.
+// ParseDateSpec turns a ctime/mtime/dtime term's value into an inclusive [from,
+// to] range of days for MatchCreated/MatchModified/MatchDeviceModified, each at
+// midnight (a zero bound is open). It accepts "today"/"yesterday" (local time), a
+// single "YYYY-MM-DD" day, and "FROM..TO" ranges with either end omitted.
 func ParseDateSpec(spec string) (from, to time.Time, err error) {
 	switch spec {
 	case "today", "yesterday":
