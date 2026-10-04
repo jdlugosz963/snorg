@@ -61,7 +61,7 @@ if drawn with different shades.
   in favor of `PAGEID`, but for **file** links — which have no `PAGEID` — it's the sole page indicator and
   is **stored** as `target_doc_page`), `LINKFILE` (**base64** of an absolute path
   `/storage/emulated/0/Note/...` or a URL), `LINKFILEID` (target file id), `LINKINOUT`, `LINKTYPE`.
-  - **Kind** (`LINKTYPE`): `1`=note (another `.note`), `2`=file (non-note document, pdf/epub), `4`=web URL;
+  - **Kind** (`LINKTYPE`): `0`=note (another `.note`), `2`=file (non-note document, pdf/epub), `4`=web URL;
     anything else is treated as `unknown`. Stored as `kind` (`note`/`file`/`web`/`unknown`).
   - **Internal vs external** (note links only): `LINKFILEID == FILE_ID` → internal (jump within same note);
     else external (other `.note`). File/web links carry `LINKFILEID`/`PAGEID` = the literal `none`

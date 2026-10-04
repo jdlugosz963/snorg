@@ -6,7 +6,7 @@ require (
 	github.com/alecthomas/participle/v2 v2.1.4
 	github.com/epiclabs-io/diff3 v0.0.0-20260520111523-3b1669897fb1
 	github.com/flosch/pongo2/v6 v6.1.0
-	github.com/jdlugosz963/sntool v1.3.0
+	github.com/jdlugosz963/sntool v1.3.1
 	github.com/njchilds90/go-diffpatch v1.0.0
 	github.com/openai/openai-go v1.12.0
 	github.com/sourcegraph/go-diff v0.8.0

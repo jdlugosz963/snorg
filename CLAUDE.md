@@ -341,7 +341,7 @@ Flow: `cmd/snorg` → `pkg/snorg` (public API) → `internal/ingest` orchestrate
   structured records; `KEYWORDPAGE` is unreliable (yields -1 on the sample).
 - Keywords are invisible page-level metadata (no handwriting/region); text is in the `KEYWORD` field.
 - Pages render **1920×2560**; all `*RECT` values are in that pixel space (crop = `x,y,x+w,y+h`).
-- Star = per-page `FIVESTAR`. Link **kind** is `LINKTYPE`: `1`=note (another `.note`; internal iff
+- Star = per-page `FIVESTAR`. Link **kind** is `LINKTYPE`: `0`=note (another `.note`; internal iff
   `LINKFILEID == FILE_ID`), `2`=file (non-note document, pdf/epub), `4`=web URL — anything else is
   `unknown`. sntool exposes it as `Link.Kind()`; snorg stores it as `LinkDoc.kind`/`retrieve` `kind`.
   Note links carry a target page = `PAGEID` (stable id, stored) not `OBJPAGE` (volatile, dropped) and
