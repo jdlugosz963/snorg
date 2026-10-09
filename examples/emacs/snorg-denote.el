@@ -23,8 +23,8 @@
 
 (defun snorg-denote--id (file-id)
   "Translate a snorg FILE-ID (or PAGEID) into a denote identifier.
-Port of the CLI `denote' filter: strip a leading F/P, then format the
-first 14 digits as YYYYMMDDTHHMMSS.  Return FILE-ID unchanged if too short."
+Same id rule as the CLI `denote' filter: strip a leading F/P, then format
+the first 14 digits as YYYYMMDDTHHMMSS.  Return FILE-ID unchanged if too short."
   (let ((s (if (and (> (length file-id) 0) (memq (aref file-id 0) '(?F ?P)))
                (substring file-id 1)
              file-id)))

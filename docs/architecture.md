@@ -441,10 +441,10 @@ than a bar.
   JSON → back into the context map as-is (`archive` + `notes`), so templates bind to the
   `retrieve` shape verbatim, can span notes and can resolve svg paths against
   `{{ archive }}`; output to stdout. Filters, one file per concern: `denote.go`
-  (FILE_ID/PAGEID → denote id), `orgmode.go` (org-mode-only: `org` via pandoc
-  shell-out, `nestorgheadings:N`), `html.go` (HTML-only: `html` via pandoc shell-out,
-  marked safe), `markdown.go` (Markdown-only: `nestmdheadings:N`).
-  External dep: `pongo2/v6`; PATH tool: `pandoc` (the `org` and `html` filters).
+  (`denote`: FILE_ID/PAGEID or denote-named file → denote id, else empty), `pandoc.go` (`pandoc:"<format>"`: markdown → any
+  pandoc format via shell-out, marked safe), `headings.go` (`nestheadings:"<prefix>"`:
+  format-agnostic heading demotion).
+  External dep: `pongo2/v6`; PATH tool: `pandoc` (the `pandoc` filter).
 - `internal/serve` — the built-in HTTP viewer (`serve` cmd): `Handler(a, views, flat)` builds
   a `net/http.ServeMux` over the assembled `[]*retrieve.NoteView` — `/` (note gallery, or one
   flat page gallery under `--flat`), `/note/{fid}` (page gallery + `<object>` lightbox with the
@@ -474,4 +474,4 @@ capability, projecting into a `retrieve` view. Analysis enriches the `Doc`
 JSON schemas (and the views) with new fields (free to add — no backcompat). A native
 parser is a new `snote.Source` implementation. New link kinds extend
 `archive.linkAnchor`; new export filters register in their own file in
-`internal/export` (grouped by target format, like `orgmode.go`).
+`internal/export` (one file per filter concern, like `pandoc.go`).

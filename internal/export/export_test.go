@@ -132,13 +132,64 @@ func TestDenoteID(t *testing.T) {
 		"F20260414171729084889FDefCgWZgV3D": "20260414T171729",
 		"F20260629154102100593mO9IZI46DNYe": "20260629T154102",
 		"P20260414171729084889abcdef":       "20260414T171729", // PAGEIDs share the layout
-		"not-an-id":                         "not-an-id",       // no leading digits -> unchanged
-		"F12345":                            "F12345",          // fewer than 14 digits -> unchanged
-		"P12345":                            "P12345",
+		"not-an-id":                         "",                // no leading digits
+		"F12345":                            "",                // fewer than 14 digits
+		"P12345":                            "",
 	}
 	for in, want := range cases {
-		if got := denoteID(in); got != want {
-			t.Errorf("denoteID(%q) = %q, want %q", in, got, want)
+		got, ok := denoteID(in)
+		if got != want || ok != (want != "") {
+			t.Errorf("denoteID(%q) = %q, %v; want %q", in, got, ok, want)
 		}
+	}
+}
+
+func TestDenoteFileID(t *testing.T) {
+	cases := map[string]string{
+		"20260915T001940--solaris__calibre.epub": "20260915T001940",
+		"20260915T001940==sig--title.pdf":        "20260915T001940",
+		"20260915T001940.pdf":                    "20260915T001940",
+		"20260915T001940":                        "20260915T001940",
+		"title@@20260915T001940__kw.epub":        "20260915T001940", // denote 4 reordered components
+		"solaris.epub":                           "",
+		"2026091500194--x.epub":                  "", // short id
+		"20260915T001940x.epub":                  "", // no separator after the id
+		"foo20260915T001940--x.epub":             "", // not leading, no @@
+		"/storage/20260915T001940--solaris.epub": "", // a path, not a name
+	}
+	for in, want := range cases {
+		got, ok := denoteFileID(in)
+		if got != want || ok != (want != "") {
+			t.Errorf("denoteFileID(%q) = %q, %v; want %q", in, got, ok, want)
+		}
+	}
+}
+
+func TestRenderDenote(t *testing.T) {
+	view := &retrieve.NoteView{Pages: []retrieve.PageView{{
+		Number: 1,
+		Links: []retrieve.LinkView{
+			{Kind: "file", Name: "20260915T001940--solaris__calibre.epub",
+				Analysis: &retrieve.NameAnalysisView{Name: "Solaris"}},
+			{Kind: "file", Name: "title@@20260916T101112.pdf"},
+			{Kind: "file", Name: "Tom & Jerry.pdf"},
+			{Kind: "note", Name: "x", TargetFileID: "F20260414171729084889FDefCgWZgV3D"},
+		},
+	}}}
+	tmpl := "{% for l in notes.0.pages.0.links %}" +
+		"{% with id=l.name|denote %}" +
+		"{% if id %}[[denote:{{ id }}][{{ l.analysis.name|default:l.name }}]]\n" +
+		"{% else %}{{ l.analysis.name|default:l.name }} {{ l.target_file_id|denote }}\n{% endif %}" +
+		"{% endwith %}{% endfor %}"
+	got, err := Render(&retrieve.Result{Notes: []*retrieve.NoteView{view}}, tmpl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "[[denote:20260915T001940][Solaris]]\n" +
+		"[[denote:20260916T101112][title@@20260916T101112.pdf]]\n" +
+		"Tom &amp; Jerry.pdf \n" +
+		"x 20260414T171729\n"
+	if got != want {
+		t.Errorf("denote render = %q, want %q", got, want)
 	}
 }

@@ -67,7 +67,7 @@ export:
     {% if page.analysis.content %}
     <details class="analysis">
     <summary>Transcription</summary>
-    <div class="analysis-body">{{ page.analysis.content|html }}</div>
+    <div class="analysis-body">{{ page.analysis.content|pandoc:"html" }}</div>
     </details>
     {% endif %}
     {% if page.links %}

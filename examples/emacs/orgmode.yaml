@@ -18,7 +18,7 @@ export:
     [[snorg:{{ page.page_id }}][page {{ page.number }}]]
 
     {% if page.analysis.content %}
-    {{ page.analysis.content|org|nestorgheadings:2 }}
+    {{ page.analysis.content|pandoc:"org"|nestheadings:"**" }}
 
     {% endif %}
     {% if page.links %}
@@ -26,10 +26,16 @@ export:
     {% for link in page.links %}
     {% if link.target_page_id %}
     - [[snorg-note:{{ link.target_page_id }}][{{ link.analysis.name|default:link.name|cut:".note" }}]]
-    {% elif link.target_file_id %}
-    - [[snorg-note:{{ link.target_file_id }}][{{ link.analysis.name|default:link.name|cut:".note" }}]]
     {% elif link.kind == "web" %}
     - [[{{ link.target }}][{{ link.analysis.name|default:link.name }}]]
+    {% elif link.kind == "file" %}
+    {% with id=link.name|denote %}
+    {% if id %}
+    - [[denote:{{ id }}][{{ link.analysis.name|default:link.name }}]]
+    {% else %}
+    - {{ link.analysis.name|default:link.name }}
+    {% endif %}
+    {% endwith %}
     {% else %}
     - {{ link.analysis.name|default:link.name }} ({{ link.kind }}: {{ link.target }})
     {% endif %}

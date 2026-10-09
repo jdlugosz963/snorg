@@ -196,32 +196,39 @@ Two rules follow from how the trimming works:
 
 Beyond the pongo2 built-ins (registered by `internal/export`):
 
-- **`denote`** — turns a `FILE_ID` **or** `PAGEID` into an Emacs
-  [denote](https://protesilaos.com/emacs/denote) identifier (`YYYYMMDDTHHMMSS`):
+- **`denote`** — returns the Emacs [denote](https://protesilaos.com/emacs/denote)
+  identifier (`YYYYMMDDTHHMMSS`) a value carries: a `FILE_ID`/`PAGEID`
+  (`F20260414171729084889FDefCgWZgV3D` → `20260414T171729`) or a file name following
+  denote's naming scheme (a leading id followed by `--`/`==`/`__`/`@@`/`.` or the end,
+  or an `@@ID` component anywhere: `20260915T001940--solaris__calibre.epub` →
+  `20260915T001940`). Anything else gives empty, so the template can test it and
+  build the link with its own label:
 
   ```jinja
-  [[denote:{{ link.target_file_id|denote }}][{{ link.analysis.name|default:link.name }}]]
+  {% with id=link.name|denote %}
+  {% if id %}
+  - [[denote:{{ id }}][{{ link.analysis.name|default:link.name }}]]
+  {% else %}
+  - {{ link.analysis.name|default:link.name }}
+  {% endif %}
+  {% endwith %}
   ```
 
-  e.g. `F20260414171729084889FDefCgWZgV3D` → `20260414T171729`. Unrecognised ids
-  pass through unchanged.
+- **`pandoc:"<format>"`** — converts Markdown (the analysis content format) to any
+  pandoc output format (`-t`, extensions allowed) by shelling out to `pandoc` (must
+  be on PATH; empty input renders empty without invoking it). The format is
+  required. Headings get no auto identifiers (no org `:PROPERTIES:` drawer, no html
+  `id=`); the result is marked safe so markup is emitted unescaped:
+  `{{ page.analysis.content|pandoc:"org" }}`, `{{ page.analysis.content|pandoc:"html" }}`
+  (see `examples/web/`).
 
-- **`org`** *(org-mode only)* — converts Markdown (the analysis content format) to
-  org-mode by shelling out to `pandoc` (must be on PATH; empty input renders empty
-  without invoking it): `{{ page.analysis.content|org }}`.
-
-- **`html`** *(HTML only)* — converts Markdown to an HTML fragment via `pandoc`
-  (same PATH/empty-input rules as `org`); the result is marked safe so it is
-  emitted unescaped: `{{ page.analysis.content|html }}` (see `examples/web/`).
-
-- **`nestorgheadings:N`** *(org-mode only)* — demotes org headings by N stars (every
-  line starting with `*` gains N), so page content nests under the template's own
-  headings: `{{ page.analysis.content|org|nestorgheadings:2 }}`. N defaults to 1.
-
-- **`nestmdheadings:N`** *(Markdown only)* — the Markdown analog: demotes ATX
-  headings by N (every line starting with `#` gains N `#`), nesting the page's
-  Markdown content under the template's headings:
-  `{{ page.analysis.content|nestmdheadings:2 }}`. N defaults to 1.
+- **`nestheadings:"<prefix>"`** — demotes headings in any format whose headings are
+  a run of one character at line start: every line starting with the prefix's
+  character gains the prefix, so page content nests under the template's own
+  headings. The prefix (required) repeats one character; its length is the number
+  of levels: `{{ page.analysis.content|pandoc:"org"|nestheadings:"**" }}` (org),
+  `{{ page.analysis.content|nestheadings:"##" }}` (Markdown). Naive: it also touches
+  such lines inside code blocks.
 
 ## Merge semantics
 
