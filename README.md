@@ -34,8 +34,8 @@ snorg query all | snorg -c config.yaml analyze      # skips unchanged pages
 # Fix a transcription by hand — or write one without any LLM. Edits survive re-analysis.
 snorg analyze-edit <PAGEID>                          # opens $VISUAL/$EDITOR
 
-# Export through a template (see examples/config.yaml).
-snorg query note=<FILE_ID> | snorg -c examples/config.yaml export
+# Export through a template (export.template in a config; see docs/config.md).
+snorg query note=<FILE_ID> | snorg -c export.yaml export
 ```
 
 ## Usage

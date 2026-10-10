@@ -462,10 +462,6 @@ than a bar.
   org-roam; the backend owns the FILE_ID→note-id translation), adds the `snorg:` (page SVG)
   and backend-agnostic `snorg-note:` (page-jump) org links — both keyed by a bare PAGEID,
   whose owning note `retrieve` resolves — and a dual-window review mode.
-- `examples/web/` — static HTML site consumer (outside the Go tree): `export.sh` reads
-  PAGEIDs on stdin and runs `snorg export` over that set twice — `index.yaml` for the
-  note index, `note.yaml` once per note — then copies the selected pages' SVGs beside
-  the generated HTML. Uses the `html` filter, so it needs `pandoc`.
 
 ## Extension points
 

@@ -1,6 +1,6 @@
 // The pandoc template filter: converts Markdown (the analysis content format) to
-// any pandoc output format — org-mode (examples/emacs/orgmode.yaml), HTML
-// (examples/web/), gfm, … It shells out to pandoc — an external PATH tool, not a
+// any pandoc output format — org-mode (examples/emacs/orgmode.yaml), HTML,
+// gfm, … It shells out to pandoc — an external PATH tool, not a
 // go.mod dependency.
 package export
 

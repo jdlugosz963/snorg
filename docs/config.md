@@ -12,8 +12,7 @@ snorg -c secrets.yaml -c analysis.yaml -a <archive> analyze <PAGEID>
 The root command loads the merged config once and hands it to every command.
 Each command reads (and validates) only its own sections, so any section can
 stand alone in its own file: `ingest` → `ingest`; `analyze` → `provider` +
-`analysis`; `export` → `export`. See `examples/config.yaml` (annotated schema
-with a Markdown export template) and `examples/emacs/orgmode.yaml` (a complete
+`analysis`; `export` → `export`. See `examples/emacs/orgmode.yaml` (a complete
 org-mode exporter).
 
 ## Resolution order
@@ -219,8 +218,7 @@ Beyond the pongo2 built-ins (registered by `internal/export`):
   be on PATH; empty input renders empty without invoking it). The format is
   required. Headings get no auto identifiers (no org `:PROPERTIES:` drawer, no html
   `id=`); the result is marked safe so markup is emitted unescaped:
-  `{{ page.analysis.content|pandoc:"org" }}`, `{{ page.analysis.content|pandoc:"html" }}`
-  (see `examples/web/`).
+  `{{ page.analysis.content|pandoc:"org" }}`, `{{ page.analysis.content|pandoc:"html" }}`.
 
 - **`nestheadings:"<prefix>"`** — demotes headings in any format whose headings are
   a run of one character at line start: every line starting with the prefix's
