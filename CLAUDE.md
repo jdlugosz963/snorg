@@ -7,6 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 SNORG (supernote-organizer) ingests Supernote `.note` files into a plaintext,
 machine-readable, VCS-friendly *archive*, so notes can later be retrieved and exported.
 Read `docs/principles.md` (project rules), `docs/architecture.md` (modules/CLI),
+`docs/library.md` (Go API guide; `docs/api.md` is its generated reference),
 `docs/supernote-format.md` (`.note` format + tooling), `docs/templates.md`
 (template regions) before substantial work.
 
@@ -37,7 +38,7 @@ Read `docs/principles.md` (project rules), `docs/architecture.md` (modules/CLI),
 
 - `go build ./... && go vet ./... && gofmt -l .` — build, vet, format check (gofmt output must be empty)
 - `go test ./...` — all tests
-- `gomarkdoc ./pkg/snorg` — render the public API reference on demand. Nothing in this repo is generated and no reference is checked in: `docs/library.md` is the hand-written guide, and the per-identifier reference is whatever gomarkdoc (or pkg.go.dev) renders from the source
+- `go run github.com/princjef/gomarkdoc/cmd/gomarkdoc@v1.1.0 --header 'Generated from pkg/snorg by gomarkdoc; do not edit — regenerate with the command in CLAUDE.md.' -o docs/api.md ./pkg/snorg` — regenerate `docs/api.md`, the checked-in per-identifier reference for `pkg/snorg` (the only generated file; never hand-edit it). Add `--check` to verify it is current. Rerun after any `pkg/snorg` API or doc-comment change. Alias types (`Result = retrieve.Result`, …) render without fields — read the source for those. `docs/library.md` stays the hand-written guide
 - `go test -run TestIngestSampleNote ./internal/ingest` — e2e ingest through the native `sntool` backend (parse + render in pure Go, no PATH tool); skips only if the `note.note` fixture is absent
 - CLI shape: `snorg [-a <archive-path>] [-c config.yaml ...] [--no-user-config] [-v] <command> [command flags] [args]` — the archive is the global `-a`/`--archive` flag and the config flags are global too, so all come **before** the command; the root's `Before` hook loads the merged config once in **increasing precedence**: `$XDG_CONFIG_HOME/snorg/config.yaml` (the XDG **user config**, the only auto-loaded file, `--no-user-config` to skip) → `-c` files (later wins), and hands it to the command, which validates only the sections it uses. An archive's own `config.yaml` is **not** auto-loaded — pass it explicitly with `-c` (or `include:` it). `-a` is **optional** when the merged config sets the top-level `archive:` key (the flag wins; a leading `~` is expanded), so a bare `snorg <command>` targets that archive. `-v`/`--verbose` is global too: the **batch** commands (`ingest`/`analyze`/`migrate`) report per item on **stderr** — an animated bar when stderr is a terminal, plain one-line-per-item when it is not, and under `-v` a detailed account of what each item changed (no bar). `query`/`list`/`retrieve`/`export` are untouched: they write only their data, on stdout, so every pipe still works and `2>/dev/null` silences progress alone. `tag` and `analyze-edit` report a completed write, not progress, so their result line stays on **stdout**
 - `go run ./cmd/snorg -a <archive-path> [-c ...] ingest <file-or-dir>` — register a note (or all `*.note` under a dir) into the archive, one note at a time (`Write` reaches across the whole archive, so ingest is single-writer); progress on **stderr** (bar/plain/`-v`, see below); a page the device **moved to another note** is adopted from its old note (state carried, old note's `note.json` repaired) instead of duplicated, and a page that leaves a note has its transcription/edits/tags/analysis **parked** in `<archive>/orphans/` rather than deleted, so ingest order never decides whether the text survives; config drives the SVG pipeline (`ingest.svg.{links,navigation,format}` bools default true; `background` mode `extract`(default)`|inline|blank|remove`; `colors` remaps the 4 default pen-shade fills). None of these change the analyze fingerprint (the canonical black-on-white rasterization — pen colors forced black, overlays dropped), so restyling never re-transcribes.
@@ -112,11 +113,11 @@ Flow: `cmd/snorg` → `pkg/snorg` (public API) → `internal/ingest` orchestrate
   argument (so a batch costs no credential setup and `api_key_command` runs once — the resolved
   key is cached on the `Client`, resolved on a `Config.Clone()` and never written back into the
   config, which `Client.Config()` hands out as a snapshot);
-  `opts.Spec` overrides the config prompts. The only doc for this package is `docs/library.md`,
-  the hand-written guide (why the pieces are shaped as they are); no per-identifier reference is
-  checked in — run `gomarkdoc ./pkg/snorg` (or read pkg.go.dev) for that. **When adding or changing
-  a capability, keep the facade in sync** (a new returned type needs an alias, or an external
-  consumer can't name it).
+  `opts.Spec` overrides the config prompts. Docs for this package: `docs/library.md`, the
+  hand-written guide (why the pieces are shaped as they are), and `docs/api.md`, the generated
+  per-identifier reference (command above). **When adding or changing a capability, keep the
+  facade in sync** (a new returned type needs an alias, or an external consumer can't name it)
+  and regenerate `docs/api.md`.
 
 - `internal/snote` — device-agnostic domain model (`Note`/`Page`/`Title`/`Keyword`/`Link`)
   and the `Source` interface, the **seam isolating the format**. The concrete impl lives

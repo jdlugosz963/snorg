@@ -5,7 +5,7 @@ machine-readable, VCS-friendly archive for later retrieval, analysis and export.
 
 ## Quick start
 
-Prerequisites: none, except `pandoc` if you use the `org` or `html` export filters.
+Prerequisites: Go (to install), plus `pandoc` if you use the `pandoc` export filter.
 
 Install the CLI (puts `snorg` on your `PATH` via `$GOBIN`/`$GOPATH/bin`):
 
@@ -41,49 +41,73 @@ snorg query note=<FILE_ID> | snorg -c examples/config.yaml export
 ## Usage
 
 ```
-snorg ingest <file.note|dir>   register note(s) into the archive
-snorg list [-l]                FILE_IDs (-l appends the note name)
-snorg query <expr>             PAGEIDs of matching pages. <expr> joins terms with
-                               AND/OR/NOT and parentheses; terms are all, starred,
-                               unanalyzed, templated, and note/keyword/tag/content/
-                               region[<box>] + an operator (`:` substring, `~` regexp,
-                               `=` exact), plus ctime/mtime/dtime:<spec> (page created /
-                               modified in the archive / changed on the device).
-                               e.g. 'starred AND (tag:work OR ctime:2026-04-04..)'
-                               -l = annotated browse form (tab-separated, PAGEID first)
-snorg tag [-r] <tag> [ID...]   add (-r removes) a snorg-managed tag on pages; with -n
-                               the ids are FILE_IDs and the tag goes on the note,
-                               inherited by all its pages
-snorg list keywords|tags [-l]  the archive's distinct device keywords / snorg tags
-                               (-l appends a per-value page count)
-snorg retrieve [PAGEID...]     assemble pages into JSON, grouped per note
-snorg serve [-f] [PAGEID...]   built-in HTTP viewer (whole archive if no PAGEIDs; -f = flat)
-snorg analyze [PAGEID...]      vision-LLM transcription (skips unchanged pages)
-snorg analyze-edit <PAGEID>    edit a transcription in $VISUAL/$EDITOR
-snorg export [PAGEID...]       render pages through a pongo2/Jinja2 template
-snorg migrate [PAGEID...]      upgrade archive JSON to the current schema version
-                               (whole archive if no PAGEIDs)
+NAME:
+   snorg - supernote-organizer: ingest .note files into a plaintext archive
+
+USAGE:
+   snorg [-a <archive-path>] [-c config.yaml ...] [--no-user-config] [-v] <command> [command flags] [args]
+
+COMMANDS:
+   ingest        register a .note file (or all *.note under a dir) into the archive
+   list          inspect an archive: bare = FILE_IDs; subcommands `keywords`/`tags` enumerate labels
+   retrieve      print the assembled pages as a JSON object {archive, notes} (no PAGEIDs = read them from stdin)
+   query         print PAGEIDs of matching pages, one per line (pipe into retrieve/analyze/export); -l/--long annotates them (browse-only, not pipe-safe)
+   tag           add (or -r remove) a snorg-managed tag on pages, or with -n on whole notes (no ids = read them from stdin)
+   analyze       vision-LLM analysis of pages; unchanged pages are skipped (no PAGEIDs = read them from stdin)
+   analyze-edit  edit a page's transcription and title/link names in $VISUAL/$EDITOR (edits survive re-analysis)
+   export        render the retrieved pages through the config's pongo2 template (no PAGEIDs = read them from stdin)
+   serve         serve a local HTML viewer for the pages (no PAGEIDs and no pipe = the whole archive)
+   migrate       upgrade note.json/page JSON to the current schema version (no PAGEIDs and no pipe = whole archive)
+   help, h       Shows a list of commands or help for one command
+
+GLOBAL OPTIONS:
+   --archive PATH, -a PATH                            archive root PATH (holds the FILE_ID sub-dirs); optional if the user config sets archive:
+   --config FILE, -c FILE [ --config FILE, -c FILE ]  config YAML FILE (repeatable; later files override earlier ones)
+   --no-user-config                                   ignore the XDG user config (~/.config/snorg/config.yaml)
+   --verbose, -v                                      describe what changed per item instead of drawing a progress bar
+   --help, -h                                         show help
 ```
 
-`ingest`, `analyze` and `migrate` show progress while they run: a bar on a terminal,
-one line per item when piped, and a full account of what each item changed under the
-global `-v`. All of it goes to stderr, so pipes and redirects are unaffected.
+## Configuration
 
-`retrieve`, `serve`, `analyze` and `export` take PAGEIDs as arguments **or** stdin
-lines, so `query` pipes into any of them. Because every step is just lines of PAGEIDs,
-you compose selections with ordinary shell tools (`sort -u`, `comm`, `grep`, `fzf`).
-`query` itself reads PAGEIDs from stdin when piped, so selections intersect:
-`snorg query keyword:foo | snorg query mtime:today` == foo ∩ today — though with
-AND/OR/NOT in the expression, one call usually does: `snorg query 'keyword:foo AND
-mtime:today'`.
+snorg loads config from two places, lowest priority first:
 
-Archive layout: `<archive>/<FILE_ID>/{note.json,<PAGEID>.json,<PAGEID>.md[.diff],<PAGEID>.svg,backgrounds/}`.
+- the **user config**, `$XDG_CONFIG_HOME/snorg/config.yaml` (usually
+  `~/.config/snorg/config.yaml`), loaded automatically; skip it with the global
+  `--no-user-config`.
+- `-c`/`--config FILE` (global, repeatable). These override the user config key by
+  key, and a later `-c` file overrides an earlier one.
+
+A config can `include:` other configs (paths relative to the including file). One
+handy setup: a one-line user config that includes the archive's own config, which
+sets `archive:` and everything else, so plain `snorg <command>` needs neither `-a`
+nor `-c`:
+
+```yaml
+# ~/.config/snorg/config.yaml
+include: [~/notes/sn/config.yaml]
+```
+
+```yaml
+# ~/notes/sn/config.yaml
+archive: .   # relative to this file
+```
+
+`-c` is useful for switching setups per run. For example, keep each export template
+in its own config file and pass the one you want:
+
+```sh
+snorg query note=<FILE_ID> | snorg -c ~/snorg/org.yaml export
+```
+
+Full reference: [`docs/config.md`](docs/config.md).
 
 ## Browse and pick pages with fzf
 
 `query -l` prints one page per line — PAGEID first, then note name, page number, a
-`*` for starred, `#keywords` and `@tags` — so a fuzzy finder can filter on any of it.
-Pick pages, keep the PAGEID with `cut -f1`, and open just those in the flat viewer:
+`*` for starred, analyzed headings, `#keywords` and `@tags` — so a fuzzy finder can
+filter on any of it. Pick pages, keep the PAGEID with `cut -f1`, and open just those in
+the flat viewer:
 
 ```sh
 snorg query all -l | fzf -m | cut -f1 | snorg serve -f
@@ -122,8 +146,8 @@ import snorg "github.com/jdlugosz963/snorg/pkg/snorg"
 ```
 
 [`docs/library.md`](docs/library.md) is the guide. For the mechanical reference —
-every exported identifier and its signature — read the package on pkg.go.dev or
-render it yourself with `gomarkdoc ./pkg/snorg`; snorg checks in no generated docs.
+every exported identifier and its signature — see [`docs/api.md`](docs/api.md),
+generated from the source by gomarkdoc.
 
 ## Contributing
 

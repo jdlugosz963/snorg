@@ -316,8 +316,8 @@ than a bar.
   every type its signatures return (`Result`, `NoteView`, `Match`, `Spec`, config
   types, …) so an external consumer that imports only this package can name and
   traverse them — the sole seam that lets snorg be used as a library. See
-  [library.md](library.md) for the guide; the per-identifier reference is rendered
-  on demand (`gomarkdoc ./pkg/snorg`, or pkg.go.dev), not checked in.
+  [library.md](library.md) for the guide and [api.md](api.md) for the generated
+  per-identifier reference.
 - `internal/snote` — device-agnostic domain model (`Note`/`Page`/`Title`/`Keyword`/`Link`)
   and the `Source` interface (the format seam); the concrete impl sits behind it.
 - `internal/snote/sntool` — the `Source` impl: the native-Go

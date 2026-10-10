@@ -9,9 +9,9 @@ import snorg "github.com/jdlugosz963/snorg/pkg/snorg"
 ```
 
 This page is the guide: what the pieces are for and why they are shaped as they
-are. For the mechanical reference — every signature — read the package on
-pkg.go.dev or render it from the source with `gomarkdoc ./pkg/snorg`; no generated
-reference is checked in.
+are. For the mechanical reference — every signature — see [api.md](api.md),
+generated from the source by gomarkdoc (alias types show no fields there; read
+the source for those).
 
 ## Client
 
