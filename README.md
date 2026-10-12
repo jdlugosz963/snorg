@@ -3,6 +3,8 @@
 Supernote organizer: ingests Supernote `.note` files into a plaintext,
 machine-readable, VCS-friendly archive for later retrieval, analysis and export.
 
+[![snorg demo](https://img.youtube.com/vi/ZJPhMSyMNcQ/hqdefault.jpg)](https://www.youtube.com/watch?v=ZJPhMSyMNcQ)
+
 ## Quick start
 
 Prerequisites: Go (to install), plus `pandoc` if you use the `pandoc` export filter.
